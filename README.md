@@ -111,3 +111,4 @@ OLLAMA_MODEL=gemma3:4b
 ```sql
 logs (id, mission, result, reason, ai_response, created_at)
 ```
+test commit
