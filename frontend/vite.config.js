@@ -10,6 +10,7 @@ export default defineConfig({
       "/feedback": "http://localhost:8000",
       "/logs": "http://localhost:8000",
       "/chat": "http://localhost:8000",
+      "/analysis": "http://localhost:8000",
     },
   },
 });

@@ -11,7 +11,7 @@ body {
 }
 
 #root {
-  max-width: 480px;
+  max-width: 1100px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -27,13 +27,40 @@ body {
   overflow: hidden;
 }
 
+.main-area {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
 .app-header {
-  padding: 14px 16px;
+  padding: 10px 16px;
   font-size: 1.2rem;
   font-weight: 700;
   background: #fff;
   border-bottom: 1px solid #e8f0ff;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reset-btn {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.reset-btn:not(:disabled):hover {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fca5a5;
+  opacity: 1;
 }
 
 .mission-banner {
@@ -101,6 +128,20 @@ body {
   background: #4f8ef7;
   border-radius: 18px 18px 4px 18px;
   color: #fff;
+}
+
+.bubble.assistant.has-debug {
+  cursor: pointer;
+}
+
+.bubble.assistant.has-debug:hover {
+  background: #f0f5ff;
+  box-shadow: 0 1px 6px rgba(79, 142, 247, 0.2);
+}
+
+.bubble.assistant.debug-selected {
+  background: #e8f0ff;
+  box-shadow: 0 0 0 2px #4f8ef7;
 }
 
 /* ── 타이핑 인디케이터 ────────────────────────────────────────────────────── */
@@ -180,7 +221,7 @@ body {
 
 .send-btn:not(:disabled):hover { opacity: 0.85; }
 
-/* ── 공통 버튼/카드 (기존 컴포넌트 호환용) ──────────────────────────────── */
+/* ── 공통 버튼 기본값 ─────────────────────────────────────────────────────── */
 
 button {
   cursor: pointer;
@@ -194,23 +235,262 @@ button {
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button:not(:disabled):hover { opacity: 0.85; }
 
-textarea {
-  width: 100%;
-  border: 1.5px solid #cce0ff;
-  border-radius: 12px;
-  padding: 10px 14px;
-  font-size: 0.95rem;
-  resize: vertical;
-  outline: none;
-  font-family: inherit;
-  background: #fff;
-}
-textarea:focus { border-color: #5b9cf6; }
+/* ── 디버그 패널 ───────────────────────────────────────────────────────────── */
 
-.card {
+.debug-panel {
+  width: 360px;
+  flex-shrink: 0;
+  border-left: 1px solid #e2eaf7;
+  background: #f8faff;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+
+.debug-header {
+  padding: 14px 16px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  background: #eef3ff;
+  border-bottom: 1px solid #dce8ff;
+  flex-shrink: 0;
+  color: #2d4fa1;
+}
+
+.debug-header-preview {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #5b7cc4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.debug-empty {
+  padding: 24px 16px;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.7;
+}
+
+.debug-empty-sub {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: #b8c8d8;
+  line-height: 1.6;
+}
+
+.debug-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid #e8eef8;
+}
+
+.debug-label {
+  font-weight: 700;
+  color: #475569;
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.debug-reasoning {
   background: #fff;
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-  margin-bottom: 16px;
+  border: 1px solid #dce8ff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #1e293b;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.debug-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8eef8;
+}
+
+.meta-key {
+  color: #64748b;
+}
+
+.meta-val {
+  font-weight: 600;
+  color: #1e40af;
+  font-family: monospace;
+}
+
+.debug-toggle {
+  width: 100%;
+  background: #eef3ff;
+  border: 1px solid #c7d9f8;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #2d4fa1;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.debug-toggle:hover {
+  background: #dce8ff;
+}
+
+.debug-prompt {
+  margin-top: 10px;
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* ── 구조화된 응답 근거 ─────────────────────────────────────────────────────── */
+
+.debug-reasoning-structured {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reasoning-field {
+  background: #fff;
+  border: 1px solid #dce8ff;
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+
+.reasoning-field-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #2d4fa1;
+  margin-bottom: 4px;
+  cursor: help;
+}
+
+.reasoning-field-value {
+  font-size: 0.85rem;
+  color: #1e293b;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.reasoning-empty {
+  color: #94a3b8;
+}
+
+.debug-reasoning-empty {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  padding: 8px 0;
+}
+
+/* ── 규칙 위반 배너 ─────────────────────────────────────────────────────────── */
+
+.violation-ok {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #16a34a;
+}
+
+.violation-warn {
+  background: #fff7ed;
+  border: 1.5px solid #fb923c;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.violation-warn-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #c2410c;
+  margin-bottom: 6px;
+}
+
+.violation-item {
+  font-size: 0.82rem;
+  color: #9a3412;
+  padding: 3px 0 3px 8px;
+  border-left: 2px solid #fb923c;
+  margin-bottom: 3px;
+}
+
+/* ── 문장별 분석 ─────────────────────────────────────────────────────────────── */
+
+.sentence-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.sentence-row {
+  background: #f8faff;
+  border: 1px solid #e2eaf7;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.sentence-text {
+  font-size: 0.83rem;
+  color: #1e293b;
+  font-style: italic;
+  margin-bottom: 4px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.sentence-purpose {
+  font-size: 0.8rem;
+  color: #2d4fa1;
+  font-weight: 600;
+}
+
+/* ── 응답 소요 시간 ──────────────────────────────────────────────────────────── */
+
+.timing-fast  { color: #16a34a; }   /* ~2s  초록 */
+.timing-mid   { color: #d97706; }   /* ~5s  주황 */
+.timing-slow  { color: #dc2626; }   /* 5s+  빨강 */
+
+/* ── 분석 중 뱃지 ────────────────────────────────────────────────────────────── */
+
+.analysing-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #2d4fa1;
+  background: #dce8ff;
+  border-radius: 20px;
+  padding: 2px 8px;
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
 }

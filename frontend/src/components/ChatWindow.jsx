@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export default function ChatWindow({ messages, onSend, loading }) {
+export default function ChatWindow({ messages, onSend, loading, selectedDebugId, onSelectMessage }) {
   const [input, setInput] = useState("");
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
@@ -35,12 +35,21 @@ export default function ChatWindow({ messages, onSend, loading }) {
   return (
     <div className="chat-container">
       <div className="messages-area">
-        {messages.map((msg, i) => (
-          <div key={i} className={`message-row ${msg.role}`}>
-            {msg.role === "assistant" && <div className="avatar">🌟</div>}
-            <div className={`bubble ${msg.role}`}>{msg.content}</div>
-          </div>
-        ))}
+        {messages.map((msg, i) => {
+          const isClickable = msg.role === "assistant" && !!msg.debugId;
+          const isSelected = msg.debugId && msg.debugId === selectedDebugId;
+          return (
+            <div key={i} className={`message-row ${msg.role}`}>
+              {msg.role === "assistant" && <div className="avatar">🌟</div>}
+              <div
+                className={`bubble ${msg.role}${isClickable ? " has-debug" : ""}${isSelected ? " debug-selected" : ""}`}
+                onClick={isClickable ? () => onSelectMessage(msg.debugId) : undefined}
+              >
+                {msg.content}
+              </div>
+            </div>
+          );
+        })}
 
         {loading && (
           <div className="message-row assistant">
