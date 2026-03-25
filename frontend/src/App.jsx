@@ -1,91 +1,81 @@
 import { useEffect, useState } from "react";
-import { fetchMission, submitFeedback, fetchLogs } from "./api.js";
-import MissionCard from "./components/MissionCard.jsx";
-import FeedbackForm from "./components/FeedbackForm.jsx";
-import CoachResponse from "./components/CoachResponse.jsx";
-import HistoryList from "./components/HistoryList.jsx";
+import { fetchMission, sendMessage, fetchChatHistory } from "./api.js";
+import ChatWindow from "./components/ChatWindow.jsx";
+
+function getSessionId() {
+  let id = localStorage.getItem("chat_session_id");
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem("chat_session_id", id);
+  }
+  return id;
+}
 
 export default function App() {
   const [mission, setMission] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [aiResponse, setAiResponse] = useState(null);
-  const [error, setError] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [showHistory, setShowHistory] = useState(false);
+  const sessionId = getSessionId();
 
-  // 미션 로드
   useEffect(() => {
-    fetchMission().then(setMission).catch(() => setError("미션을 불러올 수 없어요."));
+    Promise.all([fetchMission(), fetchChatHistory(sessionId)])
+      .then(([m, history]) => {
+        setMission(m);
+        if (history.length === 0) {
+          // 처음 방문: AI 인사 요청
+          requestGreeting(m.title);
+        } else {
+          setMessages(history);
+        }
+      })
+      .catch(() => {
+        setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
+      });
   }, []);
 
-  async function handleFeedback({ result, reason }) {
-    if (!mission) return;
+  async function requestGreeting(missionTitle) {
     setLoading(true);
-    setAiResponse(null);
-    setError(null);
-
     try {
-      const data = await submitFeedback({ mission: mission.title, result, reason });
-      setAiResponse(data.ai_response);
-      // 기록 패널이 열려있으면 자동 새로고침
-      if (showHistory) loadLogs();
-    } catch (e) {
-      setError(e.message);
+      const res = await sendMessage("__GREET__", sessionId, missionTitle);
+      setMessages([{ role: "assistant", content: res.response }]);
+    } catch {
+      setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
       setLoading(false);
     }
   }
 
-  async function loadLogs() {
+  async function handleSend(text) {
+    // 낙관적 업데이트: 유저 메시지 먼저 표시
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setLoading(true);
+
     try {
-      const data = await fetchLogs();
-      setLogs(data);
+      const res = await sendMessage(text, sessionId, mission?.title);
+      setMessages((prev) => [...prev, { role: "assistant", content: res.response }]);
     } catch {
-      /* 조용히 무시 */
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "앗, 연결이 끊겼어. 다시 말해줄래?" },
+      ]);
+    } finally {
+      setLoading(false);
     }
   }
 
-  function toggleHistory() {
-    if (!showHistory) loadLogs();
-    setShowHistory((v) => !v);
-  }
-
   return (
-    <div>
-      {/* 헤더 */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h1>🌟 AI 생활습관 코치</h1>
-        <button
-          type="button"
-          onClick={toggleHistory}
-          style={{
-            background: showHistory ? "#e0f2fe" : "#f1f5f9",
-            color: "#0369a1",
-            fontSize: "0.82rem",
-            padding: "6px 12px",
-          }}
-        >
-          {showHistory ? "기록 닫기" : "기록 보기 📋"}
-        </button>
-      </div>
+    <div className="app-layout">
+      <header className="app-header">
+        <span>🌟 AI 생활습관 코치</span>
+      </header>
 
-      {/* 오늘의 미션 */}
-      {mission ? (
-        <MissionCard mission={mission} />
-      ) : (
-        !error && <p style={{ color: "#94a3b8" }}>미션 불러오는 중...</p>
+      {mission && (
+        <div className="mission-banner">
+          🎯 오늘 미션: <strong>{mission.title}</strong>
+        </div>
       )}
 
-      {/* 피드백 폼 */}
-      {mission && <FeedbackForm onSubmit={handleFeedback} loading={loading} />}
-
-      {/* 코치 응답 */}
-      <CoachResponse response={aiResponse} error={error} />
-
-      {/* 기록 목록 */}
-      {showHistory && (
-        <HistoryList logs={logs} onRefresh={loadLogs} />
-      )}
+      <ChatWindow messages={messages} onSend={handleSend} loading={loading} />
     </div>
   );
 }

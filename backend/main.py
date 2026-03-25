@@ -3,9 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Literal
 
-from database import init_db, save_checkin_log, fetch_checkin_logs, update_review
-from ollama_client import generate_response, OLLAMA_MODEL
-from prompts import SYSTEM_PROMPT, build_user_prompt
+from database import (
+    init_db, save_checkin_log, fetch_checkin_logs, update_review,
+    save_message, fetch_messages,
+)
+from ollama_client import generate_response, chat_with_history, OLLAMA_MODEL
+from prompts import SYSTEM_PROMPT, build_user_prompt, build_chat_system_prompt
 
 app = FastAPI(title="AI 생활습관 코치 MVP")
 
@@ -95,6 +98,46 @@ class ReviewRequest(BaseModel):
     quality_label: QualityLabel | None = None
     failure_type:  FailureType  | None = None
     reviewer_note: str          | None = None
+
+
+# ── 대화 채팅 ─────────────────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    session_id: str = Field(..., min_length=1)
+    mission: str | None = None
+
+
+@app.post("/chat")
+async def post_chat(body: ChatRequest):
+    mission_title = body.mission or MISSION["title"]
+    system_prompt = build_chat_system_prompt(mission_title)
+    is_greet = body.message == "__GREET__"
+
+    # 첫 인사는 user 메시지로 저장하지 않음
+    if not is_greet:
+        save_message(body.session_id, "user", body.message)
+
+    # DB에서 대화 히스토리 로드
+    history = fetch_messages(body.session_id)
+
+    # 첫 인사용: 히스토리가 없을 때 AI에게 소개 요청
+    messages = history if history else [
+        {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
+    ]
+
+    try:
+        ai_response = await chat_with_history(system_prompt, messages)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
+
+    save_message(body.session_id, "assistant", ai_response)
+    return {"response": ai_response}
+
+
+@app.get("/chat/{session_id}")
+def get_chat(session_id: str):
+    return fetch_messages(session_id)
 
 
 @app.patch("/logs/{log_id}/review")

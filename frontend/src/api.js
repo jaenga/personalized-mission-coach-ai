@@ -55,6 +55,32 @@ export async function fetchLogs(limit = 50) {
  * @param {number} id
  * @param {{ quality_label?: string, failure_type?: string, reviewer_note?: string }} body
  */
+/**
+ * 채팅 메시지 전송.
+ * @param {string} message  사용자 메시지 (또는 "__GREET__")
+ * @param {string} sessionId  세션 UUID
+ * @param {string|null} [mission]  오늘의 미션 제목
+ */
+export async function sendMessage(message, sessionId, mission = null) {
+  const res = await fetch("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_id: sessionId, mission }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "메시지 전송 실패");
+  }
+  return res.json(); // { response: string }
+}
+
+/** 세션의 대화 히스토리 조회. */
+export async function fetchChatHistory(sessionId) {
+  const res = await fetch(`/chat/${sessionId}`);
+  if (!res.ok) throw new Error("대화 기록 불러오기 실패");
+  return res.json(); // [{ role, content, created_at }]
+}
+
 export async function patchReview(id, { quality_label, failure_type, reviewer_note }) {
   const res = await fetch(`/logs/${id}/review`, {
     method: "PATCH",
