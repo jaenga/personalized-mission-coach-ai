@@ -494,3 +494,150 @@ button:not(:disabled):hover { opacity: 0.85; }
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
 }
+
+/* ── 프로필 입력 화면 ─────────────────────────────────────────────────────────── */
+
+.profile-setup {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.profile-setup h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+  color: #1a3a6b;
+}
+
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  width: 100%;
+  max-width: 360px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.profile-field label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #444;
+}
+
+.profile-field input {
+  padding: 0.6rem 0.9rem;
+  border: 1.5px solid #c8d8f0;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.profile-field input:focus {
+  border-color: #4a7fd4;
+}
+
+.gender-buttons {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.gender-btn {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1.5px solid #c8d8f0;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.gender-btn.selected {
+  background: #4a7fd4;
+  color: #fff;
+  border-color: #4a7fd4;
+}
+
+.profile-submit-btn {
+  margin-top: 0.4rem;
+  padding: 0.7rem;
+  background: #4a7fd4;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.profile-submit-btn:disabled {
+  background: #b0c4e8;
+  cursor: not-allowed;
+}
+
+/* ── 학생 선택 리스트 ─────────────────────────────────────────────────────────── */
+
+.student-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1.5px solid #c8d8f0;
+  border-radius: 8px;
+  padding: 0.4rem;
+}
+
+.student-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.55rem 0.8rem;
+  border: 1.5px solid transparent;
+  border-radius: 8px;
+  background: #f7faff;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.student-item:hover {
+  background: #eaf1ff;
+}
+
+.student-item.selected {
+  background: #4a7fd4;
+  color: #fff;
+  border-color: #4a7fd4;
+}
+
+.student-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.student-meta {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+/* ── 로그인 에러 ──────────────────────────────────────────────────────────────── */
+.login-error {
+  color: #dc2626;
+  font-size: 0.85rem;
+  text-align: center;
+}

@@ -11,6 +11,8 @@ export default defineConfig({
       "/logs": "http://localhost:8000",
       "/chat": "http://localhost:8000",
       "/analysis": "http://localhost:8000",
+      "/profile": "http://localhost:8000",
+      "/verify-student": "http://localhost:8000",
     },
   },
 });

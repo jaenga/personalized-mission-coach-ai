@@ -53,3 +53,33 @@ export async function clearChatHistory(sessionId) {
   if (!res.ok) throw new Error("대화 초기화 실패");
   return res.json();
 }
+
+/** 이름 + 전화번호 뒷 4자리로 학생 본인 확인. */
+export async function verifyStudent(studentName, phoneLast4) {
+  const res = await fetch("/verify-student", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ student_name: studentName, phone_last4: phoneLast4 }),
+  });
+  if (res.status === 404) throw new Error("일치하는 학생을 찾을 수 없어요.");
+  if (!res.ok) throw new Error("확인 중 오류가 발생했어요.");
+  return res.json();
+}
+
+/** 유저 프로필(student_id, student_name) 저장. */
+export async function saveProfile(sessionId, studentId, studentName) {
+  const res = await fetch("/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, student_id: studentId, student_name: studentName }),
+  });
+  if (!res.ok) throw new Error("프로필 저장 실패");
+  return res.json();
+}
+
+/** 학생 미션 조회. */
+export async function fetchMissionByStudent(studentId) {
+  const res = await fetch(`/mission?student_id=${studentId}`);
+  if (!res.ok) throw new Error("미션 불러오기 실패");
+  return res.json();
+}

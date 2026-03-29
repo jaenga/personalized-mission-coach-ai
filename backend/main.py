@@ -1,14 +1,23 @@
+from datetime import date
 from uuid import uuid4
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from database import init_db, save_message, fetch_messages, delete_messages
+from database import (
+    init_db,
+    get_student_by_credentials, create_chat_session,
+    save_profile, fetch_profile,
+    save_message, fetch_messages, delete_messages,
+    get_student_mission_db, get_student_info_db,
+    save_mission_result, mark_synced,
+    detect_function_from_db,
+)
 from ollama_client import generate_chat_message, analyze_response, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
+from sheets import detect_mission_status, update_mission_result, generate_daily_status
 
-# 분석 결과 임시 저장소 (analysis_id → result)
 analysis_store: dict[str, dict] = {}
 
 app = FastAPI(title="AI 생활습관 코치 MVP")
@@ -24,23 +33,72 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     init_db()
+    try:
+        today = date.today().isoformat()
+        added = generate_daily_status(today)
+        if added:
+            print(f"[startup] daily_status {today}: {added}명 행 추가됨")
+    except Exception as e:
+        print(f"[startup] daily_status 생성 실패 (무시): {e}")
 
 
-# ── 오늘의 미션 (MVP: 하드코딩) ──────────────────────────────────────────────
+# ── 학생 본인 확인 ─────────────────────────────────────────────────────────────
 
-MISSION = {
-    "id": 1,
-    "title": "물 4잔 마시기",
-    "description": "오늘 하루 동안 물을 4잔 마셔 보자! 🥤",
-}
+class VerifyRequest(BaseModel):
+    student_name: str = Field(..., min_length=1)
+    phone_last4:  str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
 
+
+@app.post("/verify-student")
+def post_verify_student(body: VerifyRequest):
+    student = get_student_by_credentials(body.student_name, body.phone_last4)
+    if not student:
+        raise HTTPException(status_code=404, detail="일치하는 학생을 찾을 수 없어요.")
+    return student
+
+
+# ── 프로필 저장/조회 ───────────────────────────────────────────────────────────
+
+class ProfileRequest(BaseModel):
+    session_id:   str = Field(..., min_length=1)
+    student_id:   int
+    student_name: str = Field(..., min_length=1)
+
+
+@app.post("/profile")
+def post_profile(body: ProfileRequest):
+    db_session_id = create_chat_session(body.student_id)
+    save_profile(body.session_id, body.student_id, body.student_name, db_session_id)
+    return {"ok": True}
+
+
+@app.get("/profile/{session_id}")
+def get_profile(session_id: str):
+    profile = fetch_profile(session_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="프로필 없음")
+    return profile
+
+
+# ── 오늘 미션 조회 ─────────────────────────────────────────────────────────────
 
 @app.get("/mission")
-def get_mission():
-    return MISSION
+def get_mission(student_id: int | None = None):
+    today = date.today().isoformat()
+    if student_id:
+        mission = get_student_mission_db(student_id, today)
+        if mission:
+            return mission
+    return {
+        "mission_id": None,
+        "mission_name": "오늘의 미션",
+        "category": "",
+        "difficulty": "",
+        "status": "assigned",
+    }
 
 
-# ── 금지어 위반 감지 (서버 사이드, LLM 무관) ──────────────────────────────────
+# ── 금지어 감지 ────────────────────────────────────────────────────────────────
 
 FORBIDDEN_WORDS = ["엄마", "아빠", "부모님", "가족", "형", "언니", "오빠", "동생", "친구", "선생님"]
 
@@ -53,35 +111,88 @@ def detect_violations(ai_message: str, user_input: str) -> list[str]:
     ]
 
 
-# ── 대화 채팅 ─────────────────────────────────────────────────────────────────
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1)
-    session_id: str = Field(..., min_length=1)
-    mission: str | None = None
-
+# ── 배경 작업 ──────────────────────────────────────────────────────────────────
 
 async def _run_analysis_bg(analysis_id: str, user_input: str, ai_message: str, call1_ms: int):
-    """백그라운드: 2차 분석 호출 후 결과를 analysis_store에 저장."""
     reasoning, call2_ms = await analyze_response(user_input, ai_message)
     analysis_store[analysis_id] = {
         "reasoning": reasoning,
-        "timing": {
-            "call1_ms": call1_ms,
-            "call2_ms": call2_ms,
-            "total_ms": call1_ms + call2_ms,
-        },
+        "timing": {"call1_ms": call1_ms, "call2_ms": call2_ms, "total_ms": call1_ms + call2_ms},
     }
+
+
+async def _sync_sheet_bg(
+    session_id: str,
+    user_message: str,
+    ai_message: str,
+    status: str,
+    detected_function: str,
+):
+    profile = fetch_profile(session_id)
+    if not profile:
+        return
+
+    today = date.today().isoformat()
+    student_id = profile["student_id"]
+
+    # DB에서 학생/미션 정보 가져오기
+    student_info = get_student_info_db(student_id) or {}
+    mission_info = get_student_mission_db(student_id, today) or {}
+
+    # 1. DB 저장 (checkin_log)
+    result_id = save_mission_result(
+        student_id=student_id,
+        student_name=student_info.get("student_name", profile.get("student_name", "")),
+        mission_id=mission_info.get("mission_id"),
+        mission_name=mission_info.get("mission_name", ""),
+        status=status,
+        result_reason=user_message,
+        ai_response=ai_message,
+        session_id=session_id,
+        detected_function=detected_function,
+    )
+
+    # 2. 구글 시트 업데이트
+    try:
+        update_mission_result(
+            student_id=student_id,
+            today=today,
+            result_reason=user_message,
+            ai_response=ai_message,
+            status=status,
+            student_name=student_info.get("student_name", ""),
+            age=student_info.get("age"),
+            gender=student_info.get("gender", ""),
+            location=student_info.get("location", ""),
+            mission_id=mission_info.get("mission_id"),
+            mission_name=mission_info.get("mission_name", ""),
+            category=mission_info.get("category", ""),
+            difficulty=mission_info.get("difficulty", ""),
+        )
+        mark_synced(result_id)
+    except Exception:
+        pass
+
+
+# ── 채팅 ──────────────────────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    message:    str       = Field(..., min_length=1)
+    session_id: str       = Field(..., min_length=1)
+    mission:    str | None = None
 
 
 @app.post("/chat")
 async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
-    mission_title = body.mission or MISSION["title"]
+    mission_title = body.mission or "오늘의 미션"
     system_prompt = build_chat_system_prompt(mission_title)
     is_greet = body.message == "__GREET__"
 
+    # function 감지
+    detected_function = None
     if not is_greet:
-        save_message(body.session_id, "user", body.message)
+        detected_function = detect_function_from_db(body.message)
+        save_message(body.session_id, "user", body.message, detected_function)
 
     history = fetch_messages(body.session_id)
     messages = history if history else [
@@ -98,12 +209,20 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     user_input = body.message if not is_greet else ""
     violations = detect_violations(ai_message, user_input)
 
+    # 미션 결과 감지
+    mission_status = None if is_greet else detect_mission_status(user_input)
+    if mission_status:
+        fn = detected_function or "submit_mission_result"
+        background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, fn)
+
     analysis_id = str(uuid4())
     background_tasks.add_task(_run_analysis_bg, analysis_id, user_input, ai_message, call1_ms)
 
     return {
         "response": ai_message,
         "analysis_id": analysis_id,
+        "mission_completed": mission_status is not None,
+        "detected_function": detected_function,
         "debug": {
             "violations": violations,
             "system_prompt": system_prompt,
@@ -116,7 +235,6 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
 @app.get("/analysis/{analysis_id}")
 async def get_analysis(analysis_id: str):
-    """분석 결과 폴링 엔드포인트. 아직 준비 중이면 202 반환."""
     result = analysis_store.get(analysis_id)
     if result is None:
         return JSONResponse(status_code=202, content={"status": "pending"})
@@ -133,3 +251,13 @@ def get_chat(session_id: str):
 def delete_chat(session_id: str):
     count = delete_messages(session_id)
     return {"ok": True, "deleted": count}
+
+
+@app.post("/admin/generate-daily")
+def post_generate_daily():
+    try:
+        today = date.today().isoformat()
+        added = generate_daily_status(today)
+        return {"ok": True, "date": today, "added": added}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
