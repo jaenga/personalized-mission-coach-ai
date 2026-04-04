@@ -1,91 +1,166 @@
 import { useEffect, useState } from "react";
-import { fetchMission, submitFeedback, fetchLogs } from "./api.js";
-import MissionCard from "./components/MissionCard.jsx";
-import FeedbackForm from "./components/FeedbackForm.jsx";
-import CoachResponse from "./components/CoachResponse.jsx";
-import HistoryList from "./components/HistoryList.jsx";
+import { fetchMission, sendMessage, fetchChatHistory, fetchAnalysis, clearChatHistory } from "./api.js";
+import ChatWindow from "./components/ChatWindow.jsx";
+import DebugPanel from "./components/DebugPanel.jsx";
+
+function createSessionId() {
+  const id = crypto.randomUUID();
+  localStorage.setItem("chat_session_id", id);
+  return id;
+}
+
+function getOrCreateSessionId() {
+  return localStorage.getItem("chat_session_id") || createSessionId();
+}
 
 export default function App() {
   const [mission, setMission] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [aiResponse, setAiResponse] = useState(null);
-  const [error, setError] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [showHistory, setShowHistory] = useState(false);
+  const [debugMap, setDebugMap] = useState({});
+  const [selectedDebugId, setSelectedDebugId] = useState(null);
+  const [sessionId, setSessionId] = useState(getOrCreateSessionId);
 
-  // 미션 로드
+  // 미션은 최초 1회만 fetch
   useEffect(() => {
-    fetchMission().then(setMission).catch(() => setError("미션을 불러올 수 없어요."));
+    fetchMission().then(setMission).catch(() => {});
   }, []);
 
-  async function handleFeedback({ result, reason }) {
+  // 세션 변경(초기 로드 or 리셋)마다 히스토리 로드
+  useEffect(() => {
     if (!mission) return;
-    setLoading(true);
-    setAiResponse(null);
-    setError(null);
+    fetchChatHistory(sessionId)
+      .then((history) => {
+        if (history.length === 0) {
+          requestGreeting(mission.title);
+        } else {
+          setMessages(
+            history.map((msg, i) =>
+              msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
+            )
+          );
+        }
+      })
+      .catch(() => {
+        setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
+      });
+  }, [sessionId, mission]);
 
+  async function handleReset() {
+    if (loading) return;
     try {
-      const data = await submitFeedback({ mission: mission.title, result, reason });
-      setAiResponse(data.ai_response);
-      // 기록 패널이 열려있으면 자동 새로고침
-      if (showHistory) loadLogs();
-    } catch (e) {
-      setError(e.message);
+      await clearChatHistory(sessionId);
+    } catch {
+      // 삭제 실패해도 프론트 상태는 초기화
+    }
+    setSessionId(createSessionId());
+    setMessages([]);
+    setDebugMap({});
+    setSelectedDebugId(null);
+  }
+
+  /** 분석 결과를 백그라운드에서 폴링해서 debugMap[debugId]에 병합 */
+  async function pollAnalysis(analysisId, debugId) {
+    const MAX = 40; // 최대 40회 × 800ms = 32초
+    for (let i = 0; i < MAX; i++) {
+      await new Promise((r) => setTimeout(r, 800));
+      try {
+        const result = await fetchAnalysis(analysisId);
+        if (result) {
+          setDebugMap((prev) => ({
+            ...prev,
+            [debugId]: {
+              ...prev[debugId],
+              reasoning: result.reasoning,
+              timing: { ...prev[debugId]?.timing, ...result.timing },
+              analysing: false,
+            },
+          }));
+          return;
+        }
+      } catch {
+        // 일시적 오류는 무시하고 재시도
+      }
+    }
+    // 타임아웃: analysing 해제
+    setDebugMap((prev) =>
+      prev[debugId] ? { ...prev, [debugId]: { ...prev[debugId], analysing: false } } : prev
+    );
+  }
+
+  async function requestGreeting(missionTitle) {
+    setLoading(true);
+    try {
+      const res = await sendMessage("__GREET__", sessionId, missionTitle);
+      const debugId = crypto.randomUUID();
+      setMessages([{ role: "assistant", content: res.response, debugId }]);
+      setDebugMap({ [debugId]: { ...res.debug, analysing: !!res.analysis_id } });
+      setSelectedDebugId(debugId);
+      if (res.analysis_id) pollAnalysis(res.analysis_id, debugId);
+    } catch {
+      setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
       setLoading(false);
     }
   }
 
-  async function loadLogs() {
+  async function handleSend(text) {
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setLoading(true);
+
     try {
-      const data = await fetchLogs();
-      setLogs(data);
+      const res = await sendMessage(text, sessionId, mission?.title);
+      const debugId = crypto.randomUUID();
+      setMessages((prev) => [...prev, { role: "assistant", content: res.response, debugId }]);
+      setDebugMap((prev) => ({ ...prev, [debugId]: { ...res.debug, analysing: !!res.analysis_id } }));
+      setSelectedDebugId(debugId);
+      if (res.analysis_id) pollAnalysis(res.analysis_id, debugId);
     } catch {
-      /* 조용히 무시 */
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "앗, 연결이 끊겼어. 다시 말해줄래?" },
+      ]);
+    } finally {
+      setLoading(false);
     }
   }
 
-  function toggleHistory() {
-    if (!showHistory) loadLogs();
-    setShowHistory((v) => !v);
-  }
-
   return (
-    <div>
-      {/* 헤더 */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h1>🌟 AI 생활습관 코치</h1>
+    <div className="app-layout">
+      <header className="app-header">
+        <span>🌟 AI 생활습관 코치</span>
         <button
-          type="button"
-          onClick={toggleHistory}
-          style={{
-            background: showHistory ? "#e0f2fe" : "#f1f5f9",
-            color: "#0369a1",
-            fontSize: "0.82rem",
-            padding: "6px 12px",
-          }}
+          className="reset-btn"
+          onClick={handleReset}
+          disabled={loading}
+          title="대화 초기화"
         >
-          {showHistory ? "기록 닫기" : "기록 보기 📋"}
+          새 대화
         </button>
+      </header>
+
+      {mission && (
+        <div className="mission-banner">
+          🎯 오늘 미션: <strong>{mission.title}</strong>
+        </div>
+      )}
+
+      <div className="main-area">
+        <ChatWindow
+          messages={messages}
+          onSend={handleSend}
+          loading={loading}
+          selectedDebugId={selectedDebugId}
+          onSelectMessage={setSelectedDebugId}
+        />
+        <DebugPanel
+          debugInfo={debugMap[selectedDebugId] ?? null}
+          selected={selectedDebugId !== null}
+          previewText={
+            messages.find((m) => m.debugId === selectedDebugId)?.content?.slice(0, 30) ?? null
+          }
+        />
       </div>
-
-      {/* 오늘의 미션 */}
-      {mission ? (
-        <MissionCard mission={mission} />
-      ) : (
-        !error && <p style={{ color: "#94a3b8" }}>미션 불러오는 중...</p>
-      )}
-
-      {/* 피드백 폼 */}
-      {mission && <FeedbackForm onSubmit={handleFeedback} loading={loading} />}
-
-      {/* 코치 응답 */}
-      <CoachResponse response={aiResponse} error={error} />
-
-      {/* 기록 목록 */}
-      {showHistory && (
-        <HistoryList logs={logs} onRefresh={loadLogs} />
-      )}
     </div>
   );
 }

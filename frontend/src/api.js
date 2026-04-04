@@ -10,64 +10,46 @@ export async function fetchMission() {
 }
 
 /**
- * @param {string} params.mission
- * @param {string} params.result           "success" | "partial" | "failure"
- * @param {string|null} [params.reason]
- * @param {string} [params.prompt_version] 기본값 "v1"
- * @param {string|null} [params.expected_label]
- * @param {string|null} [params.memo]
+ * 채팅 메시지 전송.
+ * @param {string} message  사용자 메시지 (또는 "__GREET__")
+ * @param {string} sessionId  세션 UUID
+ * @param {string|null} [mission]  오늘의 미션 제목
+ * @returns {{ response: string, analysis_id: string, debug: object }}
  */
-export async function submitFeedback({
-  mission,
-  result,
-  reason,
-  prompt_version,
-  expected_label,
-  memo,
-}) {
-  const res = await fetch("/feedback", {
+export async function sendMessage(message, sessionId, mission = null) {
+  const res = await fetch("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mission,
-      result,
-      reason: reason ?? null,
-      prompt_version: prompt_version ?? "v1",
-      expected_label: expected_label ?? null,
-      memo: memo ?? null,
-    }),
+    body: JSON.stringify({ message, session_id: sessionId, mission }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail ?? "피드백 제출 실패");
+    throw new Error(err.detail ?? "메시지 전송 실패");
   }
-  return res.json(); // { id, ai_response }
-}
-
-export async function fetchLogs(limit = 50) {
-  const res = await fetch(`/logs?limit=${limit}`);
-  if (!res.ok) throw new Error("기록 불러오기 실패");
   return res.json();
 }
 
 /**
- * 특정 로그에 리뷰 라벨을 저장한다.
- * @param {number} id
- * @param {{ quality_label?: string, failure_type?: string, reviewer_note?: string }} body
+ * 백그라운드 분석 결과 폴링.
+ * @returns {object|null} 준비됐으면 결과 객체, 아직이면 null
  */
-export async function patchReview(id, { quality_label, failure_type, reviewer_note }) {
-  const res = await fetch(`/logs/${id}/review`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      quality_label: quality_label || null,
-      failure_type:  failure_type  || null,
-      reviewer_note: reviewer_note || null,
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail ?? "리뷰 저장 실패");
-  }
-  return res.json(); // { ok: true, id }
+export async function fetchAnalysis(analysisId) {
+  const res = await fetch(`/analysis/${analysisId}`);
+  if (res.status === 202) return null;
+  if (!res.ok) throw new Error("분석 조회 실패");
+  return res.json();
+}
+
+/** 세션의 대화 히스토리 조회. */
+export async function fetchChatHistory(sessionId) {
+  const res = await fetch(`/chat/${sessionId}`);
+  if (!res.ok) throw new Error("대화 기록 불러오기 실패");
+  return res.json();
+}
+
+/** 세션의 대화 히스토리 삭제. */
+export async function clearChatHistory(sessionId) {
+  const res = await fetch(`/chat/${sessionId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("대화 초기화 실패");
+  return res.json();
 }
