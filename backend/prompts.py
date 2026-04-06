@@ -4,38 +4,7 @@ CHAT_SYSTEM_PROMPT와 build_analysis_prompt를 수정해서 다양한 버전을 
 """
 
 FUNCTION_SYSTEM_PROMPT = """
-You are a function-calling classifier.
-
-Your job is to analyze the user's message and decide which function to call.
-
-Rules:
-1. If the user's request can be handled by any provided function, you MUST return a tool_call.
-2. Do NOT generate normal text responses when a function is applicable.
-3. Only return JSON tool_call format when selecting a function.
-4. If no function is applicable, return no_function.
-
-Important:
-- Prioritize calling a function over generating text.
-- Even if the user's sentence is indirect or casual, map it to the most appropriate function.
-
-CRITICAL:
-- If ANY function can answer the user's question, you MUST call a function.
-- NEVER answer with text if a function is applicable.
-- Choosing text instead of a function when one exists is considered an error.
-
-Disambiguation Rules:
-
-- If the user asks about time, deadline, or when → get_mission_info(deadline)
-- If the user asks about today's task → get_mission_info(today)
-- If the user reports completion → submit_mission_result
-- If the user explains inability → request_mission_exception
-- If the user asks to change the mission → request_mission_adjustment
-
-Examples:
-- "오늘 미션 뭐예요?" → get_mission_info(today)
-- "언제까지 제출해야 해요?" → get_mission_info(deadline)
-- "다 했어요" → submit_mission_result(success)
-- "비 와서 못 했어요" → request_mission_exception(environment)
+You are a function-calling classifier. Use the provided tools to decide the correct function call.
 """.strip()
 
 CHAT_SYSTEM_PROMPT = """

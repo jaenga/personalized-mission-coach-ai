@@ -9,7 +9,6 @@ load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
-FUNCTION_MODEL = os.getenv("FUNCTION_MODEL", "functiongemma")
 
 
 async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
@@ -39,54 +38,6 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     )
     call1_ms = round((time.perf_counter() - t0) * 1000)
     return ai_message, call1_ms
-
-
-async def call_with_tools(
-    system_prompt: str,
-    messages: list[dict],
-    tools: list[dict],
-) -> tuple[str | None, list[dict] | None, int]:
-    """
-    Function calling 호출.
-    Returns: (text_response, tool_calls, elapsed_ms)
-      - 모델이 함수를 선택하면 tool_calls에 목록, text_response는 None
-      - 일반 응답이면 text_response에 텍스트, tool_calls는 None
-    """
-    url = f"{OLLAMA_BASE_URL}/api/chat"
-    payload = {
-        "model": FUNCTION_MODEL,
-        "stream": False,
-        "messages": [{"role": "system", "content": system_prompt}] + messages,
-        "tools": tools,
-    }
-
-    print("\n" + "="*50)
-    print("=== FUNCTION CALLING PAYLOAD ===")
-    print(f"  model : {FUNCTION_MODEL}")
-    print(f"\n  [system_prompt]\n{payload['messages'][0]['content']}")
-    print(f"\n  [messages] ({len(payload['messages']) - 1}턴)")
-    for i, m in enumerate(payload["messages"][1:]):
-        role = m.get("role", "?")
-        content = m.get("content", "")[:200]
-        print(f"    [{i}] {role}: {content!r}")
-    print(f"\n  [tools] ({len(payload['tools'])}개)")
-    for t in payload["tools"]:
-        fn = t["function"]
-        print(f"    - {fn['name']}: {fn['description'][:80]!r}...")
-    print("="*50)
-
-    t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-    elapsed_ms = round((time.perf_counter() - t0) * 1000)
-
-    msg = data["message"]
-    tool_calls = msg.get("tool_calls")
-    if tool_calls:
-        return None, tool_calls, elapsed_ms
-    return msg["content"].strip(), None, elapsed_ms
 
 
 async def analyze_response(user_input: str, ai_message: str) -> tuple[dict, int]:

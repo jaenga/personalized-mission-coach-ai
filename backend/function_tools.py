@@ -9,16 +9,7 @@ TOOLS = [
             "name": "submit_mission_result",
             "description": (
                 "미션 수행 결과를 보고할 때 호출합니다. "
-                "사용자가 오늘 미션을 완료했는지, 일부만 했는지, 전혀 하지 못했는지를 말할 때 사용합니다. "
-                "success: 다 했어요 / 완료했어요 / 오늘 미션 성공했어요 / 다 끝냈어요. "
-                "partial: 반 정도 했어요 / 거의 다 했어요 / 조금 했어요 / 절반쯤 했어요. "
-                "fail: 못 했어요 / 아예 안 했어요 / 오늘은 실패했어요 / 하나도 못 했어요. "
-                "중요: 수행 결과가 명확히 표현되면 반드시 이 함수를 사용합니다. "
-                "호출하면 안 되는 경우: 못 한 이유를 설명만 하는 경우 → request_mission_exception, "
-                "다른 미션으로 바꿔달라는 경우 → request_mission_adjustment. "
-                "헷갈리기 쉬운 차이: '비가 와서 못 했어요'는 결과 보고면 fail, 이유 설명이 중심이면 exception."
-                "강제 규칙: '못 했다'가 결과 보고로 쓰이면 fail, 비·아픔·일정 같은 이유 설명이 중심이면 exception을 우선합니다."
-
+                "완료(success), 일부(partial), 실패(fail)를 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -38,13 +29,8 @@ TOOLS = [
         "function": {
             "name": "get_mission_info",
             "description": (
-                "미션 정보에 대해 질문할 때 호출합니다. "
-                "오늘 해야 할 미션 내용(today), 제출 마감 시간(deadline), 미션 수행의 일반 규칙(general_rule)을 묻는 경우에 사용합니다. "
-                "today: 오늘 미션 뭐예요? / 오늘 뭐 해야 돼요? / 오늘 할 일 알려주세요. "
-                "deadline: 언제까지 제출해야 해요? / 몇 시까지예요? / 마감 시간이 언제예요? / 오늘 몇 시까지 해야 돼요? / 언제까지 내면 돼요? "
-                "general_rule: 미션 규칙이 뭐예요? / 부분 수행도 인정되나요? / 꼭 다 해야 하나요? "
-                "강제 규칙: '마감', '언제까지', '제출 시간'이 포함되면 deadline. 오늘 해야 할 내용 자체를 묻는 경우만 today. "
-                "호출하면 안 되는 경우: 결과를 보고하는 경우 → submit_mission_result, 미션을 바꿔달라는 경우 → request_mission_adjustment."
+                "미션 정보를 물어볼 때 호출합니다. "
+                "오늘 미션(today), 마감(deadline), 일반 규칙(general_rule)을 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -64,17 +50,8 @@ TOOLS = [
         "function": {
             "name": "request_mission_adjustment",
             "description": (
-                "미션을 변경하거나 난이도를 조정해달라고 요청할 때 호출합니다. "
-                "사용자가 현재 미션 대신 다른 미션을 원하거나, 더 쉬운 미션 또는 더 어려운 미션을 원할 때 사용합니다. "
-                "change: 다른 미션으로 바꿔주세요 / 이 미션 말고 다른 걸로 주세요 / 실내에서 할 수 있는 미션으로 바꿔주세요. "
-                "easier: 좀 더 쉬운 걸로 해주세요 / 이건 너무 어려워요 / 더 쉽게 할 수 있는 걸로 해주세요. "
-                "harder: 너무 쉬워요 / 더 어렵게 해주세요 / 난이도를 올려주세요. "
-                "헷갈리기 쉬운 차이: '오늘 학원이 늦게 끝나요' → request_mission_exception, "
-                "'오늘 학원이 늦게 끝나서 다른 미션으로 바꿔주세요' → request_mission_adjustment. "
-                "호출하면 안 되는 경우: 수행이 어려운 사정만 설명 → request_mission_exception, "
-                "대체 행동 인정 여부를 묻는 경우 → check_mission_equivalency."
-                "강제 규칙: '바꿔주세요', '다른 걸로', '조정해 주세요', '쉽게', '어렵게' 같은 직접 요청 표현이 있으면 adjustment를 우선합니다."
-
+                "미션 변경이나 난이도 조정을 요청할 때 호출합니다. "
+                "변경(change), 쉽게(easier), 어렵게(harder)를 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -94,13 +71,8 @@ TOOLS = [
         "function": {
             "name": "check_mission_equivalency",
             "description": (
-                "원래 미션 대신 다른 행동을 했을 때, 그것도 미션으로 인정되는지 물어볼 때 호출합니다. "
-                "대체 행동, 장소, 시간 조건 변경이 원래 미션과 비슷한지 확인하려는 질문에 사용합니다. "
-                "behavior: 줄넘기 대신 자전거 타면 인정돼요? / 스쿼트 대신 계단 오르기 했는데 괜찮아요? / 물 대신 우유 마셔도 되나요? "
-                "location: 밖 말고 집에서 하면 인정돼요? / 운동장을 못 가서 집에서 해도 돼요? / 학원에서 하면 괜찮아요? "
-                "time: 아침 대신 저녁에 하면 되나요? / 오늘 말고 내일 하면 안 돼요? / 지금 못 하고 나중에 하면 인정돼요? "
-                "중요: 이미 다른 행동을 했거나 다른 방식으로 해도 되는지 '인정 여부'를 묻는 경우 equivalency. "
-                "단순히 못 해서 바꿔달라는 건 adjustment. 오늘 미션 내용을 묻는 경우 → get_mission_info."
+                "원래 미션 대신 다른 방식이 인정되는지 확인할 때 호출합니다. "
+                "행동(behavior), 장소(location), 시간(time) 변경을 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -120,10 +92,8 @@ TOOLS = [
         "function": {
             "name": "check_certification_info",
             "description": (
-                "미션 완료 후 어떻게 인증하는지, 어디에 제출하는지 물어볼 때 호출합니다. "
-                "method: 인증샷 어떻게 찍어요? / 어떻게 인증해요? / 사진으로 찍으면 되나요? / 영상도 되나요? "
-                "location: 어디에 올려요? / 어디로 제출해요? / 인증은 어디서 해요? / 앱에서 어디 눌러요? "
-                "중요: 인증 방법을 물으면 method, 제출 위치나 채널을 물으면 location."
+                "미션 인증 방법이나 제출 위치를 물어볼 때 호출합니다. "
+                "방법(method)과 위치(location)를 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -143,9 +113,8 @@ TOOLS = [
         "function": {
             "name": "report_submission_issue",
             "description": (
-                "미션을 수행했음에도 정상적인 인증 절차를 밟지 못한 문제가 발생했을 때 호출합니다. "
-                "제출 기한을 놓쳐 뒤늦게 보고하거나(late_submission), "
-                "앱 오류나 네트워크 장애 등 기술적 결함(device_issue)으로 제출에 실패한 모든 상황입니다."
+                "미션 제출 과정에서 문제가 생겼을 때 호출합니다. "
+                "지연 제출(late_submission)과 기기/시스템 문제(device_issue)를 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -165,15 +134,8 @@ TOOLS = [
         "function": {
             "name": "request_mission_exception",
             "description": (
-                "미션을 수행하기 어려운 개인적인 사정이나 이유를 설명할 때 호출합니다. "
-                "건강 문제, 일정 문제, 날씨나 장소 같은 환경 문제 때문에 미션 수행이 어렵다고 말하는 경우에 사용합니다. "
-                "health: 독감 걸렸어요 / 다리가 아파요 / 몸이 안 좋아요 / 배가 아파서 못 하겠어요 / 다쳐서 운동 못 해요. "
-                "schedule: 오늘 학원이 늦게 끝나요 / 오늘 일정이 너무 많아요 / 시간이 없어요 / 오늘 너무 바빠요. "
-                "environment: 비가 와서 밖에 못 나가요 / 날씨가 너무 안 좋아요 / 미세먼지가 심해요 / 운동할 장소가 없어요. "
-                "중요: '못 한다', '어렵다', '상황이 안 된다'처럼 수행 불가 이유를 설명하는 경우 exception. "
-                "아직 미션을 바꿔달라고 직접 요청하지 않았다면 adjustment가 아니라 exception. "
-                "헷갈리기 쉬운 차이: '비가 와서 밖에 못 나가요' → exception, '비가 와서 다른 미션으로 바꿔주세요' → adjustment. "
-                "호출하면 안 되는 경우: 미션 변경 요청 → request_mission_adjustment, 결과 제출 → submit_mission_result, 날씨 자체 질문 → get_weather_info."
+                "미션 수행이 어려운 사정을 설명할 때 호출합니다. "
+                "건강(health), 일정(schedule), 환경(environment) 사유를 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -193,8 +155,7 @@ TOOLS = [
         "function": {
             "name": "support_mission_help",
             "description": (
-                "미션의 의미가 모호하거나, 구체적으로 어떻게 행동해야 할지 막막하여 도움을 요청할 때 호출합니다. "
-                '"어떻게 하는 건지 모르겠어요", "이 말이 무슨 뜻이에요?", "좀 더 자세히 설명해 주세요" 등입니다.'
+                "미션의 의미나 수행 방법이 헷갈려 도움을 요청할 때 호출합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -208,8 +169,8 @@ TOOLS = [
         "function": {
             "name": "get_weather_info",
             "description": (
-                "야외 미션 수행이 가능한지 판단하기 위해 날씨나 예보를 물어볼 때 호출합니다. "
-                '"오늘 비 와요?", "미세먼지 어때요?", "밖에서 운동해도 될 날씨인가요?" 등의 질문입니다.'
+                "날씨나 예보를 물어볼 때 호출합니다. "
+                "야외 미션 가능 여부를 확인하는 질문에 사용합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -223,8 +184,8 @@ TOOLS = [
         "function": {
             "name": "get_health_info",
             "description": (
-                "운동, 식단, 수분 섭취 등 일반적인 건강 상식이나 생활 습관 관련 지식을 물어볼 때 호출합니다. "
-                '"물은 얼마나 많이 마셔야 해요?", "운동 얼마나 해야 좋아요?" 등의 지식 질문입니다.'
+                "건강 상식이나 생활 습관 관련 지식을 물어볼 때 호출합니다. "
+                "식단, 수분, 운동, 수면, 일반 건강 주제를 다룹니다."
             ),
             "parameters": {
                 "type": "object",
@@ -244,12 +205,8 @@ TOOLS = [
         "function": {
             "name": "get_user_history",
             "description": (
-                "본인의 과거 미션 기록이나 누적 활동을 확인하고 싶을 때 호출합니다. "
-                "recent_history: 최근 기록 보여줘 / 내가 최근에 뭘 했어요? / 최근 활동 알려줘. "
-                "weekly_summary: 이번 주 활동 요약해줘 / 이번 주 기록 보여줘 / 이번 주 얼마나 했어요? "
-                "monthly_summary: 이번 달 기록 보여줘 / 월간 요약해줘 / 이번 달 활동 알려줘. "
-                "success_count: 지금까지 몇 번 성공했어요? / 총 성공 횟수가 몇 번이에요? / 내가 몇 번 성공했는지 알려줘. "
-                "중요: 과거 기록, 누적 통계, 요약, 성공 횟수는 전부 history 계열입니다."
+                "사용자의 과거 미션 기록이나 누적 활동을 조회할 때 호출합니다. "
+                "최근, 주간, 월간, 성공 횟수 조회를 구분합니다."
             ),
             "parameters": {
                 "type": "object",
@@ -269,9 +226,8 @@ TOOLS = [
         "function": {
             "name": "cancel_mission_action",
             "description": (
-                "사용자가 이전에 요청하거나 수행한 행동을 취소하고 싶을 때 호출합니다. "
-                "결과 제출 취소(submit), 미션 변경/조정 취소(adjustment), 예외 신청 철회(exception) 시 사용합니다. "
-                '"방금 제출한 거 취소할게요", "미션 바꾸는 거 취소해주세요", "예외 신청 취소할게요" 등입니다.'
+                "이전에 한 미션 관련 행동을 취소할 때 호출합니다. "
+                "제출(submit), 조정(adjustment), 예외(exception) 취소를 구분합니다."
             ),
             "parameters": {
                 "type": "object",

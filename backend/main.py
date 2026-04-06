@@ -1,14 +1,21 @@
+import asyncio
 import json
+import logging
+import time
 from uuid import uuid4
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from database import init_db, save_message, fetch_messages, delete_messages
-from ollama_client import generate_chat_message, call_with_tools, analyze_response, OLLAMA_MODEL, FUNCTION_MODEL
-from prompts import build_chat_system_prompt, FUNCTION_SYSTEM_PROMPT
-from function_tools import TOOLS, execute_tool
+from database import delete_messages, fetch_messages, init_db, save_message
+from function_tools import execute_tool
+from functiongemma_hf_client import get_functiongemma_client, initialize_functiongemma_client
+from ollama_client import OLLAMA_MODEL, analyze_response, generate_chat_message
+from prompts import build_chat_system_prompt
+
+logger = logging.getLogger(__name__)
 
 # 분석 결과 임시 저장소 (analysis_id → result)
 analysis_store: dict[str, dict] = {}
@@ -24,8 +31,9 @@ app.add_middleware(
 
 
 @app.on_event("startup")
-def startup():
+def startup() -> None:
     init_db()
+    initialize_functiongemma_client()
 
 
 # ── 오늘의 미션 (MVP: 하드코딩) ──────────────────────────────────────────────
@@ -38,7 +46,7 @@ MISSION = {
 
 
 @app.get("/mission")
-def get_mission():
+def get_mission() -> dict:
     return MISSION
 
 
@@ -55,6 +63,32 @@ def detect_violations(ai_message: str, user_input: str) -> list[str]:
     ]
 
 
+# ── FunctionGemma(HF) 분류 ───────────────────────────────────────────────────
+
+class FunctionCallRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+
+
+async def classify_function_call(user_text: str) -> tuple[str, dict | None, int]:
+    client = get_functiongemma_client()
+    t0 = time.perf_counter()
+    raw_output, function_call = await asyncio.to_thread(client.predict_with_raw, user_text)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000)
+    return raw_output, function_call, elapsed_ms
+
+
+@app.post("/function-call")
+async def post_function_call(body: FunctionCallRequest) -> dict:
+    raw_output, function_call, elapsed_ms = await classify_function_call(body.message)
+    return {
+        "function_call": function_call,
+        "debug": {
+            "elapsed_ms": elapsed_ms,
+            "raw_output": raw_output,
+        },
+    }
+
+
 # ── 대화 채팅 ─────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -63,7 +97,7 @@ class ChatRequest(BaseModel):
     mission: str | None = None
 
 
-async def _run_analysis_bg(analysis_id: str, user_input: str, ai_message: str, call1_ms: int):
+async def _run_analysis_bg(analysis_id: str, user_input: str, ai_message: str, call1_ms: int) -> None:
     """백그라운드: 2차 분석 호출 후 결과를 analysis_store에 저장."""
     reasoning, call2_ms = await analyze_response(user_input, ai_message)
     analysis_store[analysis_id] = {
@@ -77,7 +111,7 @@ async def _run_analysis_bg(analysis_id: str, user_input: str, ai_message: str, c
 
 
 @app.post("/chat")
-async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
+async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks) -> dict:
     mission_title = body.mission or MISSION["title"]
     system_prompt = build_chat_system_prompt(mission_title)
     is_greet = body.message == "__GREET__"
@@ -90,110 +124,71 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
     ]
 
-    tool_called_list = []
+    tool_called_list: list[dict] = []
     call1_ms = 0
+    function_call: dict | None = None
+    function_raw = ""
 
     if not is_greet:
-        # ── 1단계: function calling 모델로 의도 파악 ──────────────────────────
-        print("\n" + "="*50)
-        print("=== USER ===")
-        print(f"  message : {body.message}")
-        print(f"  session : {body.session_id}")
-        print("="*50)
-
+        logger.info("Classifying function call: session=%s message=%r", body.session_id, body.message)
         try:
-            tool_context = {"mission": MISSION, "session_id": body.session_id}
-            # functiongemma는 현재 발화만 분류 — history 없이 마지막 user 메시지 1개만 전달
-            classify_messages = [{"role": "user", "content": body.message}]
-            text_resp, tool_calls, call1_ms = await call_with_tools(
-                FUNCTION_SYSTEM_PROMPT, classify_messages, TOOLS
+            function_raw, function_call, call1_ms = await classify_function_call(body.message)
+            logger.info(
+                "FunctionGemma(HF) output: elapsed_ms=%s raw=%r parsed=%s",
+                call1_ms,
+                function_raw,
+                function_call,
             )
 
-            print("\n=== MODEL RAW RESPONSE ===")
-            print(f"  model      : {FUNCTION_MODEL}")
-            print(f"  elapsed_ms : {call1_ms}")
-            print(f"  text_resp  : {text_resp!r}")
-            print(f"  tool_calls : {tool_calls}")
-            print("="*50)
+            if function_call:
+                tool_context = {"mission": MISSION, "session_id": body.session_id}
+                fn_name = function_call.get("name")
+                fn_args = function_call.get("arguments", {})
 
-            if tool_calls:
-                print("\n=== TOOL CALLS ===")
-                for i, tc in enumerate(tool_calls):
-                    print(f"  [{i}] name      : {tc['function']['name']}")
-                    print(f"  [{i}] arguments : {tc['function'].get('arguments', {})}")
-                    print(f"  [{i}] args type : {type(tc['function'].get('arguments', {}))}")
-                print("="*50)
-
-                # 모든 tool_call 순서대로 실행
-                tool_results = []
-                for tc in tool_calls:
-                    fn_name = tc["function"]["name"]
-                    fn_args = tc["function"].get("arguments", {})
-                    if isinstance(fn_args, str):
-                        try:
-                            fn_args = json.loads(fn_args)
-                        except json.JSONDecodeError:
-                            fn_args = {}
-                    elif fn_args is None:
+                if isinstance(fn_args, str):
+                    try:
+                        fn_args = json.loads(fn_args)
+                    except json.JSONDecodeError:
                         fn_args = {}
-                    if fn_name == "no_function":
-                        print(f"\n=== EXECUTE TOOL === [SKIP] no_function")
-                        continue
-                    print(f"\n=== EXECUTE TOOL ===")
-                    print(f"  name      : {fn_name}")
-                    print(f"  arguments : {fn_args}")
-                    print(f"  args type : {type(fn_args)}")
-                    result = execute_tool(fn_name, fn_args, tool_context)
-                    print(f"\n=== TOOL RESULT ===")
-                    print(f"  {result}")
-                    print("="*50)
-                    tool_called_list.append({"name": fn_name, "arguments": fn_args, "result": result})
-                    tool_results.append(result)
+                if fn_args is None:
+                    fn_args = {}
 
-                if tool_results:
-                    # ── 2단계: tool 결과 포함해서 최종 응답 생성 ─────────────
+                if fn_name and fn_name != "no_function":
+                    result = execute_tool(fn_name, fn_args, tool_context)
+                    tool_called_list.append({"name": fn_name, "arguments": fn_args, "result": result})
+
+                    tool_call_for_chat = [{
+                        "function": {
+                            "name": fn_name,
+                            "arguments": fn_args,
+                        }
+                    }]
                     messages_with_tool = messages + [
-                        {"role": "assistant", "content": "", "tool_calls": tool_calls},
-                    ] + [{"role": "tool", "content": r} for r in tool_results]
+                        {"role": "assistant", "content": "", "tool_calls": tool_call_for_chat},
+                        {"role": "tool", "content": result},
+                    ]
                     ai_message, call2_ms = await generate_chat_message(system_prompt, messages_with_tool)
                     call1_ms += call2_ms
-                    print(f"\n=== FINAL MODEL RESPONSE === [after tool]")
-                    print(f"  model      : {OLLAMA_MODEL}")
-                    print(f"  elapsed_ms : {call2_ms}")
-                    print(f"  ai_message : {ai_message!r}")
-                    print("="*50)
                 else:
-                    # no_function만 있었던 경우 → 일반 텍스트 응답 재생성
                     ai_message, call2_ms = await generate_chat_message(system_prompt, messages)
                     call1_ms += call2_ms
-                    print(f"\n=== FINAL MODEL RESPONSE === [no_function fallback]")
-                    print(f"  model      : {OLLAMA_MODEL}")
-                    print(f"  elapsed_ms : {call2_ms}")
-                    print(f"  ai_message : {ai_message!r}")
-                    print("="*50)
             else:
-                # tool_calls 없음 → functiongemma 텍스트 응답 버리고 gemma3:4b로 재생성
                 ai_message, call2_ms = await generate_chat_message(system_prompt, messages)
                 call1_ms += call2_ms
-                print(f"\n=== FINAL MODEL RESPONSE === [no tool_calls]")
-                print(f"  model      : {OLLAMA_MODEL}")
-                print(f"  elapsed_ms : {call2_ms}")
-                print(f"  ai_message : {ai_message!r}")
-                print("="*50)
 
         except Exception as e:
-            print(f"\n[DEBUG] call_with_tools 예외 발생: {type(e).__name__}: {e}")
+            logger.exception("FunctionGemma classification failed: %s", e)
             # function calling 모델 실패 시 일반 모델로 폴백
             try:
                 ai_message, call1_ms = await generate_chat_message(system_prompt, messages)
             except Exception as e2:
-                raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e2}")
+                raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e2}") from e2
     else:
         # 첫 인사(__GREET__)는 function calling 없이 바로 응답
         try:
             ai_message, call1_ms = await generate_chat_message(system_prompt, messages)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
+            raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}") from e
 
     save_message(body.session_id, "assistant", ai_message)
 
@@ -206,13 +201,15 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     return {
         "response": ai_message,
         "analysis_id": analysis_id,
+        "function_call": function_call,
         "tool_called": tool_called_list or None,
         "debug": {
             "violations": violations,
             "system_prompt": system_prompt,
             "history_turns": len(messages),
             "model": OLLAMA_MODEL,
-            "function_model": FUNCTION_MODEL,
+            "function_model": "hf:functiongemma",
+            "function_raw": function_raw,
             "timing": {"call1_ms": call1_ms},
         },
     }
