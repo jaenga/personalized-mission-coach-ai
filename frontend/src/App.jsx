@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchMission, sendMessage, fetchChatHistory, fetchAnalysis, clearChatHistory } from "./api.js";
+import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, fetchChatHistory, fetchAnalysis, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
 
@@ -13,6 +13,14 @@ function getOrCreateSessionId() {
   return localStorage.getItem("chat_session_id") || createSessionId();
 }
 
+function getStoredProfile() {
+  try {
+    return JSON.parse(localStorage.getItem("user_profile") || "null");
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const [mission, setMission] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -20,19 +28,28 @@ export default function App() {
   const [debugMap, setDebugMap] = useState({});
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
+  const [profile, setProfile] = useState(getStoredProfile);
 
-  // 미션은 최초 1회만 fetch
-  useEffect(() => {
-    fetchMission().then(setMission).catch(() => {});
-  }, []);
+  // 로그인 화면용 상태
+  const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
 
-  // 세션 변경(초기 로드 or 리셋)마다 히스토리 로드
+  // 미션 로드 (프로필 확정 후)
   useEffect(() => {
-    if (!mission) return;
+    if (!profile) return;
+    fetchMissionByStudent(profile.student_id)
+      .then(setMission)
+      .catch(() => setMission({ mission_id: 1, mission_name: "오늘의 미션" }));
+  }, [profile]);
+
+  // 채팅 히스토리 로드
+  useEffect(() => {
+    if (!mission || !profile) return;
     fetchChatHistory(sessionId)
       .then((history) => {
         if (history.length === 0) {
-          requestGreeting(mission.title);
+          requestGreeting(mission.mission_name);
         } else {
           setMessages(
             history.map((msg, i) =>
@@ -46,22 +63,43 @@ export default function App() {
       });
   }, [sessionId, mission]);
 
+  async function handleLogin(e) {
+    e.preventDefault();
+    setLoginError("");
+    setLoginLoading(true);
+    try {
+      const student = await verifyStudent(loginForm.name.trim(), loginForm.phone4.trim());
+      await saveProfile(sessionId, student.student_id, student.student_name);
+      const saved = { student_id: student.student_id, student_name: student.student_name };
+      localStorage.setItem("user_profile", JSON.stringify(saved));
+      setProfile(saved);
+    } catch (err) {
+      setLoginError(err.message);
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
   async function handleReset() {
     if (loading) return;
     try {
       await clearChatHistory(sessionId);
     } catch {
-      // 삭제 실패해도 프론트 상태는 초기화
+      // 삭제 실패해도 초기화
     }
+    localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
+    setProfile(null);
+    setMission(null);
     setMessages([]);
     setDebugMap({});
     setSelectedDebugId(null);
+    setLoginForm({ name: "", phone4: "" });
+    setLoginError("");
   }
 
-  /** 분석 결과를 백그라운드에서 폴링해서 debugMap[debugId]에 병합 */
   async function pollAnalysis(analysisId, debugId) {
-    const MAX = 40; // 최대 40회 × 800ms = 32초
+    const MAX = 40;
     for (let i = 0; i < MAX; i++) {
       await new Promise((r) => setTimeout(r, 800));
       try {
@@ -79,10 +117,9 @@ export default function App() {
           return;
         }
       } catch {
-        // 일시적 오류는 무시하고 재시도
+        // 일시적 오류 무시
       }
     }
-    // 타임아웃: analysing 해제
     setDebugMap((prev) =>
       prev[debugId] ? { ...prev, [debugId]: { ...prev[debugId], analysing: false } } : prev
     );
@@ -107,9 +144,8 @@ export default function App() {
   async function handleSend(text) {
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
-
     try {
-      const res = await sendMessage(text, sessionId, mission?.title);
+      const res = await sendMessage(text, sessionId, mission?.mission_name);
       const debugId = crypto.randomUUID();
       setMessages((prev) => [...prev, { role: "assistant", content: res.response, debugId }]);
       setDebugMap((prev) => ({ ...prev, [debugId]: { ...res.debug, analysing: !!res.analysis_id } }));
@@ -125,23 +161,65 @@ export default function App() {
     }
   }
 
+  // ── 로그인 화면 ──────────────────────────────────────────────────────────────
+  if (!profile) {
+    return (
+      <div className="app-layout">
+        <header className="app-header">
+          <span>🌟 AI 생활습관 코치</span>
+        </header>
+        <div className="profile-setup">
+          <h2>안녕! 나는 누구?</h2>
+          <form onSubmit={handleLogin} className="profile-form">
+            <div className="profile-field">
+              <label>이름</label>
+              <input
+                type="text"
+                placeholder="이름을 입력해 줘"
+                value={loginForm.name}
+                onChange={(e) => setLoginForm((f) => ({ ...f, name: e.target.value }))}
+                required
+              />
+            </div>
+            <div className="profile-field">
+              <label>전화번호 뒷 4자리</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="0000"
+                value={loginForm.phone4}
+                onChange={(e) => setLoginForm((f) => ({ ...f, phone4: e.target.value.replace(/\D/g, "") }))}
+                required
+              />
+            </div>
+            {loginError && <p className="login-error">{loginError}</p>}
+            <button
+              type="submit"
+              className="profile-submit-btn"
+              disabled={loginLoading || !loginForm.name.trim() || loginForm.phone4.length !== 4}
+            >
+              {loginLoading ? "확인 중..." : "시작하기"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // ── 채팅 화면 ────────────────────────────────────────────────────────────────
   return (
     <div className="app-layout">
       <header className="app-header">
-        <span>🌟 AI 생활습관 코치</span>
-        <button
-          className="reset-btn"
-          onClick={handleReset}
-          disabled={loading}
-          title="대화 초기화"
-        >
-          새 대화
+        <span>🌟 {profile.student_name}의 코치</span>
+        <button className="reset-btn" onClick={handleReset} disabled={loading}>
+          학생 변경
         </button>
       </header>
 
       {mission && (
         <div className="mission-banner">
-          🎯 오늘 미션: <strong>{mission.title}</strong>
+          🎯 오늘 미션: <strong>{mission.mission_name}</strong>
         </div>
       )}
 
