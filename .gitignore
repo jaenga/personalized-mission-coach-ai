@@ -8,3 +8,8 @@ dist/
 .DS_Store
 backend/google_credentials.json
 backend/*.db
+# RAG data pipeline
+backend/data/raw/*
+!backend/data/raw/.gitkeep
+backend/data/processed/*
+!backend/data/processed/.gitkeep
