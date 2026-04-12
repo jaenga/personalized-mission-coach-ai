@@ -16,7 +16,7 @@ from database import (
 )
 from ollama_client import generate_chat_message, analyze_response, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
-from rag import search_rag
+from rag import search_rag, preload_model
 from sheets import detect_mission_status, update_mission_result, generate_daily_status
 
 analysis_store: dict[str, dict] = {}
@@ -34,6 +34,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     init_db()
+    preload_model()
     try:
         today = date.today().isoformat()
         added = generate_daily_status(today)

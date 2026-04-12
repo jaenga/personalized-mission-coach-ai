@@ -1,6 +1,6 @@
 """
-RAG 검색 모듈.
-유저 메시지를 임베딩 → NeonDB에서 관련 chunks/faqs 벡터 검색 → 프롬프트용 컨텍스트 반환.
+RAG 검색 모듈
+유저 메시지를 임베딩 → NeonDB에서 관련 chunks/faqs 벡터 검색 → 프롬프트용 컨텍스트 반환
 """
 from __future__ import annotations
 
@@ -30,6 +30,11 @@ def _get_model() -> SentenceTransformer:
         _model = SentenceTransformer(MODEL_NAME)
         print("[RAG] 모델 로드 완료")
     return _model
+
+
+def preload_model():
+    """서버 시작 시 임베딩 모델을 미리 로드."""
+    _get_model()
 
 
 def _to_pgvector(vec: list[float]) -> str:
