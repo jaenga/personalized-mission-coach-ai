@@ -16,6 +16,7 @@ from database import (
 )
 from ollama_client import generate_chat_message, analyze_response, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
+from rag import search_rag, preload_model
 from sheets import detect_mission_status, update_mission_result, generate_daily_status
 
 analysis_store: dict[str, dict] = {}
@@ -33,6 +34,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     init_db()
+    preload_model()
     try:
         today = date.today().isoformat()
         added = generate_daily_status(today)
@@ -185,14 +187,21 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     mission_title = body.mission or "오늘의 미션"
-    system_prompt = build_chat_system_prompt(mission_title)
     is_greet = body.message == "__GREET__"
 
     # function 감지
     detected_function = None
+    rag_result: dict = {"chunks": [], "faqs": [], "context": ""}
     if not is_greet:
         detected_function = detect_function_from_db(body.message)
         save_message(body.session_id, "user", body.message, detected_function)
+
+        try:
+            rag_result = search_rag(body.message)
+        except Exception as e:
+            print(f"[RAG] 검색 실패 (무시): {e}")
+
+    system_prompt = build_chat_system_prompt(mission_title, rag_result["context"] if not is_greet else "")
 
     history = fetch_messages(body.session_id)
     messages = history if history else [
@@ -218,17 +227,27 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     analysis_id = str(uuid4())
     background_tasks.add_task(_run_analysis_bg, analysis_id, user_input, ai_message, call1_ms)
 
+    sources = [
+        {"type": "faq", "title": f["title"], "question": f["question"]}
+        for f in rag_result["faqs"]
+    ] + [
+        {"type": "chunk", "title": c["title"], "intent": c["intent"]}
+        for c in rag_result["chunks"]
+    ]
+
     return {
         "response": ai_message,
         "analysis_id": analysis_id,
         "mission_completed": mission_status is not None,
         "detected_function": detected_function,
+        "sources": sources,
         "debug": {
             "violations": violations,
             "system_prompt": system_prompt,
             "history_turns": len(messages),
             "model": OLLAMA_MODEL,
             "timing": {"call1_ms": call1_ms},
+            "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
         },
     }
 

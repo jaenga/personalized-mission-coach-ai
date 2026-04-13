@@ -30,8 +30,11 @@ CHAT_SYSTEM_PROMPT = """
 """.strip()
 
 
-def build_chat_system_prompt(mission: str) -> str:
-    return CHAT_SYSTEM_PROMPT + f"\n\n오늘의 미션: {mission}"
+def build_chat_system_prompt(mission: str, rag_context: str = "") -> str:
+    prompt = CHAT_SYSTEM_PROMPT + f"\n\n오늘의 미션: {mission}"
+    if rag_context:
+        prompt += f"\n\n아래는 아이 질문과 관련된 건강 정보야. 답변할 때 이 내용을 근거로 써. 출처를 직접 언급하지는 말고, 내용만 자연스럽게 반영해.\n\n{rag_context}"
+    return prompt
 
 
 def build_analysis_prompt(user_input: str, ai_response: str) -> str:
