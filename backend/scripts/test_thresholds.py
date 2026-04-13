@@ -1,8 +1,5 @@
-"""
-임계값 조정용 테스트 스크립트.
-18개 문서 주제별 대표 질문을 넣고 top1 distance를 출력해준다.
-distance가 CHUNK_THRESHOLD(0.75)보다 높으면 ❌ 표시.
-"""
+#임계값 확인하려고 만든 스크립트라 기능이랑은 상관없습니다!
+
 from __future__ import annotations
 
 import os
