@@ -1,7 +1,8 @@
 #
 # RAG 검색 테스트 스크립트
 # chunk 5개, faq 3개 검색해서 출력해줌
-# 간단히 검색 테스트용! 딱히 기능은 없음
+# 간단히 검색 테스트용! 딱히 기능은 없음 
+# 삭제해도 되는 파일입니다!!
 # 
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
-MODEL_NAME = os.getenv('EMBEDDING_MODEL', 'jhgan/ko-sroberta-multitask')
+MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 if not DATABASE_URL:
     raise ValueError('DATABASE_URL이 없습니다. backend/.env 확인')
 
@@ -34,12 +35,13 @@ def main() -> None:
         with conn.cursor() as cur:
             print('\n[FAQ 상위 3개]')
             cur.execute(
-                '''
-                SELECT faq_id, question, answer
+                """
+                SELECT faq_id, question, answer, embedding <=> %s::vector AS dist
                 FROM faqs
+                WHERE embedding IS NOT NULL
                 ORDER BY embedding <=> %s::vector
                 LIMIT 3
-                ''',
+                """,
                 (query_vec_str,),
             )
             for faq_id, question, answer in cur.fetchall():
@@ -49,8 +51,9 @@ def main() -> None:
             print('\n[Chunk 상위 5개]')
             cur.execute(
                 '''
-                SELECT chunk_id, title, chunk_intent, chunk_text
+                SELECT chunk_id, title, chunk_intent, chunk_text, embedding <=> %s::vector AS dist
                 FROM chunks
+                WHERE embedding IS NOT NULL
                 ORDER BY embedding <=> %s::vector
                 LIMIT 5
                 ''',
