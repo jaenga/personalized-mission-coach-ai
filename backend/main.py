@@ -1,8 +1,8 @@
+import time
 from datetime import date
-from uuid import uuid4
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from database import (
@@ -13,14 +13,12 @@ from database import (
     get_student_mission_db, get_student_info_db,
     save_mission_result, mark_synced,
 )
-from ollama_client import generate_chat_message, analyze_response, OLLAMA_MODEL
+from ollama_client import generate_chat_message, generate_chat_message_stream, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
 from rag import search_rag, preload_model
 from sheets import detect_mission_status, update_mission_result, generate_daily_status
 from intent_router import classify_intent
 from qwen_client import call_function, preload_qwen
-
-analysis_store: dict[str, dict] = {}
 
 # ── 펑션별 Gemma 힌트 ──────────────────────────────────────────────────────────
 
@@ -150,14 +148,6 @@ def detect_violations(ai_message: str, user_input: str) -> list[str]:
 
 # ── 배경 작업 ──────────────────────────────────────────────────────────────────
 
-async def _run_analysis_bg(analysis_id: str, user_input: str, ai_message: str, call1_ms: int):
-    reasoning, call2_ms = await analyze_response(user_input, ai_message)
-    analysis_store[analysis_id] = {
-        "reasoning": reasoning,
-        "timing": {"call1_ms": call1_ms, "call2_ms": call2_ms, "total_ms": call1_ms + call2_ms},
-    }
-
-
 async def _sync_sheet_bg(
     session_id: str,
     user_message: str,
@@ -176,18 +166,26 @@ async def _sync_sheet_bg(
     student_info = get_student_info_db(student_id) or {}
     mission_info = get_student_mission_db(student_id, today) or {}
 
-    # 1. DB 저장 (checkin_log)
-    result_id = save_mission_result(
-        student_id=student_id,
-        student_name=student_info.get("student_name", profile.get("student_name", "")),
-        mission_id=mission_info.get("mission_id"),
-        mission_name=mission_info.get("mission_name", ""),
-        status=status,
-        result_reason=user_message,
-        ai_response=ai_message,
-        session_id=session_id,
-        detected_function=detected_function,
-    )
+    # 1. DB 저장 (checkin_log) — mission_id가 없으면 skip
+    result_id = None
+    mission_id = mission_info.get("mission_id")
+    if mission_id is not None:
+        try:
+            result_id = save_mission_result(
+                student_id=student_id,
+                student_name=student_info.get("student_name", profile.get("student_name", "")),
+                mission_id=mission_id,
+                mission_name=mission_info.get("mission_name", ""),
+                status=status,
+                result_reason=user_message,
+                ai_response=ai_message,
+                session_id=session_id,
+                detected_function=detected_function,
+            )
+        except Exception as e:
+            print(f"[DB] checkin_log 저장 실패 (무시): {e}")
+    else:
+        print(f"[DB] mission_id 없음 — checkin_log 저장 skip (student_id={student_id})")
 
     # 2. 구글 시트 업데이트
     try:
@@ -206,7 +204,8 @@ async def _sync_sheet_bg(
             category=mission_info.get("category", ""),
             difficulty=mission_info.get("difficulty", ""),
         )
-        mark_synced(result_id)
+        if result_id is not None:
+            mark_synced(result_id)
     except Exception:
         pass
 
@@ -262,7 +261,7 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
 
     # ── 4. Gemma4:e2b 응답 생성 ─────────────────────────────────────────────────
-    history = fetch_messages(body.session_id)
+    history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
     messages = history if history else [
         {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
     ]
@@ -291,9 +290,6 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         fn = detected_function or "submit_mission_result"
         background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, fn)
 
-    analysis_id = str(uuid4())
-    background_tasks.add_task(_run_analysis_bg, analysis_id, user_input, ai_message, call1_ms)
-
     sources = [
         {"type": "faq", "title": f["title"], "question": f["question"]}
         for f in rag_result["faqs"]
@@ -304,7 +300,6 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     return {
         "response": ai_message,
-        "analysis_id": analysis_id,
         "mission_completed": mission_status is not None,
         "detected_function": detected_function,
         "sources": sources,
@@ -321,13 +316,88 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     }
 
 
-@app.get("/analysis/{analysis_id}")
-async def get_analysis(analysis_id: str):
-    result = analysis_store.get(analysis_id)
-    if result is None:
-        return JSONResponse(status_code=202, content={"status": "pending"})
-    del analysis_store[analysis_id]
-    return result
+@app.post("/chat/stream")
+async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks):
+    import json as _json
+
+    mission_title = body.mission or "오늘의 미션"
+    is_greet = body.message == "__GREET__"
+
+    async def event_stream():
+        intent = "A"
+        detected_function = None
+        fn_args: dict = {}
+        rag_result: dict = {"chunks": [], "faqs": [], "context": ""}
+
+        if not is_greet:
+            # ── Stage 1: 인텐트 분류 (user 메시지는 history fetch 후 저장) ────
+            t0 = time.perf_counter()
+            intent = await classify_intent(body.message)
+            intent_ms = round((time.perf_counter() - t0) * 1000)
+
+            intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
+            yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
+
+            # ── Stage 2: 인텐트별 모듈 ──────────────────────────────────────────
+            if intent == "B":
+                t1 = time.perf_counter()
+                detected_function, fn_args, _ = call_function(body.message)
+                qwen_ms = round((time.perf_counter() - t1) * 1000)
+                yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'fn': detected_function, 'args': fn_args, 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
+
+            elif intent == "C":
+                try:
+                    rag_result = search_rag(body.message)
+                    hits = len(rag_result["chunks"]) + len(rag_result["faqs"])
+                    yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'rag', 'hits': hits}, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    print(f"[RAG] 검색 실패 (무시): {e}")
+
+        # ── Stage 3: 응답 생성 시작 알림 ────────────────────────────────────
+        system_prompt = build_chat_system_prompt(
+            mission_title,
+            rag_result["context"] if not is_greet else "",
+        )
+        if intent == "D":
+            system_prompt += "\n\n아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
+        if intent == "B" and detected_function:
+            system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
+
+        # 이전 히스토리 fetch → 현재 user 메시지 append → DB 저장
+        history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
+        if not is_greet:
+            history.append({"role": "user", "content": body.message})
+            save_message(body.session_id, "user", body.message, None)
+
+        messages = history if history else [
+            {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
+        ]
+
+        yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'generating'}, ensure_ascii=False)}\n\n"
+
+        # ── Stage 4: 토큰 스트리밍 ───────────────────────────────────────────
+        ai_message = ""
+        try:
+            async for token in generate_chat_message_stream(system_prompt, messages):
+                ai_message += token
+                yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            return
+
+        yield f"data: {_json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+
+        # ── 후처리 ───────────────────────────────────────────────────────────
+        save_message(body.session_id, "assistant", ai_message)
+        user_input = body.message if not is_greet else ""
+        mission_status = None
+        if not is_greet and intent == "B":
+            mission_status = fn_args.get("result_type") or detect_mission_status(user_input)
+        if mission_status:
+            fn = detected_function or "submit_mission_result"
+            background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, fn)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/chat/{session_id}")

@@ -77,7 +77,7 @@ async def classify_intent(user_message: str) -> IntentLabel:
     payload = {
         "model": ROUTER_MODEL,
         "stream": False,
-        "think": False,  # thinking 모드 비활성화
+        "think": False,
         "messages": [
             {"role": "system", "content": _INTENT_SYSTEM},
             {"role": "user", "content": user_message},

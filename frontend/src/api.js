@@ -30,14 +30,44 @@ export async function sendMessage(message, sessionId, mission = null) {
 }
 
 /**
- * 백그라운드 분석 결과 폴링.
- * @returns {object|null} 준비됐으면 결과 객체, 아직이면 null
+ * 채팅 스트리밍 전송.
+ * onToken(token): 토큰 수신 시 호출
+ * onPipeline(stage): 파이프라인 단계 이벤트 수신 시 호출
  */
-export async function fetchAnalysis(analysisId) {
-  const res = await fetch(`/analysis/${analysisId}`);
-  if (res.status === 202) return null;
-  if (!res.ok) throw new Error("분석 조회 실패");
-  return res.json();
+export async function sendMessageStream(message, sessionId, mission = null, { onToken, onPipeline } = {}) {
+  const res = await fetch("/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_id: sessionId, mission }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "메시지 전송 실패");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const data = JSON.parse(line.slice(6));
+        if (data.type === "pipeline") {
+          onPipeline?.(data);
+        } else if (data.type === "token") {
+          onToken?.(data.content);
+        }
+      } catch {}
+    }
+  }
 }
 
 /** 세션의 대화 히스토리 조회. */

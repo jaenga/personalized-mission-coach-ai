@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, fetchChatHistory, fetchAnalysis, clearChatHistory } from "./api.js";
+import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
 
@@ -25,6 +25,7 @@ export default function App() {
   const [mission, setMission] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [pipeline, setPipeline] = useState([]); // 실시간 파이프라인 단계
   const [debugMap, setDebugMap] = useState({});
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
@@ -98,42 +99,14 @@ export default function App() {
     setLoginError("");
   }
 
-  async function pollAnalysis(analysisId, debugId) {
-    const MAX = 40;
-    for (let i = 0; i < MAX; i++) {
-      await new Promise((r) => setTimeout(r, 800));
-      try {
-        const result = await fetchAnalysis(analysisId);
-        if (result) {
-          setDebugMap((prev) => ({
-            ...prev,
-            [debugId]: {
-              ...prev[debugId],
-              reasoning: result.reasoning,
-              timing: { ...prev[debugId]?.timing, ...result.timing },
-              analysing: false,
-            },
-          }));
-          return;
-        }
-      } catch {
-        // 일시적 오류 무시
-      }
-    }
-    setDebugMap((prev) =>
-      prev[debugId] ? { ...prev, [debugId]: { ...prev[debugId], analysing: false } } : prev
-    );
-  }
-
   async function requestGreeting(missionTitle) {
     setLoading(true);
     try {
       const res = await sendMessage("__GREET__", sessionId, missionTitle);
       const debugId = crypto.randomUUID();
       setMessages([{ role: "assistant", content: res.response, debugId }]);
-      setDebugMap({ [debugId]: { ...res.debug, analysing: !!res.analysis_id } });
+      setDebugMap({ [debugId]: { ...res.debug } });
       setSelectedDebugId(debugId);
-      if (res.analysis_id) pollAnalysis(res.analysis_id, debugId);
     } catch {
       setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
@@ -144,18 +117,62 @@ export default function App() {
   async function handleSend(text) {
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
+    setPipeline([]); // 파이프라인 초기화
+    const debugId = crypto.randomUUID();
+
+    // 빈 어시스턴트 버블 먼저 추가
+    setMessages((prev) => [...prev, { role: "assistant", content: "", debugId, streaming: true }]);
+
     try {
-      const res = await sendMessage(text, sessionId, mission?.mission_name);
-      const debugId = crypto.randomUUID();
-      setMessages((prev) => [...prev, { role: "assistant", content: res.response, debugId }]);
-      setDebugMap((prev) => ({ ...prev, [debugId]: { ...res.debug, analysing: !!res.analysis_id } }));
-      setSelectedDebugId(debugId);
-      if (res.analysis_id) pollAnalysis(res.analysis_id, debugId);
+      await sendMessageStream(
+        text,
+        sessionId,
+        mission?.mission_name,
+        {
+          onPipeline: (stage) => {
+            setPipeline((prev) => [...prev, stage]);
+            // 디버그맵에도 최신 파이프라인 정보 반영
+            if (stage.stage === "intent") {
+              setDebugMap((prev) => ({
+                ...prev,
+                [debugId]: { ...prev[debugId], intent: stage.value },
+              }));
+              setSelectedDebugId(debugId);
+            }
+            if (stage.stage === "qwen") {
+              setDebugMap((prev) => ({
+                ...prev,
+                [debugId]: {
+                  ...prev[debugId],
+                  detected_function: stage.fn,
+                  fn_args: stage.args,
+                },
+              }));
+            }
+          },
+          onToken: (token) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.debugId === debugId ? { ...m, content: m.content + token } : m
+              )
+            );
+          },
+        }
+      );
+      // 스트리밍 완료 — 파이프라인 로그 숨김
+      setMessages((prev) =>
+        prev.map((m) => (m.debugId === debugId ? { ...m, streaming: false } : m))
+      );
+      setPipeline([]);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "앗, 연결이 끊겼어. 다시 말해줄래?" },
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.debugId === debugId
+            ? { ...m, content: "앗, 연결이 끊겼어. 다시 말해줄래?", streaming: false }
+            : m
+        )
+      );
+      setPipeline([]);
     } finally {
       setLoading(false);
     }
@@ -224,13 +241,51 @@ export default function App() {
       )}
 
       <div className="main-area">
-        <ChatWindow
-          messages={messages}
-          onSend={handleSend}
-          loading={loading}
-          selectedDebugId={selectedDebugId}
-          onSelectMessage={setSelectedDebugId}
-        />
+        <div className="chat-area">
+          <ChatWindow
+            messages={messages}
+            onSend={handleSend}
+            loading={loading}
+            selectedDebugId={selectedDebugId}
+            onSelectMessage={setSelectedDebugId}
+          />
+          {pipeline.length > 0 && (
+            <div className="pipeline-log">
+              {pipeline.map((s, i) => {
+                if (s.stage === "intent") {
+                  const colors = { A: "#6c757d", B: "#0d6efd", C: "#198754", D: "#dc3545" };
+                  return (
+                    <span key={i} className="pipeline-chip" style={{ borderColor: colors[s.value] ?? "#aaa" }}>
+                      🔍 인텐트 <strong>{s.value}</strong> — {s.label} <em>({s.ms}ms)</em>
+                    </span>
+                  );
+                }
+                if (s.stage === "qwen") {
+                  return (
+                    <span key={i} className="pipeline-chip" style={{ borderColor: "#fd7e14" }}>
+                      ⚡ Qwen → <strong>{s.fn ?? "없음"}</strong> <em>({s.ms}ms)</em>
+                    </span>
+                  );
+                }
+                if (s.stage === "rag") {
+                  return (
+                    <span key={i} className="pipeline-chip" style={{ borderColor: "#198754" }}>
+                      📚 RAG <strong>{s.hits}개</strong> 결과
+                    </span>
+                  );
+                }
+                if (s.stage === "generating") {
+                  return (
+                    <span key={i} className="pipeline-chip generating" style={{ borderColor: "#6f42c1" }}>
+                      ✨ Gemma4 응답 생성 중...
+                    </span>
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
+        </div>
         <DebugPanel
           debugInfo={debugMap[selectedDebugId] ?? null}
           selected={selectedDebugId !== null}

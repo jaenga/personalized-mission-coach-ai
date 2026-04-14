@@ -1,6 +1,5 @@
 import os
 import json
-import re
 import time
 import httpx
 from dotenv import load_dotenv
@@ -30,6 +29,31 @@ async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
     return data["message"]["content"].strip()
 
 
+async def generate_chat_message_stream(system_prompt: str, messages: list[dict]):
+    """스트리밍 응답 생성. 토큰을 하나씩 yield."""
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": OLLAMA_MODEL,
+        "stream": True,
+        "messages": [{"role": "system", "content": system_prompt}] + messages,
+    }
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream("POST", url, json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    token = data.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if data.get("done"):
+                        break
+                except json.JSONDecodeError:
+                    continue
+
+
 async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tuple[str, int]:
     """1차 호출: 대화 응답 생성. Returns (ai_message, call1_ms)"""
     t0 = time.perf_counter()
@@ -40,52 +64,3 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     return ai_message, call1_ms
 
 
-async def analyze_response(user_input: str, ai_message: str) -> tuple[dict, int]:
-    """2차 호출: 생성된 응답 분석. Returns (reasoning_dict, call2_ms)"""
-    from prompts import build_analysis_prompt
-
-    analysis_prompt = build_analysis_prompt(user_input, ai_message)
-    t0 = time.perf_counter()
-    try:
-        raw = await _call_ollama(
-            [{"role": "user", "content": analysis_prompt}],
-            use_json=True,
-        )
-        reasoning = _parse_analysis(raw)
-    except Exception:
-        reasoning = {}
-    call2_ms = round((time.perf_counter() - t0) * 1000)
-    return reasoning, call2_ms
-
-
-def _parse_analysis(raw: str) -> dict:
-    """분석 JSON을 파싱해서 reasoning 딕셔너리로 반환."""
-    obj = None
-    try:
-        obj = json.loads(raw)
-    except (json.JSONDecodeError, AttributeError):
-        pass
-
-    if obj is None:
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            try:
-                obj = json.loads(match.group())
-            except (json.JSONDecodeError, AttributeError):
-                pass
-
-    if obj and isinstance(obj, dict):
-        sentence_analysis = [
-            {"sentence": obj.get(f"s{i}", "").strip(), "purpose": obj.get(f"p{i}", "").strip()}
-            for i in range(1, 4)
-            if obj.get(f"s{i}", "").strip()
-        ]
-        return {
-            "input_signal":      obj.get("input_signal", ""),
-            "applied_rule":      obj.get("applied_rule", ""),
-            "avoided":           obj.get("avoided", ""),
-            "response_choice":   obj.get("response_choice", ""),
-            "sentence_analysis": sentence_analysis,
-        }
-
-    return {}
