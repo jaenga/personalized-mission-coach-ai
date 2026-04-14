@@ -12,14 +12,48 @@ from database import (
     save_message, fetch_messages, delete_messages,
     get_student_mission_db, get_student_info_db,
     save_mission_result, mark_synced,
-    detect_function_from_db,
 )
 from ollama_client import generate_chat_message, analyze_response, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
 from rag import search_rag, preload_model
 from sheets import detect_mission_status, update_mission_result, generate_daily_status
+from intent_router import classify_intent
+from qwen_client import call_function, preload_qwen
 
 analysis_store: dict[str, dict] = {}
+
+# ── 펑션별 Gemma 힌트 ──────────────────────────────────────────────────────────
+
+def _build_fn_hint(detected_function: str, fn_args: dict) -> str:
+    if detected_function == "submit_mission_result":
+        result_kor = {"success": "결과: 완료.", "fail": "결과: 수행 실패."}.get(fn_args.get("result_type", ""), "")
+        return f"아이가 미션 결과를 제출했어. {result_kor} 자연스럽게 받아주고 기록됐다고 알려줘."
+    if detected_function == "get_mission_info":
+        return {
+            "today": "아이가 오늘 미션 내용을 물어봤어. 오늘 미션을 친절하게 안내해줘.",
+            "deadline": "아이가 제출 마감 시간을 물어봤어. 마감 시간을 안내해줘.",
+            "general_rule": "아이가 앱 규칙을 물어봤어. 제출·인증·판정 규칙을 안내해줘.",
+        }.get(fn_args.get("query_type", ""), "아이가 미션 정보를 물어봤어. 친절하게 안내해줘.")
+    if detected_function == "request_mission_adjustment":
+        return {
+            "change": "아이가 다른 미션으로 바꿔달라고 했어. 요청을 접수했다고 알려줘.",
+            "easier": "아이가 더 쉬운 미션을 요청했어. 요청을 접수했다고 알려줘.",
+            "harder": "아이가 더 어려운 미션을 요청했어. 요청을 접수했다고 알려줘.",
+        }.get(fn_args.get("adjustment_type", ""), "아이가 미션 조정을 요청했어. 요청을 접수했다고 알려줘.")
+    if detected_function == "check_mission_equivalency":
+        return {
+            "behavior": "아이가 다른 행동으로 수행해도 되는지 물어봤어. 대체 수행 가능 여부를 안내해줘.",
+            "place": "아이가 다른 장소에서 수행해도 되는지 물어봤어. 대체 수행 가능 여부를 안내해줘.",
+            "time": "아이가 다른 시간에 수행해도 되는지 물어봤어. 대체 수행 가능 여부를 안내해줘.",
+        }.get(fn_args.get("equivalency_type", ""), "아이가 대체 수행 가능 여부를 물어봤어. 친절하게 안내해줘.")
+    if detected_function == "get_user_history":
+        return {
+            "weekly_summary": "아이가 이번 주 미션 기록을 조회했어. 주간 기록을 안내해줘.",
+            "monthly_summary": "아이가 이번 달 미션 기록을 조회했어. 월간 기록을 안내해줘.",
+        }.get(fn_args.get("query_type", ""), "아이가 미션 기록을 조회했어. 기록을 안내해줘.")
+    if detected_function == "cancel_mission_action":
+        return "아이가 가장 최근 행동을 취소하려고 해. 취소됐다고 자연스럽게 알려줘."
+    return f"아이가 '{detected_function}' 기능을 요청했어. 자연스럽게 응답해줘."
 
 app = FastAPI(title="AI 생활습관 코치 MVP")
 
@@ -35,6 +69,7 @@ app.add_middleware(
 def startup():
     init_db()
     preload_model()
+    preload_qwen()
     try:
         today = date.today().isoformat()
         added = generate_daily_status(today)
@@ -189,20 +224,44 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
 
-    # function 감지
+    intent = "A"
     detected_function = None
+    fn_args: dict = {}
     rag_result: dict = {"chunks": [], "faqs": [], "context": ""}
+
     if not is_greet:
-        detected_function = detect_function_from_db(body.message)
+        # ── 1. Gemma4:e2b 인텐트 분류 ──────────────────────────────────────────
+        intent = await classify_intent(body.message)
         save_message(body.session_id, "user", body.message, detected_function)
 
-        try:
-            rag_result = search_rag(body.message)
-        except Exception as e:
-            print(f"[RAG] 검색 실패 (무시): {e}")
+        # ── 2. 인텐트별 모듈 활성화 ────────────────────────────────────────────
+        if intent == "B":
+            # qwen-lora-finetuned 펑션콜링
+            detected_function, fn_args, qwen_ms = call_function(body.message)
+            print(f"[Chat] B-route: fn={detected_function} args={fn_args} ({qwen_ms}ms)")
 
-    system_prompt = build_chat_system_prompt(mission_title, rag_result["context"] if not is_greet else "")
+        elif intent == "C":
+            # RAG 검색
+            try:
+                rag_result = search_rag(body.message)
+            except Exception as e:
+                print(f"[RAG] 검색 실패 (무시): {e}")
 
+        # A, D: 추가 모듈 없음 — Gemma4 직접 응답
+
+    # ── 3. 시스템 프롬프트 구성 ─────────────────────────────────────────────────
+    system_prompt = build_chat_system_prompt(
+        mission_title,
+        rag_result["context"] if not is_greet else "",
+    )
+
+    if intent == "D":
+        system_prompt += "\n\n아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
+
+    if intent == "B" and detected_function:
+        system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
+
+    # ── 4. Gemma4:e2b 응답 생성 ─────────────────────────────────────────────────
     history = fetch_messages(body.session_id)
     messages = history if history else [
         {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
@@ -218,8 +277,16 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     user_input = body.message if not is_greet else ""
     violations = detect_violations(ai_message, user_input)
 
-    # 미션 결과 감지
-    mission_status = None if is_greet else detect_mission_status(user_input)
+    # ── 5. 미션 결과 동기화 ──────────────────────────────────────────────────────
+    mission_status = None
+    if not is_greet and intent == "B":
+        if fn_args.get("result_type"):
+            # Qwen이 추출한 result_type 우선 사용
+            mission_status = fn_args["result_type"]
+        else:
+            # Qwen이 못 잡았을 때만 키워드 fallback
+            mission_status = detect_mission_status(user_input)
+
     if mission_status:
         fn = detected_function or "submit_mission_result"
         background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, fn)
@@ -242,6 +309,8 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         "detected_function": detected_function,
         "sources": sources,
         "debug": {
+            "intent": intent,
+            "fn_args": fn_args,
             "violations": violations,
             "system_prompt": system_prompt,
             "history_turns": len(messages),

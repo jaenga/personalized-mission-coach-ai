@@ -15,7 +15,6 @@ def get_conn():
 
 
 def init_db():
-    """UUID 세션 ↔ DB 정수 세션 브릿지 테이블만 생성 (나머지는 팀원 테이블 사용)"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""

@@ -1,7 +1,6 @@
-"""
-RAG 검색 모듈
-유저 메시지를 임베딩 → NeonDB에서 관련 chunks/faqs 벡터 검색 → 프롬프트용 컨텍스트 반환
-"""
+#RAG 검색 모듈
+#유저 메시지를 임베딩 → NeonDB에서 관련 chunks/faqs 벡터 검색 → 프롬프트용 컨텍스트 반환
+
 from __future__ import annotations
 
 import os
@@ -17,7 +16,7 @@ MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 _model: SentenceTransformer | None = None
 
 CHUNK_THRESHOLD = 0.75
-FAQ_THRESHOLD = 0.65  # FAQ는 더 엄격하게
+FAQ_THRESHOLD = 0.65  
 CHUNK_LIMIT = 3
 FAQ_LIMIT = 2
 
@@ -33,7 +32,6 @@ def _get_model() -> SentenceTransformer:
 
 
 def preload_model():
-    """서버 시작 시 임베딩 모델을 미리 로드."""
     _get_model()
 
 
@@ -42,16 +40,6 @@ def _to_pgvector(vec: list[float]) -> str:
 
 
 def search_rag(query: str) -> dict:
-    """
-    유저 쿼리로 관련 chunks + faqs 검색.
-
-    Returns:
-        {
-            "chunks": [{"chunk_id", "title", "intent", "text", "distance"}, ...],
-            "faqs":   [{"faq_id", "title", "question", "answer", "distance"}, ...],
-            "context": str,   # 프롬프트에 바로 넣을 포맷된 문자열
-        }
-    """
     model = _get_model()
     vec = model.encode([query], normalize_embeddings=True)[0].tolist()
     vec_str = _to_pgvector(vec)

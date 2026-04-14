@@ -1,5 +1,5 @@
 """
-프롬프트 실험을 위한 모듈.
+프롬프트!!
 CHAT_SYSTEM_PROMPT와 build_analysis_prompt를 수정해서 다양한 버전을 빠르게 비교할 수 있습니다.
 """
 

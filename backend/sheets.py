@@ -21,8 +21,6 @@ KEYWORDS_COMPLETED = [
 ]
 KEYWORDS_FAILED = [
     "실패", "못했", "못 했", "안했", "안 했", "못하", "못 하", "안해", "포기",
-]
-KEYWORDS_PARTIAL = [
     "조금", "반만", "절반", "부분", "조금만", "일부", "반쯤", "절반만", "조금밖에",
 ]
 
@@ -34,13 +32,11 @@ def _get_spreadsheet():
 
 
 def detect_mission_status(user_message: str) -> str | None:
-    """유저 메시지에서 미션 결과 감지. completed / partial / failed / None"""
+    """유저 메시지에서 미션 결과 감지. success / fail / None"""
     if any(kw in user_message for kw in KEYWORDS_FAILED):
-        return "failed"
-    if any(kw in user_message for kw in KEYWORDS_PARTIAL):
-        return "partial"
+        return "fail"
     if any(kw in user_message for kw in KEYWORDS_COMPLETED):
-        return "completed"
+        return "success"
     return None
 
 
@@ -50,8 +46,8 @@ def detect_mission_completed(user_message: str) -> bool:
 
 def generate_daily_status(today: str) -> int:
     """
-    날짜 탭(예: 2026-03-29)을 생성하고 DB students 테이블의 is_active 학생 전체를 추가.
-    탭이 이미 있으면 없는 학생만 추가.
+    날짜 탭(예: 2026-03-29)을 생성하고 DB students 테이블의 is_active 학생 전체를 추가
+    탭이 이미 있으면 없는 학생만 추가
     """
     from database import get_conn
     import psycopg2.extras
@@ -109,7 +105,7 @@ def update_mission_result(
     today: str,
     result_reason: str,
     ai_response: str,
-    status: str = "completed",
+    status: str = "success",
     student_name: str = "",
     age: int | None = None,
     gender: str = "",
@@ -119,7 +115,7 @@ def update_mission_result(
     category: str = "",
     difficulty: str = "",
 ):
-    """오늘 날짜 탭에서 student_id 행 찾아서 업데이트. 없으면 새 행 추가."""
+    """오늘 날짜 탭에서 student_id 행 찾아서 업데이트. 없으면 새 행 추가"""
     if not SPREADSHEET_ID:
         return
 
