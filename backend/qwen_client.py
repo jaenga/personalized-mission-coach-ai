@@ -26,10 +26,10 @@ _model = None
 _tokenizer = None
 _device = None
 
-_BASE_MODEL: str = os.getenv("FUNCTION_BASE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+_BASE_MODEL: str = os.getenv("FUNCTION_BASE_MODEL", "Qwen/Qwen3-0.6B")
 _ADAPTER_PATH: str = os.getenv(
     "FUNCTION_ADAPTER_PATH",
-    str(Path(__file__).parent / "qwen-lora-finetuned"),
+    str(Path(__file__).parent / "qwen-lora-finetuned_3"),
 )
 
 # 어댑터 경로가 상대경로면 backend/ 기준으로 절대경로 변환

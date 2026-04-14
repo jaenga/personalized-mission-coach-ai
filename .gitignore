@@ -10,6 +10,7 @@ backend/google_credentials.json
 backend/*.db
 # 모델 파일 (로컬 전용)
 backend/qwen-lora-finetuned/
+backend/qwen-lora-finetuned_3/
 backend/functiongemma-lora-v5-aug-rerun3/
 
 # RAG data pipeline
