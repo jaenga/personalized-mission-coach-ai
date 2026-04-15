@@ -90,6 +90,40 @@ def generate_daily_status(today: str) -> int:
 
     return added
 
+# 오늘 날짜 탭에서 student_id 행의 결과를 초기화 (status → assigned, result_reason 비움)
+def cancel_mission_result(student_id: int, today: str):
+    if not SPREADSHEET_ID:
+        return
+
+    ss = _get_spreadsheet()
+    try:
+        sheet = ss.worksheet(today)
+    except gspread.WorksheetNotFound:
+        return
+
+    all_rows = sheet.get_all_values()
+    headers = all_rows[0] if all_rows else DAILY_STATUS_HEADERS
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        col_student_id    = headers.index("student_id") + 1
+        col_status        = headers.index("status") + 1
+        col_result_reason = headers.index("result_reason") + 1
+        col_updated_at    = headers.index("sheet_updated_at") + 1
+        col_ai_response   = headers.index("ai_response") + 1 if "ai_response" in headers else None
+    except ValueError:
+        return
+
+    for i, row in enumerate(all_rows[1:], start=2):
+        row_student_id = row[col_student_id - 1] if len(row) >= col_student_id else ""
+        if str(row_student_id) == str(student_id):
+            sheet.update_cell(i, col_status,        "assigned")
+            sheet.update_cell(i, col_result_reason, "")
+            if col_ai_response:
+                sheet.update_cell(i, col_ai_response, "")
+            sheet.update_cell(i, col_updated_at,    now)
+            return
+
 
 def _get_or_create_daily_sheet(ss, today: str):
     try:
@@ -115,7 +149,7 @@ def update_mission_result(
     category: str = "",
     difficulty: str = "",
 ):
-    """오늘 날짜 탭에서 student_id 행 찾아서 업데이트. 없으면 새 행 추가"""
+   # 오늘 날짜 탭에서 student_id 행 찾아서 업데이트(없으면 새 행 추가)
     if not SPREADSHEET_ID:
         return
 

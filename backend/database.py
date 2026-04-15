@@ -125,7 +125,6 @@ def fetch_messages(session_id: str) -> list[dict]:
         {
             "role": "user" if r["speaker"] == "student" else "assistant",
             "content": r["message_text"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
         for r in rows
     ]
@@ -147,15 +146,85 @@ def delete_messages(session_id: str) -> int:
     return count
 
 
+# ── 오늘의 미션 자동 배정 ─────────────────────────────────────────────────────
+
+def _kst_today() -> str:
+    """한국 시간(KST) 기준 오늘 날짜 반환."""
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d")
+
+
+def assign_daily_missions() -> int:
+    """
+    오늘(KST) 미션이 배정 안 된 학생에게 자동 배정
+    - 최근 7일간 배정된 미션은 제외
+    - 7일 기록 없으면 랜덤 1개 배정
+    """
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO student_daily_missions (
+                    student_id, mission_id, assigned_date, status, assigned_by
+                )
+                SELECT
+                    s.student_id,
+                    COALESCE(preferred.mission_id, fallback.mission_id) AS mission_id,
+                    %s::date,
+                    'assigned',
+                    'system'
+                FROM students s
+
+                LEFT JOIN LATERAL (
+                    SELECT m.mission_id
+                    FROM missions m
+                    WHERE m.is_active = TRUE
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM student_daily_missions sdm
+                          WHERE sdm.student_id = s.student_id
+                            AND sdm.assigned_date >= %s::date - INTERVAL '7 days'
+                            AND sdm.assigned_date < %s::date
+                            AND sdm.mission_id = m.mission_id
+                      )
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                ) preferred ON TRUE
+
+                LEFT JOIN LATERAL (
+                    SELECT m.mission_id
+                    FROM missions m
+                    WHERE m.is_active = TRUE
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                ) fallback ON TRUE
+
+                WHERE s.is_active = TRUE
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM student_daily_missions sdm_today
+                    WHERE sdm_today.student_id = s.student_id
+                      AND sdm_today.assigned_date = %s::date
+                )
+            """, (today, today, today, today))
+            assigned = cur.rowcount
+        conn.commit()
+    return assigned
+
+
 # ── 오늘의 미션 (student_daily_missions + missions 테이블) ─────────────────────
 
-def get_student_mission_db(student_id: int, today: str) -> dict | None:
+def get_student_mission_db(student_id: int, today: str | None = None) -> dict | None:
+    if today is None:
+        today = _kst_today()
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
-                       m.mission_description, sdm.status
+                       m.mission_description, m.main_category, m.sub_category,
+                       m.mission_location, m.reward_xp, m.mission_group,
+                       m.mission_rule, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s AND sdm.assigned_date = %s
@@ -183,29 +252,25 @@ def get_student_info_db(student_id: int) -> dict | None:
 
 def save_mission_result(
     student_id: int,
-    student_name: str,
-    mission_id: int | None,
-    mission_name: str,
+    mission_id: int,
     status: str,
-    result_reason: str,
-    ai_response: str,
-    session_id: str,
+    result_reason: str | None = None,
     detected_function: str = "submit_mission_result",
 ) -> int:
-    today = datetime.now(timezone.utc).date()
+    today = _kst_today()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO checkin_log
                     (student_id, mission_id, checkin_date, mission_result,
-                     result_reason, ai_response, function_called,
+                     result_reason, function_called,
                      sheet_update_status, created_at, last_updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', NOW(), NOW())
                 RETURNING checkin_id
                 """,
                 (student_id, mission_id, today, status,
-                 result_reason, ai_response, detected_function),
+                 result_reason, detected_function),
             )
             row_id = cur.fetchone()[0]
         conn.commit()
@@ -222,32 +287,27 @@ def mark_synced(result_id: int):
         conn.commit()
 
 
-# ── Function 감지 (questions 테이블 기반) ──────────────────────────────────────
-
-def detect_function_from_db(user_message: str) -> str | None:
-    """
-    questions 테이블 텍스트 오버랩으로 function 감지.
-    (추후 embedding 기반 시맨틱 검색으로 업그레이드 가능)
-    """
+def cancel_last_checkin(student_id: int) -> bool:
+    """오늘(KST) 해당 학생의 가장 최근 checkin_log 삭제. + student_daily_missions status를 assigned로 복원."""
+    today = _kst_today()
     with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT q.question_text, f.function_name
-                FROM questions q
-                JOIN functions f ON q.function_id = f.function_id
-                WHERE f.is_active = TRUE
-                """,
+                "DELETE FROM checkin_log WHERE checkin_id = ("
+                "  SELECT checkin_id FROM checkin_log"
+                "  WHERE student_id = %s AND checkin_date = %s"
+                "  ORDER BY created_at DESC LIMIT 1"
+                ")",
+                (student_id, today),
             )
-            rows = cur.fetchall()
+            deleted = cur.rowcount > 0
+            if deleted:
+                cur.execute(
+                    "UPDATE student_daily_missions SET status = 'assigned', updated_at = NOW() "
+                    "WHERE student_id = %s AND assigned_date = %s",
+                    (student_id, today),
+                )
+        conn.commit()
+    return deleted
 
-    best_fn = None
-    best_score = 0
-    msg_chars = set(user_message)
-    for r in rows:
-        score = len(set(r["question_text"]) & msg_chars)
-        if score > best_score:
-            best_score = score
-            best_fn = r["function_name"]
 
-    return best_fn if best_score >= 3 else None

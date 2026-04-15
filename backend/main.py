@@ -6,17 +6,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from database import (
-    init_db,
+    init_db, assign_daily_missions, _kst_today,
     get_student_by_credentials, create_chat_session,
     save_profile, fetch_profile,
     save_message, fetch_messages, delete_messages,
     get_student_mission_db, get_student_info_db,
-    save_mission_result, mark_synced,
+    save_mission_result, mark_synced, cancel_last_checkin,
 )
 from ollama_client import generate_chat_message, generate_chat_message_stream, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
 from rag import search_rag, preload_model
-from sheets import detect_mission_status, update_mission_result, generate_daily_status
+from sheets import detect_mission_status, update_mission_result, cancel_mission_result, generate_daily_status
 from intent_router import classify_intent
 from qwen_client import call_function, preload_qwen
 
@@ -69,7 +69,13 @@ def startup():
     preload_model()
     preload_qwen()
     try:
-        today = date.today().isoformat()
+        assigned = assign_daily_missions()
+        if assigned:
+            print(f"[startup] 오늘 미션 배정: {assigned}명")
+    except Exception as e:
+        print(f"[startup] 미션 배정 실패 (무시): {e}")
+    try:
+        today = _kst_today()
         added = generate_daily_status(today)
         if added:
             print(f"[startup] daily_status {today}: {added}명 행 추가됨")
@@ -119,7 +125,7 @@ def get_profile(session_id: str):
 
 @app.get("/mission")
 def get_mission(student_id: int | None = None):
-    today = date.today().isoformat()
+    today = _kst_today()
     if student_id:
         mission = get_student_mission_db(student_id, today)
         if mission:
@@ -148,6 +154,13 @@ def detect_violations(ai_message: str, user_input: str) -> list[str]:
 
 # ── 배경 작업 ──────────────────────────────────────────────────────────────────
 
+async def _cancel_sheet_bg(student_id: int, today: str):
+    try:
+        cancel_mission_result(student_id, today)
+    except Exception as e:
+        print(f"[cancel] 시트 초기화 실패: {e}")
+
+
 async def _sync_sheet_bg(
     session_id: str,
     user_message: str,
@@ -159,33 +172,26 @@ async def _sync_sheet_bg(
     if not profile:
         return
 
-    today = date.today().isoformat()
+    today = _kst_today()
     student_id = profile["student_id"]
 
     # DB에서 학생/미션 정보 가져오기
     student_info = get_student_info_db(student_id) or {}
     mission_info = get_student_mission_db(student_id, today) or {}
 
-    # 1. DB 저장 (checkin_log) — mission_id가 없으면 skip
-    result_id = None
     mission_id = mission_info.get("mission_id")
-    if mission_id is not None:
-        try:
-            result_id = save_mission_result(
-                student_id=student_id,
-                student_name=student_info.get("student_name", profile.get("student_name", "")),
-                mission_id=mission_id,
-                mission_name=mission_info.get("mission_name", ""),
-                status=status,
-                result_reason=user_message,
-                ai_response=ai_message,
-                session_id=session_id,
-                detected_function=detected_function,
-            )
-        except Exception as e:
-            print(f"[DB] checkin_log 저장 실패 (무시): {e}")
-    else:
-        print(f"[DB] mission_id 없음 — checkin_log 저장 skip (student_id={student_id})")
+    if not mission_id:
+        print(f"[sync] mission_id 없음 — checkin_log 저장 스킵 (student_id={student_id})")
+        return
+
+    # 1. DB 저장 (checkin_log)
+    result_id = save_mission_result(
+        student_id=student_id,
+        mission_id=mission_id,
+        status=status,
+        result_reason=user_message,
+        detected_function=detected_function,
+    )
 
     # 2. 구글 시트 업데이트
     try:
@@ -199,7 +205,7 @@ async def _sync_sheet_bg(
             age=student_info.get("age"),
             gender=student_info.get("gender", ""),
             location=student_info.get("location", ""),
-            mission_id=mission_info.get("mission_id"),
+            mission_id=mission_id,
             mission_name=mission_info.get("mission_name", ""),
             category=mission_info.get("category", ""),
             difficulty=mission_info.get("difficulty", ""),
@@ -231,7 +237,6 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet:
         # ── 1. Gemma4:e2b 인텐트 분류 ──────────────────────────────────────────
         intent = await classify_intent(body.message)
-        save_message(body.session_id, "user", body.message, detected_function)
 
         # ── 2. 인텐트별 모듈 활성화 ────────────────────────────────────────────
         if intent == "B":
@@ -260,8 +265,10 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if intent == "B" and detected_function:
         system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
 
-    # ── 4. Gemma4:e2b 응답 생성 ─────────────────────────────────────────────────
-    history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
+    # ── 4. history fetch → 현재 메시지 append → Ollama 호출 ─────────────────────
+    history = fetch_messages(body.session_id)
+    if not is_greet:
+        history.append({"role": "user", "content": body.message})
     messages = history if history else [
         {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
     ]
@@ -271,6 +278,9 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
 
+    # ── 5. 응답 생성 후 DB 저장 (user + assistant 둘 다) ─────────────────────────
+    if not is_greet:
+        save_message(body.session_id, "user", body.message, detected_function)
     save_message(body.session_id, "assistant", ai_message)
 
     user_input = body.message if not is_greet else ""
@@ -279,16 +289,23 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     # ── 5. 미션 결과 동기화 ──────────────────────────────────────────────────────
     mission_status = None
     if not is_greet and intent == "B":
-        if fn_args.get("result_type"):
-            # Qwen이 추출한 result_type 우선 사용
-            mission_status = fn_args["result_type"]
-        else:
-            # Qwen이 못 잡았을 때만 키워드 fallback
-            mission_status = detect_mission_status(user_input)
+        if detected_function == "cancel_mission_action":
+            # 취소: DB checkin_log 삭제 + 구글 시트 초기화
+            profile = fetch_profile(body.session_id)
+            if profile:
+                today = _kst_today()
+                cancel_last_checkin(profile["student_id"])
+                background_tasks.add_task(
+                    _cancel_sheet_bg, profile["student_id"], today
+                )
+        elif detected_function == "submit_mission_result":
+            if fn_args.get("result_type"):
+                mission_status = fn_args["result_type"]
+            else:
+                mission_status = detect_mission_status(user_input)
 
     if mission_status:
-        fn = detected_function or "submit_mission_result"
-        background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, fn)
+        background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, detected_function)
 
     sources = [
         {"type": "faq", "title": f["title"], "question": f["question"]}
@@ -392,10 +409,19 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         user_input = body.message if not is_greet else ""
         mission_status = None
         if not is_greet and intent == "B":
-            mission_status = fn_args.get("result_type") or detect_mission_status(user_input)
+            if detected_function == "cancel_mission_action":
+                profile = fetch_profile(body.session_id)
+                if profile:
+                    today = _kst_today()
+                    cancel_last_checkin(profile["student_id"])
+                    background_tasks.add_task(_cancel_sheet_bg, profile["student_id"], today)
+            elif detected_function == "submit_mission_result":
+                if fn_args.get("result_type"):
+                    mission_status = fn_args["result_type"]
+                else:
+                    mission_status = detect_mission_status(user_input)
         if mission_status:
-            fn = detected_function or "submit_mission_result"
-            background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, fn)
+            background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, detected_function)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -414,7 +440,7 @@ def delete_chat(session_id: str):
 @app.post("/admin/generate-daily")
 def post_generate_daily():
     try:
-        today = date.today().isoformat()
+        today = _kst_today()
         added = generate_daily_status(today)
         return {"ok": True, "date": today, "added": added}
     except Exception as e:
