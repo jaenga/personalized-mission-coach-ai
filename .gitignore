@@ -12,6 +12,7 @@ backend/*.db
 backend/qwen-lora-finetuned/
 backend/qwen-lora-finetuned_3/
 backend/functiongemma-lora-v5-aug-rerun3/
+backend/*.gguf
 
 # RAG data pipeline
 backend/data/raw/*

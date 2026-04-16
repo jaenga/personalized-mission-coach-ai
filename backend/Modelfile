@@ -4,7 +4,7 @@
 # 주의: FROM 경로를 본인의 GGUF 파일 경로로 수정 후 실행
 # FROM /your/path/to/merged_qwen.Q4_K_M.gguf
 
-FROM ./qwen-lora-finetuned_3/merged_qwen.Q4_K_M.gguf
+FROM ./merged_qwen.Q4_K_M.gguf
 
 TEMPLATE """{{- $lastUserIdx := -1 -}}
 {{- range $idx, $msg := .Messages -}}

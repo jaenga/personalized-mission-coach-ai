@@ -34,7 +34,7 @@ export async function sendMessage(message, sessionId, mission = null) {
  * onToken(token): 토큰 수신 시 호출
  * onPipeline(stage): 파이프라인 단계 이벤트 수신 시 호출
  */
-export async function sendMessageStream(message, sessionId, mission = null, { onToken, onPipeline } = {}) {
+export async function sendMessageStream(message, sessionId, mission = null, { onToken, onPipeline, onDone } = {}) {
   const res = await fetch("/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -64,6 +64,8 @@ export async function sendMessageStream(message, sessionId, mission = null, { on
           onPipeline?.(data);
         } else if (data.type === "token") {
           onToken?.(data.content);
+        } else if (data.type === "done") {
+          onDone?.(data.debug);
         }
       } catch {}
     }

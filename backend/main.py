@@ -345,6 +345,10 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         detected_function = None
         fn_args: dict = {}
         rag_result: dict = {"chunks": [], "faqs": [], "context": ""}
+        intent_ms = 0
+        qwen_ms = 0
+        rag_ms = 0
+        t_total = time.perf_counter()
 
         if not is_greet:
             # ── Stage 1: 인텐트 분류 (user 메시지는 history fetch 후 저장) ────
@@ -364,9 +368,11 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
 
             elif intent == "C":
                 try:
+                    t_rag = time.perf_counter()
                     rag_result = search_rag(body.message)
+                    rag_ms = round((time.perf_counter() - t_rag) * 1000)
                     hits = len(rag_result["chunks"]) + len(rag_result["faqs"])
-                    yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'rag', 'hits': hits}, ensure_ascii=False)}\n\n"
+                    yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'rag', 'hits': hits, 'ms': rag_ms}, ensure_ascii=False)}\n\n"
                 except Exception as e:
                     print(f"[RAG] 검색 실패 (무시): {e}")
 
@@ -394,6 +400,7 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
 
         # ── Stage 4: 토큰 스트리밍 ───────────────────────────────────────────
         ai_message = ""
+        t_gen = time.perf_counter()
         try:
             async for token in generate_chat_message_stream(system_prompt, messages):
                 ai_message += token
@@ -402,7 +409,26 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
             yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
             return
 
-        yield f"data: {_json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        gen_ms = round((time.perf_counter() - t_gen) * 1000)
+        total_ms = round((time.perf_counter() - t_total) * 1000)
+        user_input = body.message if not is_greet else ""
+        debug_payload = {
+            "intent": intent,
+            "fn_args": fn_args,
+            "violations": detect_violations(ai_message, user_input),
+            "system_prompt": system_prompt,
+            "history_turns": len(messages),
+            "model": OLLAMA_MODEL,
+            "timing": {
+                "intent_ms": intent_ms,
+                "qwen_ms": qwen_ms,
+                "rag_ms": rag_ms,
+                "gen_ms": gen_ms,
+                "total_ms": total_ms,
+            },
+            "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
+        }
+        yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
 
         # ── 후처리 ───────────────────────────────────────────────────────────
         save_message(body.session_id, "assistant", ai_message)

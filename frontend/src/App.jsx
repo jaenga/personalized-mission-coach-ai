@@ -157,6 +157,14 @@ export default function App() {
               )
             );
           },
+          onDone: (debug) => {
+            if (debug) {
+              setDebugMap((prev) => ({
+                ...prev,
+                [debugId]: { ...prev[debugId], ...debug },
+              }));
+            }
+          },
         }
       );
       // 스트리밍 완료 — 파이프라인 로그 숨김

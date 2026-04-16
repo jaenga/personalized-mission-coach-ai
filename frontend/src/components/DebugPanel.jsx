@@ -126,29 +126,37 @@ export default function DebugPanel({ debugInfo, selected, previewText }) {
 
           {debugInfo.timing && (
             <section className="debug-section">
-              <div className="debug-label">⏱️ 응답 소요 시간</div>
+              <div className="debug-label">⏱️ 단계별 소요 시간</div>
               <div className="debug-meta">
-                <div className="debug-meta-row">
-                  <span className="meta-key">1차 (응답 생성)</span>
-                  <span className="meta-val">
-                    {debugInfo.timing.call1_ms != null
-                      ? `${debugInfo.timing.call1_ms.toLocaleString()}ms`
-                      : "—"}
-                  </span>
-                </div>
-                <div className="debug-meta-row">
-                  <span className="meta-key">2차 (분석)</span>
-                  <span className="meta-val">
-                    {debugInfo.timing.call2_ms != null
-                      ? `${debugInfo.timing.call2_ms.toLocaleString()}ms`
-                      : <span className="analysing-badge">대기 중…</span>}
-                  </span>
-                </div>
-                {debugInfo.timing.total_ms != null && (
+                {debugInfo.timing.intent_ms > 0 && (
                   <div className="debug-meta-row">
-                    <span className="meta-key">총 소요</span>
+                    <span className="meta-key">🔍 인텐트 분류</span>
+                    <span className="meta-val">{debugInfo.timing.intent_ms.toLocaleString()}ms</span>
+                  </div>
+                )}
+                {debugInfo.timing.qwen_ms > 0 && (
+                  <div className="debug-meta-row">
+                    <span className="meta-key">⚡ Qwen 펑션콜 (B)</span>
+                    <span className="meta-val">{debugInfo.timing.qwen_ms.toLocaleString()}ms</span>
+                  </div>
+                )}
+                {debugInfo.timing.rag_ms > 0 && (
+                  <div className="debug-meta-row">
+                    <span className="meta-key">📚 RAG 검색 (C)</span>
+                    <span className="meta-val">{debugInfo.timing.rag_ms.toLocaleString()}ms</span>
+                  </div>
+                )}
+                {debugInfo.timing.gen_ms != null && (
+                  <div className="debug-meta-row">
+                    <span className="meta-key">💬 Gemma4 생성</span>
+                    <span className="meta-val">{debugInfo.timing.gen_ms.toLocaleString()}ms</span>
+                  </div>
+                )}
+                {debugInfo.timing.total_ms != null && (
+                  <div className="debug-meta-row" style={{ borderTop: "1px solid #eee", marginTop: 4, paddingTop: 4 }}>
+                    <span className="meta-key"><strong>총 소요</strong></span>
                     <span className={`meta-val ${debugInfo.timing.total_ms > 5000 ? "timing-slow" : debugInfo.timing.total_ms > 2000 ? "timing-mid" : "timing-fast"}`}>
-                      {(debugInfo.timing.total_ms / 1000).toFixed(1)}s
+                      <strong>{(debugInfo.timing.total_ms / 1000).toFixed(1)}s</strong>
                     </span>
                   </div>
                 )}

@@ -150,7 +150,7 @@ def call_function(user_message: str) -> tuple[str | None, dict[str, Any], int]:
         "stream": False,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": user_message + " /no_think"},
         ],
     }
 

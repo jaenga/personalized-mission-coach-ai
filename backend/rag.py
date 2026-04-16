@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import time
 import psycopg2
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -40,8 +41,10 @@ def _to_pgvector(vec: list[float]) -> str:
 
 
 def search_rag(query: str) -> dict:
+    t0 = time.perf_counter()
     model = _get_model()
     vec = model.encode([query], normalize_embeddings=True)[0].tolist()
+    embed_ms = round((time.perf_counter() - t0) * 1000)
     vec_str = _to_pgvector(vec)
 
     chunks: list[dict] = []
@@ -89,7 +92,9 @@ def search_rag(query: str) -> dict:
                         "distance": round(float(dist), 4),
                     })
 
+    total_ms = round((time.perf_counter() - t0) * 1000)
     context = _format_context(chunks, faqs)
+    print(f"[RAG] 검색 결과: chunks={len(chunks)}, faqs={len(faqs)}, context={'있음' if context else '없음'} | embed={embed_ms}ms, 총={total_ms}ms")
     return {"chunks": chunks, "faqs": faqs, "context": context}
 
 
