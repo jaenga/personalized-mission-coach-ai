@@ -12,6 +12,7 @@ from database import (
     save_message, fetch_messages, delete_messages,
     get_student_mission_db, get_student_info_db,
     save_mission_result, mark_synced, cancel_last_checkin,
+    get_user_history_db, has_checkin_today,
 )
 from ollama_client import generate_chat_message, generate_chat_message_stream, OLLAMA_MODEL
 from prompts import build_chat_system_prompt
@@ -52,6 +53,32 @@ def _build_fn_hint(detected_function: str, fn_args: dict) -> str:
     if detected_function == "cancel_mission_action":
         return "아이가 가장 최근 행동을 취소하려고 해. 취소됐다고 자연스럽게 알려줘."
     return f"아이가 '{detected_function}' 기능을 요청했어. 자연스럽게 응답해줘."
+
+
+def _build_history_hint(student_id: int, fn_args: dict) -> str:
+    query_type = fn_args.get("query_type", "weekly_summary")
+    period_name = "이번 주" if query_type == "weekly_summary" else "이번 달"
+
+    result = get_user_history_db(student_id, query_type)
+    records = result["records"]
+
+    if not records:
+        return f"아이가 {period_name} 미션 기록을 물어봤어. 아직 기록이 전혀 없어. 아직 미션을 수행한 기록이 없다고 따뜻하게 알려줘."
+
+    success_count = sum(1 for r in records if r["mission_result"] == "success")
+
+    fallback_notice = ""
+    if result["fallback"]:
+        fallback_notice = (
+            f'"{period_name} 기준으로는 아직 기록이 없어요. '
+            f'{result["fallback_label"]} 기록을 함께 보여드릴게요."라고 먼저 말하고 '
+        )
+
+    return (
+        f"아이가 {period_name} 미션 기록을 물어봤어. "
+        f"{fallback_notice}아래 내용을 바탕으로 친절하게 알려줘.\n\n"
+        f"{result['period_label']} 성공 횟수: {success_count}회"
+    )
 
 app = FastAPI(title="AI 생활습관 코치 MVP")
 
@@ -184,6 +211,10 @@ async def _sync_sheet_bg(
         print(f"[sync] mission_id 없음 — checkin_log 저장 스킵 (student_id={student_id})")
         return
 
+    if has_checkin_today(student_id):
+        print(f"[sync] 오늘 이미 제출 기록 있음 — 중복 저장 스킵 (student_id={student_id})")
+        return
+
     # 1. DB 저장 (checkin_log)
     result_id = save_mission_result(
         student_id=student_id,
@@ -263,7 +294,12 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         system_prompt += "\n\n아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
 
     if intent == "B" and detected_function:
-        system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
+        if detected_function == "get_user_history":
+            profile = fetch_profile(body.session_id)
+            if profile:
+                system_prompt += f"\n\n{_build_history_hint(profile['student_id'], fn_args)}"
+        else:
+            system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
 
     # ── 4. history fetch → 현재 메시지 append → Ollama 호출 ─────────────────────
     history = fetch_messages(body.session_id)
@@ -384,7 +420,12 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         if intent == "D":
             system_prompt += "\n\n아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
         if intent == "B" and detected_function:
-            system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
+            if detected_function == "get_user_history":
+                profile = fetch_profile(body.session_id)
+                if profile:
+                    system_prompt += f"\n\n{_build_history_hint(profile['student_id'], fn_args)}"
+            else:
+                system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
 
         # 이전 히스토리 fetch → 현재 user 메시지 append → DB 저장
         history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]

@@ -1,7 +1,7 @@
 import os
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -285,6 +285,85 @@ def mark_synced(result_id: int):
                 (result_id,),
             )
         conn.commit()
+
+
+def get_user_history_db(student_id: int, query_type: str) -> dict:
+    """
+    query_type: 'weekly_summary' | 'monthly_summary'
+    이번 주/달 기록 조회. 없으면 지난 주/달 폴백.
+    """
+    today_str = _kst_today()
+    today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+
+    if query_type == "weekly_summary":
+        period_start = today_date - timedelta(days=today_date.weekday())  # 이번 주 월요일
+        period_label = f"이번 주 ({period_start.strftime('%m/%d')}~{today_date.strftime('%m/%d')})"
+        prev_start = period_start - timedelta(days=7)
+        prev_end = period_start
+        fallback_label = "지난주"
+    else:
+        period_start = today_date.replace(day=1)  # 이번 달 1일
+        period_label = f"이번 달 ({period_start.strftime('%m')}월)"
+        last_month_end = period_start - timedelta(days=1)
+        prev_start = last_month_end.replace(day=1)
+        prev_end = period_start
+        fallback_label = "지난달"
+
+    def fetch(start, end=None):
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if end:
+                    cur.execute("""
+                        SELECT DISTINCT ON (cl.checkin_date)
+                               m.mission_name, m.category, cl.mission_result,
+                               cl.checkin_date::text
+                        FROM checkin_log cl
+                        JOIN missions m ON cl.mission_id = m.mission_id
+                        WHERE cl.student_id = %s
+                          AND cl.checkin_date >= %s::date
+                          AND cl.checkin_date < %s::date
+                          AND cl.function_called = 'submit_mission_result'
+                        ORDER BY cl.checkin_date, cl.created_at DESC
+                    """, (student_id, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
+                else:
+                    cur.execute("""
+                        SELECT DISTINCT ON (cl.checkin_date)
+                               m.mission_name, m.category, cl.mission_result,
+                               cl.checkin_date::text
+                        FROM checkin_log cl
+                        JOIN missions m ON cl.mission_id = m.mission_id
+                        WHERE cl.student_id = %s
+                          AND cl.checkin_date >= %s::date
+                          AND cl.function_called = 'submit_mission_result'
+                        ORDER BY cl.checkin_date, cl.created_at DESC
+                    """, (student_id, start.strftime("%Y-%m-%d")))
+                return [dict(r) for r in cur.fetchall()]
+
+    records = fetch(period_start)
+    fallback = False
+    if not records:
+        records = fetch(prev_start, prev_end)
+        fallback = True
+
+    return {
+        "period_label": period_label,
+        "records": records,
+        "fallback": fallback,
+        "fallback_label": fallback_label,
+    }
+
+
+def has_checkin_today(student_id: int) -> bool:
+    """오늘 이미 제출된 checkin_log 기록이 있는지 확인."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM checkin_log WHERE student_id = %s AND checkin_date = %s "
+                "AND function_called = 'submit_mission_result' LIMIT 1",
+                (student_id, today),
+            )
+            return cur.fetchone() is not None
 
 
 def cancel_last_checkin(student_id: int) -> bool:
