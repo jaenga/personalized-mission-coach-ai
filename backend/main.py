@@ -55,6 +55,34 @@ def _build_fn_hint(detected_function: str, fn_args: dict) -> str:
     return f"아이가 '{detected_function}' 기능을 요청했어. 자연스럽게 응답해줘."
 
 
+DEADLINE_TEXT = "밤 11시 (23:00)"
+GENERAL_RULE_TEXT = "(팀원 작성 예정)"  # TODO: 팀원이 규칙 프롬프트 작성 후 교체
+
+
+def _build_mission_info_hint(student_id: int, fn_args: dict) -> str:
+    query_type = fn_args.get("query_type", "today")
+
+    if query_type == "deadline":
+        return f"아이가 제출 마감 시간을 물어봤어. 마감은 {DEADLINE_TEXT}이야. 친절하게 안내해줘."
+
+    if query_type == "general_rule":
+        return f"아이가 앱 규칙을 물어봤어. 아래 규칙을 친절하게 안내해줘.\n\n{GENERAL_RULE_TEXT}"
+
+    # today: DB에서 오늘 미션 정보 가져와서 안내
+    today = _kst_today()
+    mission = get_student_mission_db(student_id, today)
+    if not mission:
+        return "아이가 오늘 미션을 물어봤어. 오늘 배정된 미션이 없어. 미션이 아직 배정되지 않았다고 알려줘."
+
+    lines = ["아이가 오늘 미션 내용을 물어봤어. 아래 정보를 바탕으로 친절하게 안내해줘.\n"]
+    lines.append(f"미션명: {mission.get('mission_name', '')}")
+    if mission.get("mission_description"):
+        lines.append(f"미션 설명: {mission['mission_description']}")
+    if mission.get("mission_rule"):
+        lines.append(f"수행 규칙: {mission['mission_rule']}")
+    return "\n".join(lines)
+
+
 def _build_history_hint(student_id: int, fn_args: dict) -> str:
     query_type = fn_args.get("query_type", "weekly_summary")
     period_name = "이번 주" if query_type == "weekly_summary" else "이번 달"
@@ -298,6 +326,12 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             profile = fetch_profile(body.session_id)
             if profile:
                 system_prompt += f"\n\n{_build_history_hint(profile['student_id'], fn_args)}"
+        elif detected_function == "get_mission_info":
+            profile = fetch_profile(body.session_id)
+            if profile:
+                system_prompt += f"\n\n{_build_mission_info_hint(profile['student_id'], fn_args)}"
+            else:
+                system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
         else:
             system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
 
@@ -424,6 +458,12 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
                 profile = fetch_profile(body.session_id)
                 if profile:
                     system_prompt += f"\n\n{_build_history_hint(profile['student_id'], fn_args)}"
+            elif detected_function == "get_mission_info":
+                profile = fetch_profile(body.session_id)
+                if profile:
+                    system_prompt += f"\n\n{_build_mission_info_hint(profile['student_id'], fn_args)}"
+                else:
+                    system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
             else:
                 system_prompt += f"\n\n{_build_fn_hint(detected_function, fn_args)}"
 
