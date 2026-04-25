@@ -144,7 +144,7 @@ def preload_qwen() -> None:
     print(f"[Qwen] Ollama 모델 사용: {FUNCTION_MODEL}")
 
 
-def call_function(user_message: str) -> tuple[str | None, dict[str, Any], int]:
+def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]:
     payload = {
         "model": FUNCTION_MODEL,
         "stream": False,
@@ -162,30 +162,44 @@ def call_function(user_message: str) -> tuple[str | None, dict[str, Any], int]:
             raw = resp.json()["message"]["content"].strip()
     except Exception as e:
         print(f"[Qwen] Ollama 호출 실패: {e}")
-        return None, {}, 0
+        return [], 0
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000)
     print(f"[Qwen] raw output ({elapsed_ms}ms): {raw[:300]}")
 
-    fn_name, args = _parse_tool_call(raw)
-    print(f"[Qwen] 펑션콜: {fn_name}({args})")
-    return fn_name, args, elapsed_ms
+    calls = _parse_tool_calls(raw)
+    print(f"[Qwen] 펑션콜: {calls}")
+    return calls, elapsed_ms
 
 
-def _parse_tool_call(text: str) -> tuple[str | None, dict]:
-    match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, re.DOTALL)
-    if match:
+def _parse_tool_calls(text: str) -> list[tuple[str, dict]]:
+    results = []
+    for match in re.finditer(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, re.DOTALL):
         try:
             obj = json.loads(match.group(1))
-            return obj.get("name"), obj.get("arguments", {})
+            name = obj.get("name")
+            args = obj.get("arguments", {})
+            if name:
+                results.append((name, args))
         except json.JSONDecodeError:
             pass
 
-    match = re.search(r'\{"name"\s*:\s*"([^"]+)".*?"arguments"\s*:\s*(\{[^}]*\})', text, re.DOTALL)
+    if results:
+        return results
+
+    # fallback: 배열 형태 [{"name": ..., "arguments": ...}, ...]
+    match = re.search(r"\[.*\]", text, re.DOTALL)
     if match:
         try:
-            return match.group(1), json.loads(match.group(2))
+            arr = json.loads(match.group(0))
+            for obj in arr:
+                name = obj.get("name")
+                args = obj.get("arguments", {})
+                if name:
+                    results.append((name, args))
+            if results:
+                return results
         except json.JSONDecodeError:
             pass
 
-    return None, {}
+    return []

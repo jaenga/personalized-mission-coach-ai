@@ -187,6 +187,14 @@ def assign_daily_missions() -> int:
                             AND sdm.assigned_date < %s::date
                             AND sdm.mission_id = m.mission_id
                       )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM mission_changes mc
+                          WHERE mc.student_id = s.student_id
+                            AND mc.change_date >= %s::date - INTERVAL '7 days'
+                            AND mc.change_date < %s::date
+                            AND mc.old_mission_id = m.mission_id
+                      )
                     ORDER BY RANDOM()
                     LIMIT 1
                 ) preferred ON TRUE
@@ -206,7 +214,7 @@ def assign_daily_missions() -> int:
                     WHERE sdm_today.student_id = s.student_id
                       AND sdm_today.assigned_date = %s::date
                 )
-            """, (today, today, today, today))
+            """, (today, today, today, today, today, today))
             assigned = cur.rowcount
         conn.commit()
     return assigned
@@ -222,7 +230,7 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
             cur.execute(
                 """
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
-                       m.mission_description, m.main_category, m.sub_category,
+                       m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
                        m.mission_rule, sdm.status
                 FROM student_daily_missions sdm
@@ -366,27 +374,165 @@ def has_checkin_today(student_id: int) -> bool:
             return cur.fetchone() is not None
 
 
-def cancel_last_checkin(student_id: int) -> bool:
-    """오늘(KST) 해당 학생의 가장 최근 checkin_log 삭제. + student_daily_missions status를 assigned로 복원."""
+_DIFFICULTY_ORDER = ["easy", "medium", "hard"]
+
+
+def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission_id: int) -> dict | None:
+    """adjustment_type에 따라 새 미션 선택. 없으면 None."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT main_category, difficulty FROM missions WHERE mission_id = %s",
+                (current_mission_id,),
+            )
+            current = cur.fetchone()
+    if not current:
+        return None
+
+    main_category = current["main_category"]
+    difficulty = current["difficulty"]
+
+    if adjustment_type == "easier":
+        idx = _DIFFICULTY_ORDER.index(difficulty) if difficulty in _DIFFICULTY_ORDER else 1
+        target_difficulty = _DIFFICULTY_ORDER[idx - 1] if idx > 0 else difficulty
+    elif adjustment_type == "harder":
+        idx = _DIFFICULTY_ORDER.index(difficulty) if difficulty in _DIFFICULTY_ORDER else 1
+        target_difficulty = _DIFFICULTY_ORDER[idx + 1] if idx < len(_DIFFICULTY_ORDER) - 1 else difficulty
+    else:  # change: 같은 난이도
+        target_difficulty = difficulty
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT mission_id, mission_name, mission_rule
+                FROM missions
+                WHERE main_category = %s
+                  AND difficulty = %s
+                  AND is_active = TRUE
+                  AND mission_id != %s
+                  AND mission_id NOT IN (
+                      SELECT mission_id FROM student_daily_missions
+                      WHERE student_id = %s
+                        AND assigned_date >= %s::date - INTERVAL '7 days'
+                        AND assigned_date < %s::date
+                  )
+                ORDER BY RANDOM()
+                LIMIT 1
+                """,
+                (main_category, target_difficulty, current_mission_id, student_id, today, today),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def save_mission_adjustment(student_id: int, old_mission_id: int, new_mission_id: int) -> None:
+    """미션 변경 이력 저장(mission_changes) + student_daily_missions 업데이트."""
     today = _kst_today()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM checkin_log WHERE checkin_id = ("
-                "  SELECT checkin_id FROM checkin_log"
-                "  WHERE student_id = %s AND checkin_date = %s"
-                "  ORDER BY created_at DESC LIMIT 1"
-                ")",
+                """
+                INSERT INTO mission_changes
+                    (student_id, old_mission_id, new_mission_id, change_date,
+                     changed_by, sheet_update_status, last_updated_at, created_at)
+                VALUES (%s, %s, %s, %s, 'ai', 'pending', NOW(), NOW())
+                """,
+                (student_id, old_mission_id, new_mission_id, today),
+            )
+            cur.execute(
+                "UPDATE student_daily_missions SET mission_id = %s, updated_at = NOW() "
+                "WHERE student_id = %s AND assigned_date = %s",
+                (new_mission_id, student_id, today),
+            )
+        conn.commit()
+
+
+def cancel_last_action(student_id: int) -> str | None:
+    """오늘(KST) 해당 학생의 가장 최근 행동을 취소.
+    checkin_log(제출)와 mission_changes(미션 변경) 중 더 최근 것을 찾아 취소한다.
+    반환값: 취소한 행동 타입 ('submit' | 'adjustment') 또는 None(취소할 것 없음).
+    """
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 가장 최근 제출 기록
+            cur.execute(
+                "SELECT checkin_id, created_at FROM checkin_log "
+                "WHERE student_id = %s AND checkin_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
                 (student_id, today),
             )
-            deleted = cur.rowcount > 0
-            if deleted:
+            last_submit = cur.fetchone()
+
+            # 가장 최근 미션 변경 기록
+            cur.execute(
+                "SELECT change_id, old_mission_id, created_at FROM mission_changes "
+                "WHERE student_id = %s AND change_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_change = cur.fetchone()
+
+        # 둘 다 없으면 취소할 것 없음
+        if not last_submit and not last_change:
+            return None
+
+        # 더 최근 행동 판별
+        submit_time = last_submit["created_at"] if last_submit else None
+        change_time = last_change["created_at"] if last_change else None
+
+        cancel_type = None
+        with conn.cursor() as cur:
+            if submit_time and (not change_time or submit_time >= change_time):
+                # 제출 취소: checkin_log 삭제 + status 복원
+                cur.execute("DELETE FROM checkin_log WHERE checkin_id = %s", (last_submit["checkin_id"],))
                 cur.execute(
                     "UPDATE student_daily_missions SET status = 'assigned', updated_at = NOW() "
                     "WHERE student_id = %s AND assigned_date = %s",
                     (student_id, today),
                 )
+                cancel_type = "submit"
+            else:
+                # 미션 변경 취소: mission_changes 삭제 + 이전 미션 복원
+                cur.execute("DELETE FROM mission_changes WHERE change_id = %s", (last_change["change_id"],))
+                cur.execute(
+                    "UPDATE student_daily_missions SET mission_id = %s, updated_at = NOW() "
+                    "WHERE student_id = %s AND assigned_date = %s",
+                    (last_change["old_mission_id"], student_id, today),
+                )
+                cancel_type = "adjustment"
         conn.commit()
-    return deleted
+    return cancel_type
+
+
+def get_last_action_type(student_id: int) -> str | None:
+    """오늘(KST) 해당 학생의 가장 최근 행동 타입 반환. 'submit' | 'adjustment' | None."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT created_at FROM checkin_log "
+                "WHERE student_id = %s AND checkin_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_submit = cur.fetchone()
+            cur.execute(
+                "SELECT created_at FROM mission_changes "
+                "WHERE student_id = %s AND change_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_change = cur.fetchone()
+
+    if not last_submit and not last_change:
+        return None
+    submit_time = last_submit["created_at"] if last_submit else None
+    change_time = last_change["created_at"] if last_change else None
+    if submit_time and (not change_time or submit_time >= change_time):
+        return "submit"
+    return "adjustment"
 
 

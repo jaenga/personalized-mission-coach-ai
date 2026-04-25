@@ -72,6 +72,60 @@ _INTENT_SYSTEM = _INTENT_SYSTEM = """너는 초등학생 AI 생활습관 코치 
 반드시 A, B, C, D 중 한 글자만 출력해."""
 
 
+_SPLIT_SYSTEM = """사용자 메시지에 앱 기능 요청이 2개 들어있으면 분리해줘.
+
+규칙:
+- 기능 요청이 1개면 → 그대로 출력
+- 기능 요청이 2개면 → 줄바꿈으로 구분해서 2줄 출력
+- 반드시 원문의 의미를 유지해. 요약하거나 바꾸지 마.
+- 최대 2개까지만.
+
+예시:
+입력: "미션 성공이요! 이번 주 기록도 보여줘"
+출력:
+미션 성공이요!
+이번 주 기록도 보여줘
+
+입력: "취소하고 다시 성공으로 제출해줘"
+출력:
+취소해줘
+성공으로 제출해줘
+
+입력: "미션 바꿔줘"
+출력:
+미션 바꿔줘"""
+
+
+async def split_multi_intent(user_message: str) -> list[str]:
+    """B 인텐트 메시지를 기능 단위로 분리. 1~2개 반환."""
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": ROUTER_MODEL,
+        "stream": False,
+        "think": False,
+        "messages": [
+            {"role": "system", "content": _SPLIT_SYSTEM},
+            {"role": "user", "content": user_message},
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            raw = resp.json()["message"]["content"].strip()
+    except Exception as e:
+        print(f"[IntentRouter] 문장 분리 실패, 원문 유지: {e}")
+        return [user_message]
+
+    parts = [line.strip() for line in raw.split("\n") if line.strip()]
+    if len(parts) == 0:
+        return [user_message]
+    if len(parts) > 2:
+        parts = parts[:2]
+    print(f"[IntentRouter] 문장 분리: '{user_message[:30]}' → {parts}")
+    return parts
+
+
 async def classify_intent(user_message: str) -> IntentLabel:
     url = f"{OLLAMA_BASE_URL}/api/chat"
     payload = {

@@ -163,6 +163,12 @@ export default function App() {
                 ...prev,
                 [debugId]: { ...prev[debugId], ...debug },
               }));
+              // adjustment 후 미션 제목 갱신
+              if (debug.fn_args?.adjustment_type || debug.detected_function === "request_mission_adjustment") {
+                fetchMissionByStudent(profile.student_id)
+                  .then(setMission)
+                  .catch(() => {});
+              }
             }
           },
         }
