@@ -16,6 +16,7 @@ from ollama_client import generate_chat_message, generate_chat_message_stream, O
 from rag import search_rag, preload_model
 from sheets import update_mission_result, cancel_mission_result, generate_daily_status
 from qwen_client import preload_qwen
+from executor import SubmitStatus, CancelStatus, ExecResults, execute_submit
 
 # ── 펑션별 Gemma 힌트 ──────────────────────────────────────────────────────────
 
@@ -173,6 +174,33 @@ async def _sync_sheet_bg(
         pass
 
 
+def _finalize_equivalency_response(
+    ai_message: str,
+    student_id: int | None,
+    pending_submit_args: dict | None,
+    exec_results: ExecResults,
+) -> str:
+    """[APPROVED]/[DENIED] 태그 제거 후, 실제 저장 결과를 응답에 반영."""
+    if "[APPROVED]" in ai_message:
+        ai_message = ai_message.replace("[APPROVED]", "").strip()
+        if student_id and pending_submit_args:
+            submit_result = execute_submit(student_id, pending_submit_args)
+            exec_results.submit = submit_result
+            suffix = {
+                SubmitStatus.SAVED: "성공으로 기록했어.",
+                SubmitStatus.ALREADY_SUBMITTED: "오늘은 이미 제출한 기록이 있어.",
+                SubmitStatus.NO_MISSION: "오늘 배정된 미션이 없어서 기록하지는 못했어.",
+                SubmitStatus.DB_ERROR: "기록 중 문제가 생겼어. 잠시 후 다시 시도해 줘.",
+            }[submit_result.status]
+            return f"{ai_message}\n{suffix}".strip()
+        return ai_message
+
+    if "[DENIED]" in ai_message:
+        return ai_message.replace("[DENIED]", "").strip()
+
+    return ai_message
+
+
 # ── 채팅 ──────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -187,7 +215,6 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         step_classify, step_extract_functions, step_execute, step_build_hints,
         classify_multi, is_equivalency_submit,
     )
-    from executor import execute_submit
 
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
@@ -224,7 +251,7 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     pending_submit_args = None
 
     if student_id and fn_calls:
-        exec_results, fn_calls, pending_submit_args = step_execute(student_id, fn_calls, combo)
+        exec_results, fn_calls, pending_submit_args, combo = step_execute(student_id, fn_calls, combo)
 
     # ── 4. hint builder (시스템 프롬프트 조립) ─────────────────────────────────
     system_prompt = step_build_hints(
@@ -253,13 +280,13 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     # ── 6. equivalency→submit 후처리 (LLM 판단 후 DB 저장) ────────────────────
     eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
-    if eq_submit and "[APPROVED]" in ai_message and pending_submit_args and student_id:
-        submit_result = execute_submit(student_id, pending_submit_args)
-        if exec_results:
-            exec_results.submit = submit_result
-        ai_message = ai_message.replace("[APPROVED]", "").strip()
-    elif eq_submit and "[DENIED]" in ai_message:
-        ai_message = ai_message.replace("[DENIED]", "").strip()
+    if eq_submit and exec_results:
+        ai_message = _finalize_equivalency_response(
+            ai_message,
+            student_id,
+            pending_submit_args,
+            exec_results,
+        )
 
     # ── 7. 메시지 저장 ────────────────────────────────────────────────────────
     if not is_greet:
@@ -273,7 +300,11 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     mission_status = None
     if exec_results and exec_results.submit and exec_results.submit.status.value == "saved":
         mission_status = exec_results.submit.result_type
-    if exec_results and exec_results.cancel:
+    if (
+        exec_results
+        and exec_results.cancel
+        and exec_results.cancel.status is CancelStatus.CANCELLED_SUBMIT
+    ):
         today = _kst_today()
         background_tasks.add_task(_cancel_sheet_bg, student_id, today)
 
@@ -314,7 +345,6 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         step_classify, step_extract_functions, step_execute, step_build_hints,
         classify_multi, is_equivalency_submit,
     )
-    from executor import execute_submit, ExecResults
 
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
@@ -360,7 +390,7 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         pending_submit_args = None
 
         if student_id and fn_calls:
-            exec_results, fn_calls, pending_submit_args = step_execute(student_id, fn_calls, combo)
+            exec_results, fn_calls, pending_submit_args, combo = step_execute(student_id, fn_calls, combo)
 
         system_prompt = step_build_hints(
             student_id=student_id,
@@ -416,20 +446,20 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         gen_ms = round((time.perf_counter() - t_gen) * 1000)
 
         # ── equivalency→submit 태그 감지 + 후처리 ────────────────────────────
-        eq_approved = False
         if "[APPROVED]" in ai_message:
-            eq_approved = True
-            ai_message = ai_message.replace("[APPROVED]", "").strip()
-            print("[eq-tag] APPROVED 감지 → 성공 저장 예정")
+            print("[eq-tag] APPROVED 감지 → 저장 결과 반영 예정")
         elif "[DENIED]" in ai_message:
-            ai_message = ai_message.replace("[DENIED]", "").strip()
             print("[eq-tag] DENIED 감지 → 저장 안 함")
         elif eq_submit:
             print(f"[eq-tag] 태그 없음! 응답 끝부분: ...{ai_message[-80:]}")
 
-        if eq_submit and eq_approved and pending_submit_args and student_id:
-            submit_result = execute_submit(student_id, pending_submit_args)
-            exec_results.submit = submit_result
+        if eq_submit:
+            ai_message = _finalize_equivalency_response(
+                ai_message,
+                student_id,
+                pending_submit_args,
+                exec_results,
+            )
 
         total_ms = round((time.perf_counter() - t_total) * 1000)
         user_input = body.message if not is_greet else ""
@@ -458,7 +488,7 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type
-        if exec_results.cancel:
+        if exec_results.cancel and exec_results.cancel.status is CancelStatus.CANCELLED_SUBMIT:
             today = _kst_today()
             background_tasks.add_task(_cancel_sheet_bg, student_id, today)
         if mission_status:

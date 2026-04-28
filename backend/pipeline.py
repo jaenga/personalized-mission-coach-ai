@@ -133,9 +133,9 @@ def step_execute(
     student_id: int,
     fn_calls: list[tuple[str, dict]],
     combo: str,
-) -> tuple[ExecResults, list[tuple[str, dict]], dict | None]:
+) -> tuple[ExecResults, list[tuple[str, dict]], dict | None, str]:
     """
-    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args) 반환.
+    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args, effective_combo) 반환.
     cancel은 실행 후 fn_calls에서 제거.
     reorder는 cancel 제거 후 적용.
     """
@@ -143,21 +143,20 @@ def step_execute(
     pending_submit_args: dict | None = None
 
     if combo == "conflict":
-        return results, fn_calls, None
+        return results, fn_calls, None, combo
+
+    # db_branch는 cancel 실행 전에 "원래 직전 액션"을 검증해야 한다.
+    if combo == "db_branch":
+        name_set = frozenset(fn for fn, _ in fn_calls)
+        expected = _DB_BRANCH_PAIRS.get(name_set)
+        last_action = get_last_action_type(student_id)
+        if last_action != expected:
+            return results, fn_calls, None, "conflict"
 
     # 1. cancel 분리 + 실행 + fn_calls에서 제거
     if any(fn == "cancel_mission_action" for fn, _ in fn_calls):
         results.cancel = execute_cancel(student_id)
         fn_calls = [(fn, args) for fn, args in fn_calls if fn != "cancel_mission_action"]
-
-    # 2. db_branch: cancel 이미 실행됨. 직전 액션 일치 검증은 여기서.
-    if combo == "db_branch":
-        last_action = get_last_action_type(student_id)
-        name_set = frozenset(fn for fn, _ in fn_calls)
-        expected = _DB_BRANCH_PAIRS.get(name_set)
-        if last_action != expected:
-            # 직전 액션 불일치 → 충돌로 전환. cancel은 이미 실행됐으므로 결과는 유지.
-            return results, fn_calls, None
 
     # 3. 남은 fn_calls를 콤보에 따라 처리 (sequential이면 reorder 적용)
     ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
@@ -173,7 +172,7 @@ def step_execute(
             results.adjustment = execute_adjustment(student_id, args)
         # equivalency, mission_info, history → DB write 없음
 
-    return results, fn_calls, pending_submit_args
+    return results, fn_calls, pending_submit_args, combo
 
 
 def step_build_hints(
