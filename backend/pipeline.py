@@ -16,7 +16,7 @@ from executor import (
     execute_submit, execute_adjustment, execute_cancel,
 )
 from hint_builder import (
-    build_one_hint, build_conflict_prompt, build_fn_hint,
+    build_one_hint, build_conflict_prompt, build_fn_hint, build_cancel_hint,
     EQUIVALENCY_SUBMIT_TAG_INSTRUCTION,
 )
 
@@ -189,12 +189,14 @@ def step_build_hints(
     system_prompt = build_chat_system_prompt(
         mission_title,
         rag_context if not is_greet else "",
+        intent=intent,
     )
+    has_exec_hint = exec_results.cancel is not None
 
     if intent == "D":
         system_prompt += "\n\n아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
 
-    if intent == "B" and fn_calls:
+    if intent == "B" and (fn_calls or has_exec_hint):
         if combo == "conflict":
             system_prompt += build_conflict_prompt(fn_calls)
         elif combo == "db_branch":
@@ -203,12 +205,12 @@ def step_build_hints(
             if student_id is not None:
                 hints = []
                 if exec_results.cancel:
-                    from hint_builder import build_cancel_hint
                     hints.append(build_cancel_hint(exec_results.cancel))
                 ordered = _reorder_sequential(fn_calls)
                 for fn, args in ordered:
                     hints.append(build_one_hint(student_id, fn, args, exec_results))
-                system_prompt += "\n\n" + "\n\n".join(hints)
+                if hints:
+                    system_prompt += "\n\n" + "\n\n".join(hints)
             else:
                 for fn, args in fn_calls:
                     system_prompt += f"\n\n{build_fn_hint(fn, args)}"
@@ -218,13 +220,16 @@ def step_build_hints(
                 ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
                 eq_submit = is_equivalency_submit(fn_calls)
                 hints = []
+                if exec_results.cancel:
+                    hints.append(build_cancel_hint(exec_results.cancel))
                 for fn, args in ordered:
                     if fn == "submit_mission_result" and eq_submit:
                         continue  # submit 힌트 스킵 (LLM이 태그로 판정)
                     hints.append(build_one_hint(student_id, fn, args, exec_results))
                 if eq_submit:
                     hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
-                system_prompt += "\n\n" + "\n\n".join(hints)
+                if hints:
+                    system_prompt += "\n\n" + "\n\n".join(hints)
             else:
                 for fn, args in fn_calls:
                     system_prompt += f"\n\n{build_fn_hint(fn, args)}"
