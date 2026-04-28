@@ -10,8 +10,7 @@ from database import (
     save_profile, fetch_profile,
     save_message, fetch_messages, delete_messages,
     get_student_mission_db, get_student_info_db,
-    save_mission_result, mark_synced,
-    has_checkin_today,
+    mark_synced,
 )
 from ollama_client import generate_chat_message, generate_chat_message_stream, OLLAMA_MODEL
 from rag import search_rag, preload_model
@@ -133,8 +132,9 @@ async def _sync_sheet_bg(
     user_message: str,
     ai_message: str,
     status: str,
-    detected_function: str,
+    checkin_id: int | None = None,
 ):
+    """구글 시트 동기화. DB 저장은 executor가 이미 처리했으므로 여기서는 시트만"""
     profile = fetch_profile(session_id)
     if not profile:
         return
@@ -142,7 +142,6 @@ async def _sync_sheet_bg(
     today = _kst_today()
     student_id = profile["student_id"]
 
-    # DB에서 학생/미션 정보 가져오기
     student_info = get_student_info_db(student_id) or {}
     mission_info = get_student_mission_db(student_id, today) or {}
 
@@ -151,18 +150,7 @@ async def _sync_sheet_bg(
         print(f"[sync] mission_id 없음 — 시트 동기화 스킵 (student_id={student_id})")
         return
 
-    # DB 저장: 힌트 빌드에서 이미 저장된 경우 스킵, 아니면 여기서 저장
-    result_id = None
-    if not has_checkin_today(student_id):
-        result_id = save_mission_result(
-            student_id=student_id,
-            mission_id=mission_id,
-            status=status,
-            result_reason=user_message,
-            detected_function=detected_function,
-        )
-
-    # 구글 시트 업데이트
+    # 구글 시트 업데이트만 (DB 저장은 executor에서 완료)
     try:
         update_mission_result(
             student_id=student_id,
@@ -179,8 +167,8 @@ async def _sync_sheet_bg(
             category=mission_info.get("category", ""),
             difficulty=mission_info.get("difficulty", ""),
         )
-        if result_id is not None:
-            mark_synced(result_id)
+        if checkin_id is not None:
+            mark_synced(checkin_id)
     except Exception:
         pass
 
@@ -290,7 +278,8 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(_cancel_sheet_bg, student_id, today)
 
     if mission_status:
-        background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, detected_function)
+        checkin_id = exec_results.submit.checkin_id if exec_results and exec_results.submit else None
+        background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, checkin_id)
 
     sources = [
         {"type": "faq", "title": f["title"], "question": f["question"]}
@@ -384,11 +373,10 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
             is_greet=is_greet,
         )
 
-        # 이전 히스토리 fetch → 현재 user 메시지 append → DB 저장
+        # 이전 히스토리 fetch → 현재 user 메시지 append (DB 저장은 LLM 응답 후)
         history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
         if not is_greet:
             history.append({"role": "user", "content": body.message})
-            save_message(body.session_id, "user", body.message, None)
 
         messages = history if history else [
             {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
@@ -464,6 +452,8 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
 
         # ── 후처리: 메시지 저장 + 시트 동기화 ────────────────────────────────
+        if not is_greet:
+            save_message(body.session_id, "user", body.message, detected_function)
         save_message(body.session_id, "assistant", ai_message)
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
@@ -472,7 +462,8 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
             today = _kst_today()
             background_tasks.add_task(_cancel_sheet_bg, student_id, today)
         if mission_status:
-            background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, detected_function)
+            checkin_id = exec_results.submit.checkin_id if exec_results.submit else None
+            background_tasks.add_task(_sync_sheet_bg, body.session_id, user_input, ai_message, mission_status, checkin_id)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

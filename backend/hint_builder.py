@@ -1,6 +1,6 @@
 """
-Hint Builder — 실행 결과를 LLM 시스템 프롬프트용 텍스트로 변환.
-원칙: DB write 절대 안 함. DB read는 읽기 전용 힌트에서만.
+Hint Builder — 실행 결과를 LLM 시스템 프롬프트용 텍스트로 변환
+원칙: DB write 절대 안 함! DB read는 읽기 전용 힌트에서만
 """
 from __future__ import annotations
 
