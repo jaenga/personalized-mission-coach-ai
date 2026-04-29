@@ -1,63 +1,224 @@
-#임계값 확인하려고 만든 스크립트라 기능이랑은 상관 없습니다!
+"""
+RAG threshold / retrieval 평가 스크립트.
+
+목적:
+1. 평가 질문세트 CSV를 읽는다.
+2. 각 질문을 임베딩한다.
+3. chunks, faqs에서 top-k 검색한다.
+4. expected_doc_id와 실제 검색 doc_id를 비교한다.
+5. Hit@1, Hit@3, coverage를 출력한다.
+
+실행 위치:
+backend 폴더에서 실행
+
+실행 명령:
+python scripts/test_thresholds.py
+"""
 
 from __future__ import annotations
 
 import os
+import csv
 import psycopg2
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-CHUNK_THRESHOLD = 0.75
 
-QUERIES = [
-    ("드림렌즈의 효과와 부작용",     "드림렌즈 끼면 어떤 부작용이 있어요?"),
-    ("불규칙한 월경주기와 월경전증후군", "생리가 불규칙한 게 정상인가요?"),
-    ("성장 장애",                 "키가 안 크는 이유가 뭐예요?"),
-    ("소아 비만",                 "아이가 살이 많이 찌면 어떡하죠?"),
-    ("소아청소년기 고혈압",          "어린이도 혈압이 높을 수 있나요?"),
-    ("소아 청소년의 혈변 및 흑혈변",  "변에 피가 섞여 나오면 어떻게 해요?"),
-    ("소아발진",                  "아이 피부에 발진이 생겼어요"),
-    ("식이영양(소아/청소년)",        "청소년한테 필요한 영양소가 뭐예요?"),
-    ("저신장",                   "우리 아이 키가 너무 작은 것 같아요"),
-    ("정상 월경의 이해",            "초경이 언제 시작되는 게 정상이에요?"),
-    ("정상청소년의 성장과 발달",      "사춘기는 언제 시작되나요?"),
-    ("청소년과 다이어트 보조제",      "다이어트 약 먹어도 괜찮아요?"),
-    ("청소년의 디지털 과의존",       "스마트폰을 너무 많이 쓰면 어떻게 돼요?"),
-    ("청소년의 안전한 화장품 사용",   "화장품 많이 쓰면 피부에 안 좋아요?"),
-    ("청소년의 제로 음료 섭취",      "제로 음료 마시면 뭐가 안 좋아요?"),
-    ("청소년의 카페인 음료 섭취",    "카페인 음료가 왜 안 좋아요?"),
-    ("특발성 저신장에서 성장호르몬",  "성장호르몬 주사 맞으면 효과 있어요?"),
-    ("폐렴(소아)",                "아이가 폐렴에 걸리면 어떤 증상이 나요?"),
-]
+CHUNK_THRESHOLD = 0.75
+FAQ_THRESHOLD = 0.65
+
+EVAL_CSV_PATH = os.path.join("data", "eval", "rag_eval_question_set.csv")
 
 
 def to_pgvector(vec: list[float]) -> str:
     return "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
 
 
+def load_eval_questions(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"평가 질문 CSV가 없습니다: {path}\n"
+            f"backend/data/eval/rag_eval_question_set.csv 위치에 저장했는지 확인하세요."
+        )
+
+    rows: list[dict] = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            question = row.get("question", "").strip()
+            expected_doc_id = row.get("expected_doc_id", "").strip()
+
+            if not question or not expected_doc_id:
+                continue
+
+            rows.append(row)
+
+    return rows
+
+
+def search_chunks(cur, vec_str: str, limit: int = 3) -> list[dict]:
+    cur.execute(
+        """
+        SELECT chunk_id, doc_id, title, chunk_intent,
+               embedding <=> %s::vector AS distance
+        FROM chunks
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+        """,
+        (vec_str, vec_str, limit),
+    )
+
+    results = []
+    for chunk_id, doc_id, title, intent, dist in cur.fetchall():
+        results.append(
+            {
+                "id": chunk_id,
+                "doc_id": doc_id,
+                "title": title,
+                "intent": intent,
+                "distance": float(dist),
+            }
+        )
+    return results
+
+
+def search_faqs(cur, vec_str: str, limit: int = 3) -> list[dict]:
+    cur.execute(
+        """
+        SELECT faq_id, doc_id, title, question,
+               embedding <=> %s::vector AS distance
+        FROM faqs
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+        """,
+        (vec_str, vec_str, limit),
+    )
+
+    results = []
+    for faq_id, doc_id, title, question, dist in cur.fetchall():
+        results.append(
+            {
+                "id": faq_id,
+                "doc_id": doc_id,
+                "title": title,
+                "question": question,
+                "distance": float(dist),
+            }
+        )
+    return results
+
+
+def judge(expected_doc_id: str, results: list[dict], threshold: float) -> dict:
+    """
+    expected_doc_id가 검색 결과 안에 있는지 평가한다.
+    threshold를 넘는 결과는 실제 context에 안 들어간다고 보고 제외한다.
+    """
+    passed = [r for r in results if r["distance"] <= threshold]
+
+    top1_doc_id = passed[0]["doc_id"] if passed else ""
+    top3_doc_ids = [r["doc_id"] for r in passed[:3]]
+
+    hit1 = 1 if top1_doc_id == expected_doc_id else 0
+    hit3 = 1 if expected_doc_id in top3_doc_ids else 0
+    coverage = 1 if len(passed) > 0 else 0
+
+    return {
+        "top1_doc_id": top1_doc_id,
+        "top3_doc_ids": top3_doc_ids,
+        "hit1": hit1,
+        "hit3": hit3,
+        "coverage": coverage,
+        "top1_distance": passed[0]["distance"] if passed else None,
+    }
+
+
 def main() -> None:
+    questions = load_eval_questions(EVAL_CSV_PATH)
+
+    print(f"평가 질문 수: {len(questions)}")
     print(f"모델 로드 중: {MODEL_NAME}")
     model = SentenceTransformer(MODEL_NAME)
-    print(f"임계값: CHUNK={CHUNK_THRESHOLD}\n")
-    print(f"{'문서 주제':<30} {'질문':<30} {'top1 dist':>10}  {'통과?':>6}")
-    print("-" * 85)
+    print(f"threshold: chunk={CHUNK_THRESHOLD}, faq={FAQ_THRESHOLD}")
+    print()
+
+    chunk_hit1 = 0
+    chunk_hit3 = 0
+    chunk_coverage = 0
+
+    faq_hit1 = 0
+    faq_hit3 = 0
+    faq_coverage = 0
+
+    total = len(questions)
 
     with psycopg2.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            for doc_title, query in QUERIES:
-                vec = model.encode([query], normalize_embeddings=True)[0].tolist()
+            for i, row in enumerate(questions, start=1):
+                question = row["question"].strip()
+                expected_doc_id = row["expected_doc_id"].strip()
+
+                vec = model.encode([question], normalize_embeddings=True)[0].tolist()
                 vec_str = to_pgvector(vec)
-                cur.execute(
-                    "SELECT embedding <=> %s::vector AS dist FROM chunks ORDER BY dist LIMIT 1",
-                    (vec_str,),
+
+                chunk_results = search_chunks(cur, vec_str, limit=3)
+                faq_results = search_faqs(cur, vec_str, limit=3)
+
+                chunk_judge = judge(expected_doc_id, chunk_results, CHUNK_THRESHOLD)
+                faq_judge = judge(expected_doc_id, faq_results, FAQ_THRESHOLD)
+
+                chunk_hit1 += chunk_judge["hit1"]
+                chunk_hit3 += chunk_judge["hit3"]
+                chunk_coverage += chunk_judge["coverage"]
+
+                faq_hit1 += faq_judge["hit1"]
+                faq_hit3 += faq_judge["hit3"]
+                faq_coverage += faq_judge["coverage"]
+
+                print("=" * 80)
+                print(f"[{i}/{total}] {question}")
+                print(f"정답 doc_id: {expected_doc_id}")
+
+                print(
+                    f"chunk top1: {chunk_judge['top1_doc_id']} "
+                    f"dist={chunk_judge['top1_distance']}"
                 )
-                row = cur.fetchone()
-                dist = float(row[0]) if row else 99.0
-                ok = "✅" if dist <= CHUNK_THRESHOLD else "❌"
-                print(f"{doc_title:<30} {query:<30} {dist:>10.4f}  {ok:>6}")
+                print(f"chunk top3: {chunk_judge['top3_doc_ids']}")
+                print(
+                    f"chunk hit@1={chunk_judge['hit1']}, "
+                    f"hit@3={chunk_judge['hit3']}, "
+                    f"coverage={chunk_judge['coverage']}"
+                )
+
+                print(
+                    f"faq top1: {faq_judge['top1_doc_id']} "
+                    f"dist={faq_judge['top1_distance']}"
+                )
+                print(f"faq top3: {faq_judge['top3_doc_ids']}")
+                print(
+                    f"faq hit@1={faq_judge['hit1']}, "
+                    f"hit@3={faq_judge['hit3']}, "
+                    f"coverage={faq_judge['coverage']}"
+                )
+
+    print("\n" + "#" * 80)
+    print("최종 요약")
+    print("#" * 80)
+
+    print("[chunks]")
+    print(f"Hit@1: {chunk_hit1}/{total} = {chunk_hit1 / total:.3f}")
+    print(f"Hit@3: {chunk_hit3}/{total} = {chunk_hit3 / total:.3f}")
+    print(f"Coverage: {chunk_coverage}/{total} = {chunk_coverage / total:.3f}")
+
+    print("\n[faqs]")
+    print(f"Hit@1: {faq_hit1}/{total} = {faq_hit1 / total:.3f}")
+    print(f"Hit@3: {faq_hit3}/{total} = {faq_hit3 / total:.3f}")
+    print(f"Coverage: {faq_coverage}/{total} = {faq_coverage / total:.3f}")
 
 
 if __name__ == "__main__":

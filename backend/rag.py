@@ -54,19 +54,22 @@ def search_rag(query: str) -> dict:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT chunk_id, title, chunk_intent, chunk_text,
-                       embedding <=> %s::vector AS distance
+                SELECT chunk_id, doc_id, title, topic, sub_topic, chunk_intent, chunk_text,
+                    embedding <=> %s::vector AS distance
                 FROM chunks
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
                 """,
                 (vec_str, vec_str, CHUNK_LIMIT),
             )
-            for chunk_id, title, intent, text, dist in cur.fetchall():
+            for chunk_id, doc_id, title, topic, sub_topic, intent, text, dist in cur.fetchall():
                 if dist <= CHUNK_THRESHOLD:
                     chunks.append({
                         "chunk_id": chunk_id,
+                        "doc_id": doc_id,
                         "title": title,
+                        "topic": topic,
+                        "sub_topic": sub_topic,
                         "intent": intent,
                         "text": text,
                         "distance": round(float(dist), 4),
@@ -74,18 +77,19 @@ def search_rag(query: str) -> dict:
 
             cur.execute(
                 """
-                SELECT faq_id, title, question, answer,
-                       embedding <=> %s::vector AS distance
+                SELECT faq_id, doc_id, title, question, answer,
+                    embedding <=> %s::vector AS distance
                 FROM faqs
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
                 """,
                 (vec_str, vec_str, FAQ_LIMIT),
             )
-            for faq_id, title, question, answer, dist in cur.fetchall():
+            for faq_id, doc_id, title, question, answer, dist in cur.fetchall():
                 if dist <= FAQ_THRESHOLD:
                     faqs.append({
                         "faq_id": faq_id,
+                        "doc_id": doc_id,
                         "title": title,
                         "question": question,
                         "answer": answer,
