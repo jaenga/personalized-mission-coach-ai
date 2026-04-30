@@ -114,26 +114,34 @@ def search_faqs(cur, vec_str: str, limit: int = 3) -> list[dict]:
     return results
 
 
-def judge(expected_doc_id: str, results: list[dict], threshold: float) -> dict:
-    """
-    expected_doc_id가 검색 결과 안에 있는지 평가한다.
-    threshold를 넘는 결과는 실제 context에 안 들어간다고 보고 제외한다.
-    """
+def judge(expected_doc_id: str, acceptable_doc_ids: list[str], results: list[dict], threshold: float) -> dict:
     passed = [r for r in results if r["distance"] <= threshold]
 
     top1_doc_id = passed[0]["doc_id"] if passed else ""
     top3_doc_ids = [r["doc_id"] for r in passed[:3]]
 
-    hit1 = 1 if top1_doc_id == expected_doc_id else 0
-    hit3 = 1 if expected_doc_id in top3_doc_ids else 0
+    strict_hit1 = 1 if top1_doc_id == expected_doc_id else 0
+    acceptable_hit1 = 1 if top1_doc_id in acceptable_doc_ids else 0
+    acceptable_hit3 = 1 if any(doc_id in acceptable_doc_ids for doc_id in top3_doc_ids) else 0
     coverage = 1 if len(passed) > 0 else 0
+
+    if strict_hit1:
+        score = 1.0
+    elif acceptable_hit1:
+        score = 0.8
+    elif acceptable_hit3:
+        score = 0.5
+    else:
+        score = 0.0
 
     return {
         "top1_doc_id": top1_doc_id,
         "top3_doc_ids": top3_doc_ids,
-        "hit1": hit1,
-        "hit3": hit3,
+        "strict_hit1": strict_hit1,
+        "acceptable_hit1": acceptable_hit1,
+        "acceptable_hit3": acceptable_hit3,
         "coverage": coverage,
+        "score": score,
         "top1_distance": passed[0]["distance"] if passed else None,
     }
 
@@ -147,12 +155,12 @@ def main() -> None:
     print(f"threshold: chunk={CHUNK_THRESHOLD}, faq={FAQ_THRESHOLD}")
     print()
 
-    chunk_hit1 = 0
-    chunk_hit3 = 0
+    chunk_acceptable_hit1 = 0
+    chunk_acceptable_hit3 = 0
     chunk_coverage = 0
 
-    faq_hit1 = 0
-    faq_hit3 = 0
+    faq_acceptable_hit1 = 0
+    faq_acceptable_hit3 = 0
     faq_coverage = 0
 
     total = len(questions)
@@ -163,21 +171,35 @@ def main() -> None:
                 question = row["question"].strip()
                 expected_doc_id = row["expected_doc_id"].strip()
 
+                acceptable_doc_ids_text = row.get("acceptable_doc_ids", "").strip()
+
+                if acceptable_doc_ids_text:
+                    acceptable_doc_ids = [
+                        x.strip()
+                        for x in acceptable_doc_ids_text.split(";")
+                        if x.strip()
+                    ]
+                else:
+                    acceptable_doc_ids = [expected_doc_id]
+
+                if expected_doc_id not in acceptable_doc_ids:
+                    acceptable_doc_ids.append(expected_doc_id)
+
                 vec = model.encode([question], normalize_embeddings=True)[0].tolist()
                 vec_str = to_pgvector(vec)
 
                 chunk_results = search_chunks(cur, vec_str, limit=3)
                 faq_results = search_faqs(cur, vec_str, limit=3)
 
-                chunk_judge = judge(expected_doc_id, chunk_results, CHUNK_THRESHOLD)
-                faq_judge = judge(expected_doc_id, faq_results, FAQ_THRESHOLD)
+                chunk_judge = judge(expected_doc_id, acceptable_doc_ids, chunk_results, CHUNK_THRESHOLD)
+                faq_judge = judge(expected_doc_id, acceptable_doc_ids, faq_results, FAQ_THRESHOLD)
 
-                chunk_hit1 += chunk_judge["hit1"]
-                chunk_hit3 += chunk_judge["hit3"]
+                chunk_acceptable_hit1 += chunk_judge["acceptable_hit1"]
+                chunk_acceptable_hit3 += chunk_judge["acceptable_hit3"]
                 chunk_coverage += chunk_judge["coverage"]
 
-                faq_hit1 += faq_judge["hit1"]
-                faq_hit3 += faq_judge["hit3"]
+                faq_acceptable_hit1 += faq_judge["acceptable_hit1"]
+                faq_acceptable_hit3 += faq_judge["acceptable_hit3"]
                 faq_coverage += faq_judge["coverage"]
 
                 print("=" * 80)
@@ -190,8 +212,10 @@ def main() -> None:
                 )
                 print(f"chunk top3: {chunk_judge['top3_doc_ids']}")
                 print(
-                    f"chunk hit@1={chunk_judge['hit1']}, "
-                    f"hit@3={chunk_judge['hit3']}, "
+                    f"chunk strict_hit@1={chunk_judge['strict_hit1']}, "
+                    f"acceptable_hit@1={chunk_judge['acceptable_hit1']}, "
+                    f"acceptable_hit@3={chunk_judge['acceptable_hit3']}, "
+                    f"score={chunk_judge['score']}, "
                     f"coverage={chunk_judge['coverage']}"
                 )
 
@@ -201,8 +225,10 @@ def main() -> None:
                 )
                 print(f"faq top3: {faq_judge['top3_doc_ids']}")
                 print(
-                    f"faq hit@1={faq_judge['hit1']}, "
-                    f"hit@3={faq_judge['hit3']}, "
+                    f"faq strict_hit@1={faq_judge['strict_hit1']}, "
+                    f"acceptable_hit@1={faq_judge['acceptable_hit1']}, "
+                    f"acceptable_hit@3={faq_judge['acceptable_hit3']}, "
+                    f"score={faq_judge['score']}, "
                     f"coverage={faq_judge['coverage']}"
                 )
 
@@ -211,13 +237,13 @@ def main() -> None:
     print("#" * 80)
 
     print("[chunks]")
-    print(f"Hit@1: {chunk_hit1}/{total} = {chunk_hit1 / total:.3f}")
-    print(f"Hit@3: {chunk_hit3}/{total} = {chunk_hit3 / total:.3f}")
+    print(f"Acceptable Hit@1: {chunk_acceptable_hit1}/{total} = {chunk_acceptable_hit1 / total:.3f}")
+    print(f"Acceptable Hit@3: {chunk_acceptable_hit3}/{total} = {chunk_acceptable_hit3 / total:.3f}")
     print(f"Coverage: {chunk_coverage}/{total} = {chunk_coverage / total:.3f}")
 
     print("\n[faqs]")
-    print(f"Hit@1: {faq_hit1}/{total} = {faq_hit1 / total:.3f}")
-    print(f"Hit@3: {faq_hit3}/{total} = {faq_hit3 / total:.3f}")
+    print(f"Acceptable Hit@1: {faq_acceptable_hit1}/{total} = {faq_acceptable_hit1 / total:.3f}")
+    print(f"Acceptable Hit@3: {faq_acceptable_hit3}/{total} = {faq_acceptable_hit3 / total:.3f}")
     print(f"Coverage: {faq_coverage}/{total} = {faq_coverage / total:.3f}")
 
 
