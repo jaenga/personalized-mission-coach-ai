@@ -1,3 +1,4 @@
+import asyncio
 import json as _json
 import random
 import re
@@ -32,6 +33,26 @@ from rag import search_rag
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
 from sheets import cancel_mission_result, update_mission_result
+
+_FAKE_STREAM_CHARS = 4
+_FAKE_STREAM_DELAY_SEC = 0.1
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _chunk_template_response(text: str, chunk_size: int = _FAKE_STREAM_CHARS) -> list[str]:
+    """서버 템플릿 응답을 프론트 스트리밍처럼 보이도록 작은 조각으로 나눈다."""
+    if not text:
+        return []
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+
+async def _fake_stream_template_response(text: str):
+    for chunk in _chunk_template_response(text):
+        yield _sse({"type": "token", "content": chunk})
+        await asyncio.sleep(_FAKE_STREAM_DELAY_SEC)
 
 
 def _needs_history_for_action(fn_calls: list[tuple[str, dict]]) -> bool:
@@ -472,16 +493,18 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             identity_message = _identity_response()
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", identity_message)
-            yield f"data: {_json.dumps({'type': 'token', 'content': identity_message}, ensure_ascii=False)}\n\n"
-            yield f"data: {_json.dumps({'type': 'done', 'debug': {'intent': 'IDENTITY_GUARD', 'timing': {}}}, ensure_ascii=False)}\n\n"
+            async for event in _fake_stream_template_response(identity_message):
+                yield event
+            yield _sse({"type": "done", "debug": {"intent": "IDENTITY_GUARD", "timing": {}}})
             return
 
         if not is_greet and _OFFTOPIC_RE.search(body.message):
             print("[Guard] off-topic detected -> fixed response (stream)")
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", _OFFTOPIC_RESPONSE)
-            yield f"data: {_json.dumps({'type': 'token', 'content': _OFFTOPIC_RESPONSE}, ensure_ascii=False)}\n\n"
-            yield f"data: {_json.dumps({'type': 'done', 'debug': {'intent': 'OFFTOPIC_GUARD', 'timing': {}}}, ensure_ascii=False)}\n\n"
+            async for event in _fake_stream_template_response(_OFFTOPIC_RESPONSE):
+                yield event
+            yield _sse({"type": "done", "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}}})
             return
 
         intent = "A"
@@ -586,12 +609,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
         if action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
             ai_message = action_ack.message
-            yield f"data: {_json.dumps({'type': 'token', 'content': ai_message}, ensure_ascii=False)}\n\n"
+            async for event in _fake_stream_template_response(ai_message):
+                yield event
         else:
             if server_prefix:
                 print(f"[Response] prefix={_short(server_prefix)!r}")
                 ai_message = f"{server_prefix}\n"
-                yield f"data: {_json.dumps({'type': 'token', 'content': ai_message}, ensure_ascii=False)}\n\n"
+                async for event in _fake_stream_template_response(ai_message):
+                    yield event
 
             token_buf = ""
             lookahead_limit = len(server_prefix) + 10 if server_prefix else 0
@@ -660,7 +685,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             if finalized_message.startswith(visible_before_finalize):
                 finalize_suffix = finalized_message[len(visible_before_finalize):]
                 if finalize_suffix.strip():
-                    yield f"data: {_json.dumps({'type': 'token', 'content': finalize_suffix}, ensure_ascii=False)}\n\n"
+                    async for event in _fake_stream_template_response(finalize_suffix):
+                        yield event
             ai_message = finalized_message
         print(f"[Stream] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
 
