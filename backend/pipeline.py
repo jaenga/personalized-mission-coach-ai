@@ -9,7 +9,7 @@ import time
 from intent_router import classify_intent, split_multi_intent
 from qwen_client import call_function
 from rag import search_rag
-from prompts import build_chat_system_prompt
+from prompts import CLARIFY_HINT_DEFAULT, build_system_prompt
 from database import _kst_today, get_last_action_type, fetch_profile
 from executor import (
     ExecResults,
@@ -175,6 +175,54 @@ def step_execute(
     return results, fn_calls, pending_submit_args, combo
 
 
+def _build_function_hint(
+    student_id: int | None,
+    fn_calls: list[tuple[str, dict]],
+    exec_results: ExecResults,
+    combo: str | None,
+) -> str:
+    """B 인텐트 전용 힌트 문자열 생성. DB write 없음."""
+    has_exec_hint = exec_results.cancel is not None
+    if not fn_calls and not has_exec_hint:
+        return ""
+
+    if combo == "conflict":
+        return build_conflict_prompt(fn_calls).strip()
+
+    hints: list[str] = []
+
+    if combo == "db_branch":
+        # db_branch에서 직전 액션 불일치면 step_execute에서 충돌 전환됨.
+        # 여기까지 왔으면 정상 순차 → cancel hint + 나머지 hint.
+        if student_id is not None:
+            if exec_results.cancel:
+                hints.append(build_cancel_hint(exec_results.cancel))
+            for fn, args in _reorder_sequential(fn_calls):
+                hints.append(build_one_hint(student_id, fn, args, exec_results))
+        else:
+            for fn, args in fn_calls:
+                hints.append(build_fn_hint(fn, args))
+        return "\n\n".join(hints)
+
+    # sequential / independent
+    if student_id is not None:
+        ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
+        eq_submit = is_equivalency_submit(fn_calls)
+        if exec_results.cancel:
+            hints.append(build_cancel_hint(exec_results.cancel))
+        for fn, args in ordered:
+            if fn == "submit_mission_result" and eq_submit:
+                continue  # submit 힌트 스킵 (LLM이 태그로 판정)
+            hints.append(build_one_hint(student_id, fn, args, exec_results))
+        if eq_submit:
+            hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
+    else:
+        for fn, args in fn_calls:
+            hints.append(build_fn_hint(fn, args))
+
+    return "\n\n".join(hints)
+
+
 def step_build_hints(
     student_id: int | None,
     fn_calls: list[tuple[str, dict]],
@@ -186,52 +234,19 @@ def step_build_hints(
     is_greet: bool,
 ) -> str:
     """시스템 프롬프트 조립. DB write 없음."""
-    system_prompt = build_chat_system_prompt(
-        mission_title,
-        rag_context if not is_greet else "",
-        intent=intent,
-    )
-    has_exec_hint = exec_results.cancel is not None
+    function_hint = ""
+    if intent == "B":
+        function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo)
 
+    clarify_hint = ""
     if intent == "D":
-        system_prompt += "\n\n아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
+        clarify_hint = CLARIFY_HINT_DEFAULT
 
-    if intent == "B" and (fn_calls or has_exec_hint):
-        if combo == "conflict":
-            system_prompt += build_conflict_prompt(fn_calls)
-        elif combo == "db_branch":
-            # db_branch에서 직전 액션 불일치면 step_execute에서 충돌 전환됨
-            # 여기까지 왔으면 정상 순차 → cancel hint + 나머지 hint
-            if student_id is not None:
-                hints = []
-                if exec_results.cancel:
-                    hints.append(build_cancel_hint(exec_results.cancel))
-                ordered = _reorder_sequential(fn_calls)
-                for fn, args in ordered:
-                    hints.append(build_one_hint(student_id, fn, args, exec_results))
-                if hints:
-                    system_prompt += "\n\n" + "\n\n".join(hints)
-            else:
-                for fn, args in fn_calls:
-                    system_prompt += f"\n\n{build_fn_hint(fn, args)}"
-        else:
-            # sequential / independent
-            if student_id is not None:
-                ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
-                eq_submit = is_equivalency_submit(fn_calls)
-                hints = []
-                if exec_results.cancel:
-                    hints.append(build_cancel_hint(exec_results.cancel))
-                for fn, args in ordered:
-                    if fn == "submit_mission_result" and eq_submit:
-                        continue  # submit 힌트 스킵 (LLM이 태그로 판정)
-                    hints.append(build_one_hint(student_id, fn, args, exec_results))
-                if eq_submit:
-                    hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
-                if hints:
-                    system_prompt += "\n\n" + "\n\n".join(hints)
-            else:
-                for fn, args in fn_calls:
-                    system_prompt += f"\n\n{build_fn_hint(fn, args)}"
-
-    return system_prompt
+    return build_system_prompt(
+        intent=intent,
+        mission=mission_title if intent == "A" and is_greet else "",
+        hint=function_hint,
+        rag_context=rag_context if intent == "C" and not is_greet else "",
+        clarify_hint=clarify_hint,
+        is_greeting=is_greet,
+    )
