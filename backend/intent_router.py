@@ -21,6 +21,17 @@ IntentLabel = Literal["A", "B", "C", "D"]
 _HEALTH_QUESTION_RE = re.compile(
     r"(왜|어떻게|좋아|좋아요|나빠|나빠요|건강|효과|도움|중요|필요|영양|칼로리|키가|살이|아파|통증)"
 )
+
+# 규칙 기반 pre-classification (LLM 호출 없이 바로 반환)
+_PRE_GREET_RE = re.compile(
+    r"^(안녕|하이|헬로|hi|hello|ㅎㅇ|반가워|좋은\s*아침|굿모닝|굿모닝!|안뇽)[\s!~.]*$",
+    re.IGNORECASE,
+)
+
+# 잡담/감정 키워드 — 미션명 컨텍스트를 붙이면 B로 오분류될 수 있어서 제외
+_CASUAL_EMOTION_RE = re.compile(
+    r"배고|심심|졸려|피곤|힘들어|슬퍼|짜증|우울|기분|신나|좋겠|싫어|무서|외로|행복|설레"
+)
 _MISSION_COMMAND_RE = re.compile(
     r"(미션|제출|성공|완료|실패|취소|바꿔|변경|쉽게|어렵게|조회|기록|마감|규칙|기준|인증)"
 )
@@ -137,10 +148,23 @@ async def split_multi_intent(user_message: str) -> list[str]:
 
 
 async def classify_intent(user_message: str, mission_name: str = "") -> IntentLabel:
+    stripped = user_message.strip()
+
+    # Pre-classification: 명백한 인사 → A (LLM 없이)
+    if _PRE_GREET_RE.match(stripped):
+        print("[PreClassify] greeting → A")
+        return "A"
+
+    # Pre-classification: 1~2글자 단답 (미션 키워드 없으면) → D
+    if len(stripped) <= 2 and not _MISSION_COMMAND_RE.search(stripped):
+        print(f"[PreClassify] short input({len(stripped)}글자) → D")
+        return "D"
+
     use_mission_context = (
         bool(mission_name)
         and mission_name != "오늘의 미션"
         and _HEALTH_QUESTION_RE.search(user_message) is None
+        and _CASUAL_EMOTION_RE.search(user_message) is None
     )
     prompt_message = f"[오늘 미션: {mission_name}]\n{user_message}" if use_mission_context else user_message
     url = f"{OLLAMA_BASE_URL}/api/chat"

@@ -4,6 +4,7 @@ import 방향: pipeline → executor, hint_builder (단방향)
 """
 from __future__ import annotations
 
+import random
 import re
 import time
 
@@ -189,6 +190,19 @@ _NUMERIC_REPORT_RE = re.compile(
 _PAST_VERB_RE = re.compile(r"[가-힣]{1,8}(?:었|았|했|겼|켰|렸|웠|냈|봤)어(?:요)?")
 
 
+# 다중 의도 키워드 — 명시적 접속사
+_MULTI_INTENT_RE = re.compile(
+    r"그리고|그리구|또\s|이랑\s|랑\s|하고\s|마감도|기록도|성공하고|취소하고|바꾸고"
+)
+# 제출 동사 + 조회 동사가 같이 있으면 공백으로 이어진 다중 의도일 가능성이 높음
+_SUBMIT_HINT_RE = re.compile(r"성공|실패|완료|했어|못했|해냈")
+_QUERY_HINT_RE = re.compile(r"보여|알려|뭐야|뭔데|언제|기록|조회|마감")
+
+# 위로/격려 상황 감지
+_COMFORT_RE = re.compile(
+    r"힘들|슬퍼|슬프|짜증|우울|싫어|못하겠|포기|지쳐|피곤|하기 싫"
+)
+
 _OVERLAP_STOPWORDS = frozenset({
     "안", "못", "하기", "오늘", "한", "의", "에", "을", "를", "이", "가", "은", "는", "도", "로", "와", "과", "매일", "하루",
     "대신", "작은", "큰", "개", "잔", "번", "분", "초",
@@ -211,6 +225,35 @@ def _mission_overlap(message: str, mission_name: str) -> bool:
     }
     message_tokens = _tokenize_koreanish(message)
     return bool(mission_tokens & message_tokens)
+
+
+def _should_call_name(
+    is_greet: bool,
+    intent: str,
+    exec_results: ExecResults | None,
+    user_message: str,
+) -> bool:
+    """서버가 이름 호출 여부를 결정한다. 모델에 판단을 맡기지 않는다.
+
+    - 첫 인사: 70%
+    - 미션 성공/실패 직후: 30%
+    - 위로/격려 상황 (A 인텐트): 50%
+    """
+    if is_greet:
+        return random.random() < 0.70
+
+    if (
+        intent == "B"
+        and exec_results is not None
+        and exec_results.submit is not None
+        and exec_results.submit.status.value == "saved"
+    ):
+        return random.random() < 0.30
+
+    if intent == "A" and _COMFORT_RE.search(user_message):
+        return random.random() < 0.50
+
+    return False
 
 
 def step_normalize_b_input(message: str, mission_name: str) -> tuple[str, bool]:
@@ -284,7 +327,15 @@ async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], 
         print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, direct)")
         return fn_calls, ms
 
-    parts = await split_multi_intent(message)
+    # 다중 의도 키워드 없으면 split 호출 자체를 스킵 (LLM 호출 1회 절감)
+    # 명시적 접속사 또는 제출+조회 동시 존재 시 split 실행
+    has_multi_intent = _MULTI_INTENT_RE.search(message) or (
+        _SUBMIT_HINT_RE.search(message) and _QUERY_HINT_RE.search(message)
+    )
+    if has_multi_intent:
+        parts = await split_multi_intent(message)
+    else:
+        parts = [message]
     fn_calls: list[tuple[str, dict]] = []
     seen: set[tuple] = set()
     for part in parts:
@@ -412,6 +463,8 @@ def step_build_hints(
     intent: str,
     is_greet: bool,
     clarify_hint_override: str = "",
+    student_name: str = "",
+    user_message: str = "",
 ) -> str:
     """시스템 프롬프트 조립. DB write 없음."""
     function_hint = ""
@@ -423,6 +476,10 @@ def step_build_hints(
     if intent == "D":
         clarify_hint = clarify_hint_override or CLARIFY_HINT_DEFAULT
 
+    name_call_allowed = _should_call_name(is_greet, intent, exec_results, user_message)
+    if name_call_allowed:
+        print(f"[Name] 이름 호출 허용: {student_name!r}")
+
     return build_system_prompt(
         intent=intent,
         mission=mission_title if intent == "A" and is_greet else "",
@@ -430,4 +487,6 @@ def step_build_hints(
         rag_context=rag_context if intent == "C" and not is_greet else "",
         clarify_hint=clarify_hint,
         is_greeting=is_greet,
+        student_name=student_name,
+        name_call_allowed=name_call_allowed,
     )

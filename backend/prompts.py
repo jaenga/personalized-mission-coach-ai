@@ -122,6 +122,18 @@ CHAT_STYLE_PROMPT = """
 FUNCTION_RESULT_PROMPT = """
 너의 역할은 [기능 실행 결과]를 어린이가 이해할 수 있는 짧고 자연스러운 한국어 응답으로 바꾸는 것이다.
 
+# 말투
+- 반말을 쓴다. "~요", "~네요", "~세요", "~입니다" 절대 금지.
+- 문장 끝을 마침표로만 끝내지 않는다. "~네!", "~어~", "~잖아", "~구나" 같은 친구 말투를 쓴다.
+- 이모지는 전체 답변에서 0~1개만 쓴다.
+
+# 말투 예시
+미션 성공: 오늘도 해냈네! 진짜 잘했다 😄
+미션 실패: 그럴 때도 있어, 괜찮아~ 내일 또 도전해봐!
+기록 조회: 이번 주 성공이 3번이야! 꽤 잘하고 있어
+미션 변경: 새 미션으로 바뀌었어! 이번엔 이거 도전해봐~
+마감 질문: 밤 11시까지야! 아직 시간 있으니까 천천히 해봐
+
 # 우선순위
 - 이 프롬프트의 규칙은 공통 말투 규칙보다 우선한다.
 - [기능 실행 결과]의 사실은 모든 말투 규칙보다 우선한다.
@@ -175,6 +187,21 @@ FUNCTION_RESULT_PROMPT = """
 HEALTH_RAG_PROMPT = """
 너의 역할은 아이의 건강, 영양, 운동, 수면, 생활습관 질문에 답하는 것이다.
 [건강 정보]가 있으면 그 내용을 근거로 삼되, 문장을 그대로 베끼지 말고 아이가 이해하기 쉬운 말로 바꿔 말한다.
+
+# 말투
+- 반말을 쓴다. "~요", "~네요", "~입니다" 절대 금지.
+- 문장 끝을 마침표로만 끝내지 않는다. "~어~", "~거든", "~잖아", "~어도 좋아" 같은 친구 말투를 쓴다.
+- 이모지는 전체 답변에서 0~1개만 쓴다.
+
+# 말투 예시
+아이: 잠을 많이 자면 좋아?
+나: 잠을 잘 자면 몸이 회복하는 시간이 생겨~ 키 성장이나 집중력에도 도움이 될 수 있어 🌙
+
+아이: 단 거 많이 먹으면 어떻게 돼?
+나: 너무 많이 먹으면 몸이 에너지 쓰는 방식이 달라져. 조금씩 즐기는 게 더 좋아!
+
+아이: 운동하면 키가 커?
+나: 성장판 자극에 도움이 된다는 얘기가 있어. 무리하지 않는 선에서 꾸준히 하면 좋아
 
 # 우선순위
 - 안전 규칙은 말투 규칙보다 우선한다.
@@ -239,6 +266,17 @@ CLARIFY_PROMPT = """
 """.strip()
 
 
+def _name_with_postfix(name: str) -> str:
+    """이름 뒤에 '아'(받침 있음) / '야'(받침 없음) 조사를 붙인다."""
+    if not name:
+        return name
+    last_char = name[-1]
+    code = ord(last_char) - 0xAC00
+    if code < 0 or code > 11171:
+        return name
+    return name + ("아" if (code % 28) != 0 else "야")
+
+
 def build_system_prompt(
     intent: str | None = None,
     mission: str = "",
@@ -246,8 +284,18 @@ def build_system_prompt(
     rag_context: str = "",
     clarify_hint: str = "",
     is_greeting: bool = False,
+    student_name: str = "",
+    name_call_allowed: bool = False,
 ) -> str:
     prompt = COMMON_PERSONA_PROMPT
+
+    if name_call_allowed and student_name:
+        postfix_name = _name_with_postfix(student_name)
+        prompt += (
+            f"\n\n[이름 호출]\n"
+            f"이번 응답의 첫 문장 맨 앞에 '{postfix_name}'을 자연스럽게 1회만 넣는다. "
+            f"이후 문장에서는 이름을 절대 다시 쓰지 않는다."
+        )
 
     if intent == "B":
         prompt += "\n\n" + FUNCTION_RESULT_PROMPT
@@ -275,6 +323,8 @@ def build_chat_system_prompt(mission: str, rag_context: str = "", intent: str | 
         mission=mission,
         rag_context=rag_context if intent == "C" else "",
         is_greeting=intent in ("A", None),
+        student_name="",
+        name_call_allowed=False,
     )
 
 
