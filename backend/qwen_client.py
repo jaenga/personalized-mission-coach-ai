@@ -144,7 +144,24 @@ def preload_qwen() -> None:
     print(f"[Qwen] Ollama 모델 사용: {FUNCTION_MODEL}")
 
 
-def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]:
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient()
+    return _client
+
+
+async def close_qwen_client() -> None:
+    global _client
+    if _client and not _client.is_closed:
+        await _client.aclose()
+    _client = None
+
+
+async def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]:
     payload = {
         "model": FUNCTION_MODEL,
         "stream": False,
@@ -156,10 +173,11 @@ def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]:
 
     t0 = time.perf_counter()
     try:
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
-            resp.raise_for_status()
-            raw = resp.json()["message"]["content"].strip()
+        resp = await _get_client().post(
+            f"{OLLAMA_BASE_URL}/api/chat", json=payload, timeout=60.0
+        )
+        resp.raise_for_status()
+        raw = resp.json()["message"]["content"].strip()
     except Exception as e:
         print(f"[Qwen] Ollama 호출 실패: {e}")
         return [], 0

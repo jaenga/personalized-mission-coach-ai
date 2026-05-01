@@ -5,6 +5,7 @@ import time
 
 from fastapi import BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from database import (
     _kst_today,
@@ -131,7 +132,7 @@ _AI_IDENTITY_QUESTION_RE = re.compile(
     r"(?:사람|인간|생명|살아있|현실에 있|실제)"
     r"[\s\S]{0,8}(?:야|이야|임|이냐|냐|지|맞지|잖아|아니야|아니지|맞아|인가|이니|아님)?"
     r"|"
-    r"(?:너|넌|토미)?[\s\S]{0,8}"
+    r"(?:너|넌|너는|토미|토마토)[\s\S]{0,8}"
     r"(?:누구|뭐야|정체|이름)"
     r"|"
     r"(?:토미|토마토)[\s\S]{0,8}"
@@ -197,14 +198,14 @@ def detect_violations(ai_message: str, user_input: str) -> list[str]:
     ]
 
 
-async def _cancel_sheet_bg(student_id: int, today: str):
+def _cancel_sheet_bg(student_id: int, today: str):
     try:
         cancel_mission_result(student_id, today)
     except Exception as e:
         print(f"[cancel] 시트 초기화 실패: {e}")
 
 
-async def _sync_sheet_bg(
+def _sync_sheet_bg(
     session_id: str,
     user_message: str,
     ai_message: str,
@@ -288,8 +289,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet and _AI_IDENTITY_QUESTION_RE.search(body.message):
         print("[Guard] AI identity question detected -> fixed response")
         identity_message = _identity_response()
-        _save_message_safe(body.session_id, "user", body.message)
-        _save_message_safe(body.session_id, "assistant", identity_message)
+        await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", identity_message)
         return {
             "response": identity_message,
             "mission_completed": False,
@@ -300,8 +301,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     if not is_greet and _OFFTOPIC_RE.search(body.message):
         print("[Guard] off-topic detected -> fixed response")
-        _save_message_safe(body.session_id, "user", body.message)
-        _save_message_safe(body.session_id, "assistant", _OFFTOPIC_RESPONSE)
+        await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", _OFFTOPIC_RESPONSE)
         return {
             "response": _OFFTOPIC_RESPONSE,
             "mission_completed": False,
@@ -334,29 +335,35 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 fn_args = fn_calls[0][1] if fn_calls else {}
         if intent == "C":
             try:
-                rag_result = search_rag(body.message)
+                rag_result = await run_in_threadpool(search_rag, body.message)
             except Exception as e:
                 print(f"[RAG] 검색 실패 (무시): {e}")
 
     combo = classify_multi(fn_calls) if fn_calls else None
-    profile = fetch_profile(body.session_id)
+    profile = await run_in_threadpool(fetch_profile, body.session_id)
     student_id = profile["student_id"] if profile else None
     student_name = profile.get("student_name", "") if profile else ""
     print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
-    exec_results = None
+    exec_results = ExecResults()
     pending_submit_args = None
 
     if student_id and fn_calls:
-        exec_results, fn_calls, pending_submit_args, combo = step_execute(student_id, fn_calls, combo)
+        exec_results, fn_calls, pending_submit_args, combo = await run_in_threadpool(
+            step_execute,
+            student_id,
+            fn_calls,
+            combo,
+        )
     elif fn_calls:
         print("[DB] skipped: missing student_id")
     if combo == "conflict":
         detected_function = None
 
-    system_prompt = step_build_hints(
+    system_prompt = await run_in_threadpool(
+        step_build_hints,
         student_id=student_id,
         fn_calls=fn_calls,
-        exec_results=exec_results or ExecResults(),
+        exec_results=exec_results,
         combo=combo,
         mission_title=mission_title,
         rag_context=rag_result["context"],
@@ -372,7 +379,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
         messages = [{"role": "user", "content": gemma_user_message}]
     else:
-        history = fetch_messages(body.session_id)
+        history = await run_in_threadpool(fetch_messages, body.session_id)
         if not is_greet:
             history.append({"role": "user", "content": gemma_user_message})
         messages = history if history else [
@@ -391,8 +398,9 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
 
-        if eq_submit and exec_results:
-            ai_message = _finalize_equivalency_response(
+        if eq_submit:
+            ai_message = await run_in_threadpool(
+                _finalize_equivalency_response,
                 ai_message,
                 student_id,
                 pending_submit_args,
@@ -406,8 +414,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     print(f"[Chat] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
 
     if not is_greet:
-        _save_message_safe(body.session_id, "user", body.message, detected_function)
-    _save_message_safe(body.session_id, "assistant", llm_only or ai_message)
+        await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
+    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_only or ai_message)
 
     user_input = body.message if not is_greet else ""
     violations = detect_violations(ai_message, user_input)
@@ -462,16 +470,16 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if not is_greet and _AI_IDENTITY_QUESTION_RE.search(body.message):
             print("[Guard] AI identity question detected -> fixed response (stream)")
             identity_message = _identity_response()
-            _save_message_safe(body.session_id, "user", body.message)
-            _save_message_safe(body.session_id, "assistant", identity_message)
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", identity_message)
             yield f"data: {_json.dumps({'type': 'token', 'content': identity_message}, ensure_ascii=False)}\n\n"
             yield f"data: {_json.dumps({'type': 'done', 'debug': {'intent': 'IDENTITY_GUARD', 'timing': {}}}, ensure_ascii=False)}\n\n"
             return
 
         if not is_greet and _OFFTOPIC_RE.search(body.message):
             print("[Guard] off-topic detected -> fixed response (stream)")
-            _save_message_safe(body.session_id, "user", body.message)
-            _save_message_safe(body.session_id, "assistant", _OFFTOPIC_RESPONSE)
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", _OFFTOPIC_RESPONSE)
             yield f"data: {_json.dumps({'type': 'token', 'content': _OFFTOPIC_RESPONSE}, ensure_ascii=False)}\n\n"
             yield f"data: {_json.dumps({'type': 'done', 'debug': {'intent': 'OFFTOPIC_GUARD', 'timing': {}}}, ensure_ascii=False)}\n\n"
             return
@@ -506,7 +514,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             if intent == "C":
                 try:
                     t_rag = time.perf_counter()
-                    rag_result = search_rag(body.message)
+                    rag_result = await run_in_threadpool(search_rag, body.message)
                     rag_ms = round((time.perf_counter() - t_rag) * 1000)
                     hits = len(rag_result["chunks"]) + len(rag_result["faqs"])
                     yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'rag', 'hits': hits, 'ms': rag_ms}, ensure_ascii=False)}\n\n"
@@ -514,7 +522,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     print(f"[RAG] 검색 실패 (무시): {e}")
 
         combo = classify_multi(fn_calls) if fn_calls else None
-        profile = fetch_profile(body.session_id)
+        profile = await run_in_threadpool(fetch_profile, body.session_id)
         student_id = profile["student_id"] if profile else None
         student_name = profile.get("student_name", "") if profile else ""
         print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
@@ -522,13 +530,19 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         pending_submit_args = None
 
         if student_id and fn_calls:
-            exec_results, fn_calls, pending_submit_args, combo = step_execute(student_id, fn_calls, combo)
+            exec_results, fn_calls, pending_submit_args, combo = await run_in_threadpool(
+                step_execute,
+                student_id,
+                fn_calls,
+                combo,
+            )
         elif fn_calls:
             print("[DB] skipped: missing student_id")
         if combo == "conflict":
             detected_function = None
 
-        system_prompt = step_build_hints(
+        system_prompt = await run_in_threadpool(
+            step_build_hints,
             student_id=student_id,
             fn_calls=fn_calls,
             exec_results=exec_results,
@@ -547,7 +561,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
             messages = [{"role": "user", "content": gemma_user_message}]
         else:
-            history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
+            fetched_history = await run_in_threadpool(fetch_messages, body.session_id)
+            history = [{"role": m["role"], "content": m["content"]} for m in fetched_history]
             if not is_greet:
                 history.append({"role": "user", "content": gemma_user_message})
             messages = history if history else [
@@ -635,7 +650,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             visible_before_finalize = (
                 llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
             )
-            finalized_message = _finalize_equivalency_response(
+            finalized_message = await run_in_threadpool(
+                _finalize_equivalency_response,
                 llm_message,
                 student_id,
                 pending_submit_args,
@@ -669,11 +685,11 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
 
         if not is_greet:
-            _save_message_safe(body.session_id, "user", body.message, detected_function)
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
         llm_save = _filter_ai_response(
             llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
         )
-        _save_message_safe(body.session_id, "assistant", llm_save or ai_message)
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type

@@ -12,6 +12,9 @@ from app_services import (
     verify_student,
 )
 from chat_service import process_chat, process_chat_stream
+from intent_router import close_intent_router_client
+from ollama_client import close_ollama_client
+from qwen_client import close_qwen_client
 from schemas import ChatRequest, ProfileRequest, VerifyRequest
 
 
@@ -28,6 +31,13 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     startup_tasks()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await close_ollama_client()
+    await close_intent_router_client()
+    await close_qwen_client()
 
 
 @app.post("/verify-student")

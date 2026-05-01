@@ -26,6 +26,30 @@ def init_db():
                     created_at    TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            cur.execute("SELECT to_regclass('public.checkin_log')")
+            if cur.fetchone()[0]:
+                cur.execute("""
+                    DELETE FROM checkin_log
+                    WHERE checkin_id IN (
+                        SELECT checkin_id
+                        FROM (
+                            SELECT
+                                checkin_id,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY student_id, checkin_date
+                                    ORDER BY created_at DESC NULLS LAST, checkin_id DESC
+                                ) AS rn
+                            FROM checkin_log
+                            WHERE function_called = 'submit_mission_result'
+                        ) ranked
+                        WHERE rn > 1
+                      )
+                """)
+                cur.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_checkin_submit_once_per_day
+                    ON checkin_log (student_id, checkin_date)
+                    WHERE function_called = 'submit_mission_result'
+                """)
         conn.commit()
 
 
@@ -264,7 +288,7 @@ def save_mission_result(
     status: str,
     result_reason: str | None = None,
     detected_function: str = "submit_mission_result",
-) -> int:
+) -> int | None:
     today = _kst_today()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -275,12 +299,16 @@ def save_mission_result(
                      result_reason, function_called,
                      sheet_update_status, created_at, last_updated_at)
                 VALUES (%s, %s, %s, %s, %s, %s, 'pending', NOW(), NOW())
+                ON CONFLICT (student_id, checkin_date)
+                    WHERE function_called = 'submit_mission_result'
+                DO NOTHING
                 RETURNING checkin_id
                 """,
                 (student_id, mission_id, today, status,
                  result_reason, detected_function),
             )
-            row_id = cur.fetchone()[0]
+            row = cur.fetchone()
+            row_id = row[0] if row else None
         conn.commit()
     return row_id
 
@@ -534,5 +562,3 @@ def get_last_action_type(student_id: int) -> str | None:
     if submit_time and (not change_time or submit_time >= change_time):
         return "submit"
     return "adjustment"
-
-

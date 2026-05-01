@@ -18,6 +18,22 @@ ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gemma4:e2b")
 
 IntentLabel = Literal["A", "B", "C", "D"]
 
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient()
+    return _client
+
+
+async def close_intent_router_client() -> None:
+    global _client
+    if _client and not _client.is_closed:
+        await _client.aclose()
+    _client = None
+
 _HEALTH_QUESTION_RE = re.compile(
     r"(왜|어떻게|좋아|좋아요|나빠|나빠요|건강|효과|도움|중요|필요|영양|칼로리|키가|살이|아파|통증)"
 )
@@ -131,10 +147,9 @@ async def split_multi_intent(user_message: str) -> list[str]:
         ],
     }
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            raw = resp.json()["message"]["content"].strip()
+        resp = await _get_client().post(url, json=payload, timeout=30.0)
+        resp.raise_for_status()
+        raw = resp.json()["message"]["content"].strip()
     except Exception as e:
         print(f"[IntentRouter] 문장 분리 실패, 원문 유지: {e}")
         return [user_message]
@@ -178,10 +193,9 @@ async def classify_intent(user_message: str, mission_name: str = "") -> IntentLa
         ],
     }
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            raw = resp.json()["message"]["content"].strip()
+        resp = await _get_client().post(url, json=payload, timeout=60.0)
+        resp.raise_for_status()
+        raw = resp.json()["message"]["content"].strip()
     except Exception as e:
         print(f"[IntentRouter] 분류 실패, D로 폴백: {type(e).__name__}: {e}")
         return "D"

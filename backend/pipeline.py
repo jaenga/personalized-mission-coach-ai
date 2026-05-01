@@ -339,7 +339,7 @@ async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], 
     fn_calls: list[tuple[str, dict]] = []
     seen: set[tuple] = set()
     for part in parts:
-        calls, _ = call_function(part)
+        calls, _ = await call_function(part)
         for c in calls:
             key = (c[0], tuple(sorted(c[1].items())))
             if key not in seen:

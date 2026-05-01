@@ -138,6 +138,15 @@ def execute_submit(student_id: int, fn_args: dict) -> SubmitResult:
             status=result_type,
             detected_function="submit_mission_result",
         )
+        if checkin_id is None:
+            result = SubmitResult(
+                status=SubmitStatus.ALREADY_SUBMITTED,
+                mission_name=mission.get("mission_name"),
+                result_type=result_type,
+            )
+            print(f"[DB.submit] {_status_label(result)}")
+            return result
+
         result = SubmitResult(
             status=SubmitStatus.SAVED,
             mission_name=mission.get("mission_name"),
