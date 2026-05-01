@@ -4,12 +4,13 @@ import 방향: pipeline → executor, hint_builder (단방향)
 """
 from __future__ import annotations
 
+import re
 import time
 
 from intent_router import classify_intent, split_multi_intent
 from qwen_client import call_function
 from rag import search_rag
-from prompts import CLARIFY_HINT_DEFAULT, build_system_prompt
+from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MISSION_REPORT, build_system_prompt
 from database import _kst_today, get_last_action_type, fetch_profile
 from executor import (
     ExecResults,
@@ -104,17 +105,185 @@ def _reorder_sequential(fn_calls: list[tuple[str, dict]]) -> list[tuple[str, dic
 
 # ── Step 함수 ────────────────────────────────────────────────────────────────
 
-async def step_classify(message: str) -> tuple[str, int]:
+# ── 미션 보고 정규화 ─────────────────────────────────────────────────────────
+
+def _short(text: str | None, limit: int = 70) -> str:
+    if not text:
+        return ""
+    one_line = " ".join(str(text).split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
+def _fn_label(fn: str, args: dict | None = None) -> str:
+    args = args or {}
+    if fn == "submit_mission_result":
+        return f"submit({args.get('result_type', '?')})"
+    if fn == "request_mission_adjustment":
+        return f"adjust({args.get('adjustment_type', '?')})"
+    if fn == "cancel_mission_action":
+        return "cancel"
+    if fn == "get_mission_info":
+        return f"mission_info({args.get('query_type', '?')})"
+    if fn == "get_user_history":
+        return f"history({args.get('query_type', '?')})"
+    if fn == "check_mission_equivalency":
+        return f"equiv({args.get('equivalency_type', '?')})"
+    return fn
+
+
+def _fn_list(fn_calls: list[tuple[str, dict]]) -> str:
+    return ", ".join(_fn_label(fn, args) for fn, args in fn_calls) or "-"
+
+
+def _result_label(result: object | None) -> str:
+    if not result:
+        return "-"
+    status = getattr(getattr(result, "status", None), "value", getattr(result, "status", None))
+    action = getattr(getattr(result, "action", None), "value", None)
+    changed = getattr(result, "db_changed", False)
+    detail = (
+        getattr(result, "result_type", None)
+        or getattr(result, "adjustment_type", None)
+        or getattr(result, "new_mission_name", None)
+    )
+    pieces = [str(status)]
+    if detail:
+        pieces.append(str(detail))
+    pieces.append(f"db={'Y' if changed else 'N'}")
+    if action:
+        pieces.append(str(action))
+    return "/".join(pieces)
+
+
+def _exec_label(results: ExecResults) -> str:
+    return (
+        f"submit={_result_label(results.submit)} "
+        f"adjust={_result_label(results.adjustment)} "
+        f"cancel={_result_label(results.cancel)}"
+    )
+
+
+_B_COMMAND_RE = re.compile(
+    r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
+)
+_CANCEL_TARGET_RE = re.compile(
+    r"(?:미션\s*)?(?:성공|실패)(?:\s*(?:제출|기록|한\s*거|한거))?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+    r"|(?:방금|최근|아까)?\s*(?:미션\s*결과\s*)?(?:제출|기록)(?:한\s*거|한거|된\s*거|된거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+    r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+)
+# 행동+부정: 금지형 미션("과자 안 먹기")에서 성공일 수 있어 별도 처리
+# 주의: 못했/안했(일반 실패)은 여기 포함 안 함 → _FAIL_RE에서 처리
+_NEGATION_VERB_RE = re.compile(
+    r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안먹|못먹|안마|못마"
+)
+# 명확한 실패 표현 (금지형 미션과 무관)
+_FAIL_RE = re.compile(r"실패|못했|안했|안해|못해|하기 싫|못하겠")
+_EXPLICIT_SUCCESS_RE = re.compile(r"성공|완료|해냈|끝냈|다 했|다했|클리어")
+_SUCCESS_RE = re.compile(
+    r"했어(?:요)?|먹었어(?:요)?|마셨어(?:요)?|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
+)
+_NUMERIC_REPORT_RE = re.compile(
+    r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
+    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
+)
+_PAST_VERB_RE = re.compile(r"[가-힣]{1,8}(?:었|았|했|겼|켰|렸|웠|냈|봤)어(?:요)?")
+
+
+_OVERLAP_STOPWORDS = frozenset({
+    "안", "못", "하기", "오늘", "한", "의", "에", "을", "를", "이", "가", "은", "는", "도", "로", "와", "과", "매일", "하루",
+    "대신", "작은", "큰", "개", "잔", "번", "분", "초",
+})
+
+
+def _tokenize_koreanish(text: str) -> set[str]:
+    return set(re.findall(r"[가-힣A-Za-z0-9]+", text))
+
+
+def _mission_overlap(message: str, mission_name: str) -> bool:
+    """미션명과 메시지의 핵심 토큰이 겹치면 True."""
+    if not mission_name or mission_name == "오늘의 미션":
+        return False
+
+    mission_tokens = {
+        token
+        for token in _tokenize_koreanish(mission_name)
+        if token not in _OVERLAP_STOPWORDS
+    }
+    message_tokens = _tokenize_koreanish(message)
+    return bool(mission_tokens & message_tokens)
+
+
+def step_normalize_b_input(message: str, mission_name: str) -> tuple[str, bool]:
+    """
+    B 인텐트 메시지를 Qwen 전에 정규화.
+    반환: (qwen에 넘길 메시지, should_clarify)
+    should_clarify=True → D로 리다이렉트해서 확인 질문
+    """
+    # "성공 취소"의 성공/실패는 새 제출이 아니라 취소 대상 설명이다.
+    if _CANCEL_TARGET_RE.search(message):
+        normalized = "최근 미션 결과 제출을 취소해줘"
+        print(f"[Normalize] cancel-target: {_short(message)!r} -> cancel")
+        return normalized, False
+
+    # 커맨드형 B → 정규화 불필요, 그대로 통과
+    if _B_COMMAND_RE.search(message):
+        return message, False
+
+    # 행동+부정: 금지형 미션에서 성공일 수 있음 → 항상 D로 확인
+    if _NEGATION_VERB_RE.search(message):
+        print(f"[Normalize] clarify negation: {_short(message)!r}")
+        return message, True
+
+    if _FAIL_RE.search(message):
+        normalized = f"오늘 미션 '{mission_name}' 실패했어요"
+        print(f"[Normalize] fail: {_short(message)!r}")
+        return normalized, False
+
+    if _EXPLICIT_SUCCESS_RE.search(message):
+        normalized = f"오늘 미션 '{mission_name}' 성공했어요"
+        print(f"[Normalize] success: {_short(message)!r}")
+        return normalized, False
+
+    # 숫자+단위 보고는 미션 기준과 비교하지 않고 저장하면 오판 위험이 큼
+    if _NUMERIC_REPORT_RE.search(message):
+        print(f"[Normalize] clarify numeric: {_short(message)!r}")
+        return message, True
+
+    # 미션 키워드 겹침 없으면 정규화 스킵
+    if not _mission_overlap(message, mission_name):
+        return message, False
+
+    if _SUCCESS_RE.search(message):
+        normalized = f"오늘 미션 '{mission_name}' 성공했어요"
+        print(f"[Normalize] success: {_short(message)!r}")
+        return normalized, False
+
+    # 과거형 동사 있는데 성공/실패 불명확 → 확인 질문
+    if _PAST_VERB_RE.search(message):
+        print(f"[Normalize] clarify past: {_short(message)!r}")
+        return message, True
+
+    return message, False
+
+
+async def step_classify(message: str, mission_name: str = "") -> tuple[str, int]:
     """인텐트 분류. (intent, ms) 반환."""
     t0 = time.perf_counter()
-    intent = await classify_intent(message)
+    intent = await classify_intent(message, mission_name)
     ms = round((time.perf_counter() - t0) * 1000)
+    print(f"[Intent] {intent} ({ms}ms)")
     return intent, ms
 
 
 async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], int]:
     """문장 분리 + Qwen 호출 + 중복 제거. (fn_calls, ms) 반환."""
     t0 = time.perf_counter()
+    if _CANCEL_TARGET_RE.search(message):
+        ms = round((time.perf_counter() - t0) * 1000)
+        fn_calls = [("cancel_mission_action", {})]
+        print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, direct)")
+        return fn_calls, ms
+
     parts = await split_multi_intent(message)
     fn_calls: list[tuple[str, dict]] = []
     seen: set[tuple] = set()
@@ -125,7 +294,11 @@ async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], 
             if key not in seen:
                 fn_calls.append(c)
                 seen.add(key)
+    if _CANCEL_TARGET_RE.search(message) and any(fn == "cancel_mission_action" for fn, _ in fn_calls):
+        fn_calls = [("cancel_mission_action", {})]
+        print("[Function] cancel-target forced to cancel only")
     ms = round((time.perf_counter() - t0) * 1000)
+    print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, parts={len(parts)})")
     return fn_calls, ms
 
 
@@ -139,10 +312,12 @@ def step_execute(
     cancel은 실행 후 fn_calls에서 제거.
     reorder는 cancel 제거 후 적용.
     """
+    print(f"[DB] start student={student_id} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     results = ExecResults()
     pending_submit_args: dict | None = None
 
     if combo == "conflict":
+        print("[DB] skipped: conflict")
         return results, fn_calls, None, combo
 
     # db_branch는 cancel 실행 전에 "원래 직전 액션"을 검증해야 한다.
@@ -150,7 +325,9 @@ def step_execute(
         name_set = frozenset(fn for fn, _ in fn_calls)
         expected = _DB_BRANCH_PAIRS.get(name_set)
         last_action = get_last_action_type(student_id)
+        print(f"[DB] branch expected={expected} last={last_action}")
         if last_action != expected:
+            print("[DB] branch mismatch -> conflict")
             return results, fn_calls, None, "conflict"
 
     # 1. cancel 분리 + 실행 + fn_calls에서 제거
@@ -166,12 +343,14 @@ def step_execute(
         if fn == "submit_mission_result":
             if eq_submit:
                 pending_submit_args = args  # LLM 판단 후 실행
+                print(f"[DB] submit deferred for equivalency")
             else:
                 results.submit = execute_submit(student_id, args)
         elif fn == "request_mission_adjustment":
             results.adjustment = execute_adjustment(student_id, args)
         # equivalency, mission_info, history → DB write 없음
 
+    print(f"[DB] done combo={combo or '-'} {_exec_label(results)}")
     return results, fn_calls, pending_submit_args, combo
 
 
@@ -232,15 +411,17 @@ def step_build_hints(
     rag_context: str,
     intent: str,
     is_greet: bool,
+    clarify_hint_override: str = "",
 ) -> str:
     """시스템 프롬프트 조립. DB write 없음."""
     function_hint = ""
     if intent == "B":
         function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo)
+        print(f"[Prompt] function_hint={'Y' if function_hint else 'N'} combo={combo or '-'} len={len(function_hint)}")
 
     clarify_hint = ""
     if intent == "D":
-        clarify_hint = CLARIFY_HINT_DEFAULT
+        clarify_hint = clarify_hint_override or CLARIFY_HINT_DEFAULT
 
     return build_system_prompt(
         intent=intent,

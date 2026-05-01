@@ -165,10 +165,7 @@ def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]:
         return [], 0
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000)
-    print(f"[Qwen] raw output ({elapsed_ms}ms): {raw[:300]}")
-
     calls = _parse_tool_calls(raw)
-    print(f"[Qwen] 펑션콜: {calls}")
     return calls, elapsed_ms
 
 

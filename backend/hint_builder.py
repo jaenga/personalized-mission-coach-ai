@@ -66,9 +66,11 @@ EQUIVALENCY_SUBMIT_TAG_INSTRUCTION = """
 def build_submit_hint(result: SubmitResult) -> str:
     result_kor = {"success": "완료", "fail": "수행 실패"}.get(result.result_type or "", "")
     if result.status is SubmitStatus.SAVED:
-        return f"아이가 미션 결과를 제출했어. 결과: {result_kor}. 자연스럽게 받아주고 기록됐다고 알려줘."
+        if result.result_type == "success":
+            return f"아이가 미션을 성공했어. 짧게 칭찬해줘."
+        return f"아이가 미션 결과를 제출했어. 결과: {result_kor}. 따뜻하게 받아줘."
     if result.status is SubmitStatus.ALREADY_SUBMITTED:
-        return f"아이가 미션 결과를 제출했어. 결과: {result_kor}. 오늘 이미 제출한 기록이 있어. 자연스럽게 알려줘."
+        return "아이가 미션 결과를 다시 제출하려 했어. 짧게 응원 한 마디만 해줘."
     if result.status is SubmitStatus.NO_MISSION:
         return "아이가 미션 결과를 제출했어. 오늘 배정된 미션이 없다고 알려줘."
     # DB_ERROR
@@ -78,11 +80,39 @@ def build_submit_hint(result: SubmitResult) -> str:
 def build_adjustment_hint(result: AdjustmentResult) -> str:
     label = {"easier": "더 쉬운", "harder": "더 어려운"}.get(result.adjustment_type or "", "다른")
     if result.status is AdjustmentStatus.CHANGED:
-        lines = [f"아이가 {label} 미션으로 변경을 요청했어. 아래 새 미션으로 바뀌었다고 알려줘.\n"]
-        lines.append(f"새 미션명: {result.new_mission_name}")
+        empathy = {
+            "easier": "이전 미션이 조금 어려웠을 수 있다는 점을 한 문장으로 짧게 받아준다.",
+            "harder": "아이가 조금 더 도전해보고 싶은 마음을 한 문장으로 짧게 받아준다.",
+            "change": "아이가 다른 미션으로 해보고 싶은 마음을 한 문장으로 짧게 받아준다.",
+        }.get(result.adjustment_type or "", "아이가 다른 미션으로 해보고 싶은 마음을 한 문장으로 짧게 받아준다.")
+        lines = [
+            "[미션 변경 완료 후 설명]",
+            '서버가 이미 "미션을 바꿔뒀어!"라고 안내했다.',
+            "아래 정보를 이전 미션과 새 미션으로 정확히 구분해서 답한다.",
+            f"변경 유형: {result.adjustment_type or 'change'} ({label} 미션)",
+            "",
+            "[이전 미션]",
+            f"미션명: {result.old_mission_name or ''}",
+        ]
+        if result.old_mission_rule:
+            lines.append(f"규칙: {result.old_mission_rule}")
+        lines.extend([
+            "",
+            "[새 미션]",
+            f"미션명: {result.new_mission_name or ''}",
+        ])
         if result.new_mission_rule:
-            lines.append(f"수행 규칙: {result.new_mission_rule}")
+            lines.append(f"규칙: {result.new_mission_rule}")
+        lines.extend([
+            "",
+            "응답 순서:",
+            f"1. {empathy}",
+            "2. 새 미션명을 말한다.",
+            "3. 새 미션 규칙을 아이가 이해하기 쉽게 1~2문장으로 설명한다.",
+        ])
         return "\n".join(lines)
+    if result.status is AdjustmentStatus.ALREADY_SUBMITTED:
+        return "아이가 미션 변경을 요청했어. 짧게 공감해줘."
     if result.status is AdjustmentStatus.NO_ALTERNATIVE:
         return f"아이가 {label} 미션을 요청했어. 같은 카테고리에 {label} 미션이 없어. 현재 미션을 계속하도록 안내해줘."
     if result.status is AdjustmentStatus.NO_MISSION:
@@ -93,11 +123,11 @@ def build_adjustment_hint(result: AdjustmentResult) -> str:
 
 def build_cancel_hint(result: CancelResult) -> str:
     if result.status is CancelStatus.CANCELLED_SUBMIT:
-        return "아이가 요청해서 직전 제출이 취소됐어. 취소됐다고 자연스럽게 알려줘."
+        return "아이가 직전 제출을 취소했어. 짧게 자연스럽게 받아줘."
     if result.status is CancelStatus.CANCELLED_ADJUSTMENT:
-        return "아이가 요청해서 직전 미션 변경이 취소됐어. 원래 미션으로 돌아갔다고 알려줘."
+        return "아이가 직전 미션 변경을 취소했어. 원래 미션으로 돌아간 상황이야. 자연스럽게 받아줘."
     if result.status is CancelStatus.NOTHING_TO_CANCEL:
-        return "아이가 취소를 요청했는데 취소할 기록이 없어. 자연스럽게 알려줘."
+        return "아이가 취소를 요청했어. 짧게 자연스럽게 받아줘."
     # DB_ERROR
     return "아이가 취소를 요청했는데 처리 중 문제가 생겼어. 잠시 후 다시 시도해달라고 안내해줘."
 
@@ -181,7 +211,10 @@ def build_fn_hint(detected_function: str, fn_args: dict) -> str:
     """프로필 없을 때 폴백용 제네릭 힌트."""
     if detected_function == "submit_mission_result":
         result_kor = {"success": "결과: 완료.", "fail": "결과: 수행 실패."}.get(fn_args.get("result_type", ""), "")
-        return f"아이가 미션 결과를 제출했어. {result_kor} 자연스럽게 받아주고 기록됐다고 알려줘."
+        return (
+            f"아이가 미션 결과를 제출했어. {result_kor} 자연스럽게 받아줘.\n"
+            "중요: DB 실행 결과가 없으므로 기록됐다고 말하지 마."
+        )
     if detected_function == "get_mission_info":
         return {
             "today": "아이가 오늘 미션 내용을 물어봤어. 오늘 미션을 친절하게 안내해줘.",
@@ -189,11 +222,12 @@ def build_fn_hint(detected_function: str, fn_args: dict) -> str:
             "general_rule": "아이가 앱 규칙을 물어봤어. 제출·인증·판정 규칙을 안내해줘.",
         }.get(fn_args.get("query_type", ""), "아이가 미션 정보를 물어봤어. 친절하게 안내해줘.")
     if detected_function == "request_mission_adjustment":
-        return {
+        adjustment_hint = {
             "change": "아이가 다른 미션으로 바꿔달라고 했어. 요청을 접수했다고 알려줘.",
             "easier": "아이가 더 쉬운 미션을 요청했어. 요청을 접수했다고 알려줘.",
             "harder": "아이가 더 어려운 미션을 요청했어. 요청을 접수했다고 알려줘.",
         }.get(fn_args.get("adjustment_type", ""), "아이가 미션 조정을 요청했어. 요청을 접수했다고 알려줘.")
+        return f"{adjustment_hint}\n중요: DB 실행 결과가 없으므로 미션이 바뀌었다고 말하지 마."
     if detected_function == "check_mission_equivalency":
         return {
             "behavior": "아이가 다른 행동으로 수행해도 되는지 물어봤어. 대체 수행 가능 여부를 안내해줘.",
@@ -206,7 +240,10 @@ def build_fn_hint(detected_function: str, fn_args: dict) -> str:
             "monthly_summary": "아이가 이번 달 미션 기록을 조회했어. 월간 기록을 안내해줘.",
         }.get(fn_args.get("query_type", ""), "아이가 미션 기록을 조회했어. 기록을 안내해줘.")
     if detected_function == "cancel_mission_action":
-        return "아이가 가장 최근 행동을 취소하려고 해. 취소됐다고 자연스럽게 알려줘."
+        return (
+            "아이가 가장 최근 행동을 취소하려고 해. 자연스럽게 받아줘.\n"
+            "중요: DB 실행 결과가 없으므로 취소됐다고 말하지 마."
+        )
     return f"아이가 '{detected_function}' 기능을 요청했어. 자연스럽게 응답해줘."
 
 

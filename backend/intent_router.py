@@ -18,6 +18,17 @@ ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gemma4:e2b")
 
 IntentLabel = Literal["A", "B", "C", "D"]
 
+_HEALTH_QUESTION_RE = re.compile(
+    r"(왜|어떻게|좋아|좋아요|나빠|나빠요|건강|효과|도움|중요|필요|영양|칼로리|키가|살이|아파|통증)"
+)
+_MISSION_COMMAND_RE = re.compile(
+    r"(미션|제출|성공|완료|실패|취소|바꿔|변경|쉽게|어렵게|조회|기록|마감|규칙|기준|인증)"
+)
+_NUMERIC_REPORT_RE = re.compile(
+    r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
+    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
+)
+
 _INTENT_SYSTEM = _INTENT_SYSTEM = """너는 초등학생 AI 생활습관 코치 앱의 인텐트 분류기야.
 사용자 메시지를 읽고 아래 중 하나만 답해.
 
@@ -122,11 +133,16 @@ async def split_multi_intent(user_message: str) -> list[str]:
         return [user_message]
     if len(parts) > 2:
         parts = parts[:2]
-    print(f"[IntentRouter] 문장 분리: '{user_message[:30]}' → {parts}")
     return parts
 
 
-async def classify_intent(user_message: str) -> IntentLabel:
+async def classify_intent(user_message: str, mission_name: str = "") -> IntentLabel:
+    use_mission_context = (
+        bool(mission_name)
+        and mission_name != "오늘의 미션"
+        and _HEALTH_QUESTION_RE.search(user_message) is None
+    )
+    prompt_message = f"[오늘 미션: {mission_name}]\n{user_message}" if use_mission_context else user_message
     url = f"{OLLAMA_BASE_URL}/api/chat"
     payload = {
         "model": ROUTER_MODEL,
@@ -134,7 +150,7 @@ async def classify_intent(user_message: str) -> IntentLabel:
         "think": False,
         "messages": [
             {"role": "system", "content": _INTENT_SYSTEM},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": prompt_message},
         ],
     }
     try:
@@ -148,5 +164,4 @@ async def classify_intent(user_message: str) -> IntentLabel:
 
     match = re.search(r"\b([ABCD])\b", raw.upper())
     label: IntentLabel = match.group(1) if match else "D"  # type: ignore[assignment]
-    print(f"[IntentRouter] '{user_message[:30]}' → {label}")
     return label

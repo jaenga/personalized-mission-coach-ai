@@ -16,7 +16,90 @@ from ollama_client import generate_chat_message, generate_chat_message_stream, O
 from rag import search_rag, preload_model
 from sheets import update_mission_result, cancel_mission_result, generate_daily_status
 from qwen_client import preload_qwen
-from executor import SubmitStatus, CancelStatus, ExecResults, execute_submit
+from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
+from response_builder import ResponseMode, build_action_ack, build_conflict_ack
+from prompts import CLARIFY_HINT_MISSION_REPORT
+
+def _needs_history_for_action(fn_calls: list[tuple[str, dict]]) -> bool:
+    return any(fn == "submit_mission_result" for fn, _ in fn_calls)
+
+
+def _save_message_safe(session_id: str, role: str, content: str, detected_function: str | None = None) -> int:
+    try:
+        return save_message(session_id, role, content, detected_function)
+    except Exception as e:
+        print(f"[Chat] message save failed role={role} error={type(e).__name__}: {e}")
+        return 0
+
+
+def _short(text: str | None, limit: int = 90) -> str:
+    if not text:
+        return ""
+    one_line = " ".join(str(text).split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
+def _fn_label(fn: str, args: dict | None = None) -> str:
+    args = args or {}
+    if fn == "submit_mission_result":
+        return f"submit({args.get('result_type', '?')})"
+    if fn == "request_mission_adjustment":
+        return f"adjust({args.get('adjustment_type', '?')})"
+    if fn == "cancel_mission_action":
+        return "cancel"
+    if fn == "get_mission_info":
+        return f"mission_info({args.get('query_type', '?')})"
+    if fn == "get_user_history":
+        return f"history({args.get('query_type', '?')})"
+    if fn == "check_mission_equivalency":
+        return f"equiv({args.get('equivalency_type', '?')})"
+    return fn
+
+
+def _fn_list(fn_calls: list[tuple[str, dict]]) -> str:
+    return ", ".join(_fn_label(fn, args) for fn, args in fn_calls) or "-"
+
+
+def _response_mode_label(action_ack, eq_submit: bool) -> str:
+    if action_ack:
+        return action_ack.mode.value
+    if eq_submit:
+        return "equivalency"
+    return "gemma"
+
+
+def _strip_leading_ack(text: str, ack_message: str) -> str:
+    """Gemma가 서버 확정 안내문을 반복하면 앞부분에서 제거한다."""
+    if not text or not ack_message:
+        return text
+
+    stripped = text.lstrip()
+    candidates = {
+        ack_message,
+        ack_message.rstrip(" ✅❌🔄↩️⚠️"),
+    }
+    for candidate in sorted(candidates, key=len, reverse=True):
+        if candidate and stripped.startswith(candidate):
+            stripped = stripped[len(candidate):].lstrip()
+            if stripped.startswith(("\n", ".", "!", "！")):
+                stripped = stripped[1:].lstrip()
+            print(f"[Response] stripped repeated prefix={_short(candidate)!r}")
+            return stripped
+    return text
+
+
+def _gemma_user_message(original_message: str, exec_results: ExecResults | None) -> str:
+    """DB 실행 후 Gemma가 원문 요청보다 실행 결과에 집중하도록 user message를 보정한다."""
+    if exec_results and exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
+        result = exec_results.adjustment
+        return "\n".join([
+            "방금 미션 변경이 완료됐어.",
+            "이전 미션에 대해 짧게 받아주고, 새 미션을 앞으로 할 미션으로 설명해줘.",
+            f"이전 미션: {result.old_mission_name or ''}",
+            f"새 미션: {result.new_mission_name or ''}",
+        ])
+    return original_message
+
 
 # ── 펑션별 Gemma 힌트 ──────────────────────────────────────────────────────────
 
@@ -186,18 +269,24 @@ def _finalize_equivalency_response(
         if student_id and pending_submit_args:
             submit_result = execute_submit(student_id, pending_submit_args)
             exec_results.submit = submit_result
-            suffix = {
-                SubmitStatus.SAVED: "성공으로 기록했어.",
-                SubmitStatus.ALREADY_SUBMITTED: "오늘은 이미 제출한 기록이 있어.",
-                SubmitStatus.NO_MISSION: "오늘 배정된 미션이 없어서 기록하지는 못했어.",
-                SubmitStatus.DB_ERROR: "기록 중 문제가 생겼어. 잠시 후 다시 시도해 줘.",
-            }[submit_result.status]
-            return f"{ai_message}\n{suffix}".strip()
+            ack = build_action_ack(exec_results)
+            if not ack:
+                return ai_message
+            return f"{ai_message}\n{ack.message}".strip()
         return ai_message
 
     if "[DENIED]" in ai_message:
         return ai_message.replace("[DENIED]", "").strip()
 
+    return ai_message
+
+
+def _prepend_db_action_ack(ai_message: str, exec_results: ExecResults | None) -> str:
+    ack = build_action_ack(exec_results)
+    if ack and ack.message and not ai_message.startswith(ack.message):
+        ai_message = _strip_leading_ack(ai_message, ack.message)
+        print(f"[Response] prefix={_short(ack.message)!r}")
+        return f"{ack.message}\n{ai_message}".strip()
     return ai_message
 
 
@@ -212,12 +301,13 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     from pipeline import (
-        step_classify, step_extract_functions, step_execute, step_build_hints,
-        classify_multi, is_equivalency_submit,
+        step_classify, step_normalize_b_input, step_extract_functions,
+        step_execute, step_build_hints, classify_multi, is_equivalency_submit,
     )
 
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
+    print(f"\n[Chat] <- {_short(body.message)!r} session={body.session_id[:8]}")
 
     intent = "A"
     fn_calls: list[tuple[str, dict]] = []
@@ -226,18 +316,24 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     rag_result: dict = {"chunks": [], "faqs": [], "context": ""}
     intent_ms = 0
     qwen_ms = 0
+    clarify_hint_override = ""
 
     if not is_greet:
-        # ── 1. 인텐트 분류 ─────────────────────────────────────────────────────
-        intent, intent_ms = await step_classify(body.message)
+        # ── 1. 인텐트 분류 (미션명 컨텍스트 포함) ──────────────────────────────
+        intent, intent_ms = await step_classify(body.message, mission_title)
 
         # ── 2. 인텐트별 모듈 ───────────────────────────────────────────────────
         if intent == "B":
-            fn_calls, qwen_ms = await step_extract_functions(body.message)
-            detected_function = fn_calls[0][0] if fn_calls else None
-            fn_args = fn_calls[0][1] if fn_calls else {}
-            print(f"[Chat] B-route: calls={fn_calls}")
-        elif intent == "C":
+            qwen_input, should_clarify = step_normalize_b_input(body.message, mission_title)
+            if should_clarify:
+                intent = "D"
+                clarify_hint_override = CLARIFY_HINT_MISSION_REPORT
+                print("[Route] B -> D clarify (mission report)")
+            else:
+                fn_calls, qwen_ms = await step_extract_functions(qwen_input)
+                detected_function = fn_calls[0][0] if fn_calls else None
+                fn_args = fn_calls[0][1] if fn_calls else {}
+        if intent == "C":
             try:
                 rag_result = search_rag(body.message)
             except Exception as e:
@@ -247,51 +343,73 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     combo = classify_multi(fn_calls) if fn_calls else None
     profile = fetch_profile(body.session_id)
     student_id = profile["student_id"] if profile else None
+    print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     exec_results = None
     pending_submit_args = None
 
     if student_id and fn_calls:
         exec_results, fn_calls, pending_submit_args, combo = step_execute(student_id, fn_calls, combo)
+    elif fn_calls:
+        print("[DB] skipped: missing student_id")
+    if combo == "conflict":
+        detected_function = None
 
     # ── 4. hint builder (시스템 프롬프트 조립) ─────────────────────────────────
     system_prompt = step_build_hints(
         student_id=student_id,
         fn_calls=fn_calls,
-        exec_results=exec_results or __import__("executor").ExecResults(),
+        exec_results=exec_results or ExecResults(),
         combo=combo,
         mission_title=mission_title,
         rag_context=rag_result["context"],
         intent=intent,
         is_greet=is_greet,
+        clarify_hint_override=clarify_hint_override,
     )
+    print(f"[Prompt] function_results={'Y' if '[기능 실행 결과]' in system_prompt else 'N'}")
 
     # ── 5. history fetch → LLM 호출 ───────────────────────────────────────────
-    history = fetch_messages(body.session_id)
-    if not is_greet:
-        history.append({"role": "user", "content": body.message})
-    messages = history if history else [
-        {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
-    ]
+    gemma_user_message = _gemma_user_message(body.message, exec_results)
+    if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
+        messages = [{"role": "user", "content": gemma_user_message}]
+    else:
+        history = fetch_messages(body.session_id)
+        if not is_greet:
+            history.append({"role": "user", "content": gemma_user_message})
+        messages = history if history else [
+            {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
+        ]
 
-    try:
-        ai_message, call1_ms = await generate_chat_message(system_prompt, messages)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
-
-    # ── 6. equivalency→submit 후처리 (LLM 판단 후 DB 저장) ────────────────────
     eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
-    if eq_submit and exec_results:
-        ai_message = _finalize_equivalency_response(
-            ai_message,
-            student_id,
-            pending_submit_args,
-            exec_results,
-        )
+    action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
+    llm_only = ""
+    call1_ms = 0
+    if action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
+        ai_message = action_ack.message
+    else:
+        try:
+            ai_message, call1_ms = await generate_chat_message(system_prompt, messages)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
 
-    # ── 7. 메시지 저장 ────────────────────────────────────────────────────────
+        # ── 6. equivalency→submit 후처리 (LLM 판단 후 DB 저장) ────────────────────
+        if eq_submit and exec_results:
+            ai_message = _finalize_equivalency_response(
+                ai_message,
+                student_id,
+                pending_submit_args,
+                exec_results,
+            )
+
+        llm_only = ai_message
+        if not eq_submit and action_ack and action_ack.mode is ResponseMode.PREFIX_WITH_GEMMA:
+            ai_message = _prepend_db_action_ack(ai_message, exec_results)
+    print(f"[Chat] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
+
+    # ── 7. 메시지 저장 (history에는 server prefix 제외한 LLM 응답만 저장) ──────
     if not is_greet:
-        save_message(body.session_id, "user", body.message, detected_function)
-    save_message(body.session_id, "assistant", ai_message)
+        _save_message_safe(body.session_id, "user", body.message, detected_function)
+    _save_message_safe(body.session_id, "assistant", llm_only or ai_message)
 
     user_input = body.message if not is_greet else ""
     violations = detect_violations(ai_message, user_input)
@@ -342,12 +460,13 @@ async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks):
     import json as _json
     from pipeline import (
-        step_classify, step_extract_functions, step_execute, step_build_hints,
-        classify_multi, is_equivalency_submit,
+        step_classify, step_normalize_b_input, step_extract_functions,
+        step_execute, step_build_hints, classify_multi, is_equivalency_submit,
     )
 
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
+    print(f"\n[Stream] <- {_short(body.message)!r} session={body.session_id[:8]}")
 
     async def event_stream():
         intent = "A"
@@ -359,20 +478,27 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         qwen_ms = 0
         rag_ms = 0
         t_total = time.perf_counter()
+        clarify_hint_override = ""
 
         if not is_greet:
-            # ── Stage 1: 인텐트 분류 ────────────────────────────────────────
-            intent, intent_ms = await step_classify(body.message)
+            # ── Stage 1: 인텐트 분류 (미션명 컨텍스트 포함) ─────────────────
+            intent, intent_ms = await step_classify(body.message, mission_title)
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
             # ── Stage 2: 인텐트별 모듈 ──────────────────────────────────────
             if intent == "B":
-                fn_calls, qwen_ms = await step_extract_functions(body.message)
-                detected_function = fn_calls[0][0] if fn_calls else None
-                fn_args = fn_calls[0][1] if fn_calls else {}
-                yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'calls': [[fn, args] for fn, args in fn_calls], 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
-            elif intent == "C":
+                qwen_input, should_clarify = step_normalize_b_input(body.message, mission_title)
+                if should_clarify:
+                    intent = "D"
+                    clarify_hint_override = CLARIFY_HINT_MISSION_REPORT
+                    print("[Route] B -> D clarify (mission report)")
+                else:
+                    fn_calls, qwen_ms = await step_extract_functions(qwen_input)
+                    detected_function = fn_calls[0][0] if fn_calls else None
+                    fn_args = fn_calls[0][1] if fn_calls else {}
+                    yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'calls': [[fn, args] for fn, args in fn_calls], 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
+            if intent == "C":
                 try:
                     t_rag = time.perf_counter()
                     rag_result = search_rag(body.message)
@@ -386,11 +512,16 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
         combo = classify_multi(fn_calls) if fn_calls else None
         profile = fetch_profile(body.session_id)
         student_id = profile["student_id"] if profile else None
+        print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
         exec_results = ExecResults()
         pending_submit_args = None
 
         if student_id and fn_calls:
             exec_results, fn_calls, pending_submit_args, combo = step_execute(student_id, fn_calls, combo)
+        elif fn_calls:
+            print("[DB] skipped: missing student_id")
+        if combo == "conflict":
+            detected_function = None
 
         system_prompt = step_build_hints(
             student_id=student_id,
@@ -401,65 +532,119 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
             rag_context=rag_result["context"],
             intent=intent,
             is_greet=is_greet,
+            clarify_hint_override=clarify_hint_override,
         )
+        print(f"[Prompt] function_results={'Y' if '[기능 실행 결과]' in system_prompt else 'N'}")
 
         # 이전 히스토리 fetch → 현재 user 메시지 append (DB 저장은 LLM 응답 후)
-        history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
-        if not is_greet:
-            history.append({"role": "user", "content": body.message})
-
-        messages = history if history else [
-            {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
-        ]
+        gemma_user_message = _gemma_user_message(body.message, exec_results)
+        if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
+            messages = [{"role": "user", "content": gemma_user_message}]
+        else:
+            history = [{"role": m["role"], "content": m["content"]} for m in fetch_messages(body.session_id)]
+            if not is_greet:
+                history.append({"role": "user", "content": gemma_user_message})
+            messages = history if history else [
+                {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
+            ]
 
         yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'generating'}, ensure_ascii=False)}\n\n"
 
         # ── Stage 4: 토큰 스트리밍 ───────────────────────────────────────────
-        ai_message = ""
         t_gen = time.perf_counter()
         _TAG_MARKERS = ("[APPROVED]", "[DENIED]")
         eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
-        token_buf = ""
-        try:
-            async for token in generate_chat_message_stream(system_prompt, messages):
-                ai_message += token
-                if eq_submit:
-                    token_buf += token
-                    for tag in _TAG_MARKERS:
-                        if tag in token_buf:
-                            token_buf = token_buf.replace(tag, "")
-                    if "[" not in token_buf:
-                        if token_buf:
-                            yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
-                        token_buf = ""
-                else:
-                    yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-            return
-        if token_buf:
-            for tag in _TAG_MARKERS:
-                token_buf = token_buf.replace(tag, "")
-            if token_buf.strip():
-                yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
+        action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
+        server_prefix = (
+            action_ack.message
+            if action_ack and action_ack.mode is ResponseMode.PREFIX_WITH_GEMMA
+            else ""
+        )
+        ai_message = ""
+        llm_message = ""
+        prefix_buffer_mode = bool(server_prefix) and not eq_submit
+
+        if action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
+            ai_message = action_ack.message
+            yield f"data: {_json.dumps({'type': 'token', 'content': ai_message}, ensure_ascii=False)}\n\n"
+        else:
+            if server_prefix:
+                print(f"[Response] prefix={_short(server_prefix)!r}")
+                ai_message = f"{server_prefix}\n"
+                yield f"data: {_json.dumps({'type': 'token', 'content': ai_message}, ensure_ascii=False)}\n\n"
+
+            token_buf = ""
+            # lookahead: prefix만큼 버퍼링 후 에코 제거, 이후 즉시 yield
+            lookahead_limit = len(server_prefix) + 10 if server_prefix else 0
+            lookahead_buf = ""
+            prefix_echo_handled = not prefix_buffer_mode
+            try:
+                async for token in generate_chat_message_stream(system_prompt, messages):
+                    llm_message += token
+
+                    if not prefix_echo_handled:
+                        lookahead_buf += token
+                        if len(lookahead_buf) >= lookahead_limit:
+                            cleaned = _strip_leading_ack(lookahead_buf, server_prefix)
+                            prefix_echo_handled = True
+                            ai_message += cleaned
+                            if cleaned.strip():
+                                yield f"data: {_json.dumps({'type': 'token', 'content': cleaned}, ensure_ascii=False)}\n\n"
+                        continue
+
+                    ai_message += token
+                    if eq_submit:
+                        token_buf += token
+                        for tag in _TAG_MARKERS:
+                            if tag in token_buf:
+                                token_buf = token_buf.replace(tag, "")
+                        if "[" not in token_buf:
+                            if token_buf:
+                                yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
+                            token_buf = ""
+                    else:
+                        yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                return
+            # 스트림이 짧아 lookahead 버퍼를 다 못 소진한 경우
+            if not prefix_echo_handled and lookahead_buf:
+                cleaned = _strip_leading_ack(lookahead_buf, server_prefix)
+                ai_message += cleaned
+                if cleaned.strip():
+                    yield f"data: {_json.dumps({'type': 'token', 'content': cleaned}, ensure_ascii=False)}\n\n"
+            elif token_buf:
+                for tag in _TAG_MARKERS:
+                    token_buf = token_buf.replace(tag, "")
+                if token_buf.strip():
+                    yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
 
         gen_ms = round((time.perf_counter() - t_gen) * 1000)
 
         # ── equivalency→submit 태그 감지 + 후처리 ────────────────────────────
-        if "[APPROVED]" in ai_message:
-            print("[eq-tag] APPROVED 감지 → 저장 결과 반영 예정")
-        elif "[DENIED]" in ai_message:
-            print("[eq-tag] DENIED 감지 → 저장 안 함")
+        if "[APPROVED]" in llm_message:
+            print("[Equiv] approved")
+        elif "[DENIED]" in llm_message:
+            print("[Equiv] denied")
         elif eq_submit:
-            print(f"[eq-tag] 태그 없음! 응답 끝부분: ...{ai_message[-80:]}")
+            print(f"[Equiv] missing tag tail={_short(llm_message[-80:])!r}")
 
         if eq_submit:
-            ai_message = _finalize_equivalency_response(
-                ai_message,
+            visible_before_finalize = (
+                llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
+            )
+            finalized_message = _finalize_equivalency_response(
+                llm_message,
                 student_id,
                 pending_submit_args,
                 exec_results,
             )
+            if finalized_message.startswith(visible_before_finalize):
+                finalize_suffix = finalized_message[len(visible_before_finalize):]
+                if finalize_suffix.strip():
+                    yield f"data: {_json.dumps({'type': 'token', 'content': finalize_suffix}, ensure_ascii=False)}\n\n"
+            ai_message = finalized_message
+        print(f"[Stream] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
 
         total_ms = round((time.perf_counter() - t_total) * 1000)
         user_input = body.message if not is_greet else ""
@@ -483,8 +668,9 @@ async def post_chat_stream(body: ChatRequest, background_tasks: BackgroundTasks)
 
         # ── 후처리: 메시지 저장 + 시트 동기화 ────────────────────────────────
         if not is_greet:
-            save_message(body.session_id, "user", body.message, detected_function)
-        save_message(body.session_id, "assistant", ai_message)
+            _save_message_safe(body.session_id, "user", body.message, detected_function)
+        llm_save = llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
+        _save_message_safe(body.session_id, "assistant", llm_save or ai_message)
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type
