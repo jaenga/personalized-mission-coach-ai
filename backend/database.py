@@ -8,6 +8,13 @@ load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+DEMO_MISSION_IDS = [
+    8, 33, 43, 51, 62, 64, 67, 87, 98,
+    112, 130, 150, 153, 154, 155, 159, 192,
+]
+
 
 def get_conn():
     conn = psycopg2.connect(DATABASE_URL)
@@ -26,6 +33,28 @@ def init_db():
                     created_at    TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS demo_mission (
+                    order_no INTEGER PRIMARY KEY,
+                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
+                cur.execute("""
+                    INSERT INTO demo_mission (order_no, mission_id, is_active)
+                    VALUES (%s, %s, TRUE)
+                    ON CONFLICT (order_no) DO UPDATE
+                        SET mission_id = EXCLUDED.mission_id,
+                            is_active = TRUE
+                """, (idx, mission_id))
+            cur.execute("SELECT to_regclass('public.student_daily_missions')")
+            if cur.fetchone()[0]:
+                cur.execute("""
+                    ALTER TABLE student_daily_missions
+                    ADD COLUMN IF NOT EXISTS assigned_by TEXT DEFAULT 'system'
+                """)
             cur.execute("SELECT to_regclass('public.checkin_log')")
             if cur.fetchone()[0]:
                 cur.execute("""
@@ -71,6 +100,49 @@ def get_student_by_credentials(student_name: str, phone_last4: str) -> dict | No
 
 
 # ── 채팅 세션 (chat_sessions 테이블) ──────────────────────────────────────────
+
+def create_demo_student(student_name: str, phone_last4: str) -> dict:
+    """
+    Create a demo signup student in the existing students table.
+    New demo signups are marked with student_note = '신규 가입'.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM students
+                WHERE student_name = %s
+                  AND is_active = TRUE
+                """,
+                (student_name,),
+            )
+            rows = cur.fetchall()
+
+            for row in rows:
+                phone = str(row.get("phone_number", "")).replace("-", "")
+                if phone[-4:] == phone_last4:
+                    return dict(row)
+
+            cur.execute("""
+                INSERT INTO students (
+                    student_name,
+                    phone_number,
+                    age,
+                    gender,
+                    location,
+                    is_active,
+                    student_note
+                )
+                VALUES (%s, %s, NULL, '', '', TRUE, '신규 가입')
+                RETURNING *
+            """, (student_name, phone_last4))
+            student = cur.fetchone()
+
+        conn.commit()
+
+    return dict(student)
+
 
 def create_chat_session(student_id: int) -> int:
     with get_conn() as conn:
@@ -245,6 +317,90 @@ def assign_daily_missions() -> int:
 
 
 # ── 오늘의 미션 (student_daily_missions + missions 테이블) ─────────────────────
+
+def assign_demo_mission_on_signup(student_id: int) -> dict | None:
+    """
+    Assign active demo missions in order to demo students.
+    The sequence wraps after the last active demo_mission row.
+    """
+    today = _kst_today()
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(20260502)")
+
+            cur.execute("""
+                SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
+                       m.main_category, m.sub_category,
+                       m.mission_location, m.reward_xp, m.mission_group,
+                       m.mission_rule, sdm.status
+                FROM student_daily_missions sdm
+                JOIN missions m ON sdm.mission_id = m.mission_id
+                WHERE sdm.student_id = %s
+                  AND sdm.assigned_date = %s::date
+            """, (student_id, today))
+            existing = cur.fetchone()
+            if existing:
+                conn.commit()
+                return dict(existing)
+
+            cur.execute("""
+                SELECT COUNT(*) AS assigned_count
+                FROM student_daily_missions sdm
+                JOIN demo_mission dm ON sdm.mission_id = dm.mission_id
+                WHERE sdm.assigned_date = %s::date
+                  AND sdm.assigned_by = 'demo'
+                  AND dm.is_active = TRUE
+            """, (today,))
+            assigned_count = cur.fetchone()["assigned_count"]
+
+            cur.execute("""
+                SELECT mission_id
+                FROM demo_mission
+                WHERE is_active = TRUE
+                ORDER BY order_no
+            """)
+            pool = [row["mission_id"] for row in cur.fetchall()]
+
+            if not pool:
+                conn.commit()
+                return None
+
+            next_mission_id = pool[assigned_count % len(pool)]
+
+            cur.execute("""
+                INSERT INTO student_daily_missions (
+                    student_id,
+                    mission_id,
+                    assigned_date,
+                    status,
+                    assigned_by
+                )
+                SELECT %s, %s, %s::date, 'assigned', 'demo'
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM student_daily_missions
+                    WHERE student_id = %s
+                      AND assigned_date = %s::date
+                )
+            """, (student_id, next_mission_id, today, student_id, today))
+
+            cur.execute("""
+                SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
+                       m.main_category, m.sub_category,
+                       m.mission_location, m.reward_xp, m.mission_group,
+                       m.mission_rule, sdm.status
+                FROM student_daily_missions sdm
+                JOIN missions m ON sdm.mission_id = m.mission_id
+                WHERE sdm.student_id = %s
+                  AND sdm.assigned_date = %s::date
+            """, (student_id, today))
+            mission = cur.fetchone()
+
+        conn.commit()
+
+    return dict(mission) if mission else None
+
 
 def get_student_mission_db(student_id: int, today: str | None = None) -> dict | None:
     if today is None:

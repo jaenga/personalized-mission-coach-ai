@@ -7,6 +7,7 @@ from app_services import (
     get_chat_messages,
     get_today_mission,
     get_user_profile,
+    register_demo_student,
     save_user_profile,
     startup_tasks,
     verify_student,
@@ -43,6 +44,11 @@ async def shutdown():
 @app.post("/verify-student")
 def post_verify_student(body: VerifyRequest):
     return verify_student(body)
+
+
+@app.post("/demo-register-student")
+def post_demo_register_student(body: VerifyRequest):
+    return register_demo_student(body)
 
 
 @app.post("/profile")

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
+import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
 
@@ -35,6 +35,8 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [signupPopupOpen, setSignupPopupOpen] = useState(false);
+  const [farewellMessage, setFarewellMessage] = useState("");
 
   // 미션 로드 (프로필 확정 후)
   useEffect(() => {
@@ -67,18 +69,64 @@ export default function App() {
   async function handleLogin(e) {
     e.preventDefault();
     setLoginError("");
+    setFarewellMessage("");
     setLoginLoading(true);
     try {
       const student = await verifyStudent(loginForm.name.trim(), loginForm.phone4.trim());
-      await saveProfile(sessionId, student.student_id, student.student_name);
+      const profileResult = await saveProfile(sessionId, student.student_id, student.student_name);
       const saved = { student_id: student.student_id, student_name: student.student_name };
       localStorage.setItem("user_profile", JSON.stringify(saved));
       setProfile(saved);
+      if (profileResult.mission) {
+        setMission(profileResult.mission);
+      }
     } catch (err) {
-      setLoginError(err.message);
+      if (err.status === 404 || err.message.includes("일치하는 학생")) {
+        setSignupPopupOpen(true);
+      } else {
+        setLoginError(err.message);
+      }
     } finally {
       setLoginLoading(false);
     }
+  }
+
+  async function handleSignupAgree() {
+    setLoginError("");
+    setFarewellMessage("");
+    setLoginLoading(true);
+
+    try {
+      const result = await registerDemoStudent(loginForm.name.trim(), loginForm.phone4.trim());
+      const student = result.student;
+
+      await saveProfile(sessionId, student.student_id, student.student_name);
+
+      const saved = { student_id: student.student_id, student_name: student.student_name };
+      localStorage.setItem("user_profile", JSON.stringify(saved));
+      setSignupPopupOpen(false);
+      setProfile(saved);
+
+      if (result.mission) {
+        setMission(result.mission);
+      }
+    } catch (err) {
+      setLoginError(err.message);
+      setSignupPopupOpen(false);
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  function handleSignupCancel() {
+    setSignupPopupOpen(false);
+    setFarewellMessage("다음에 만나요!");
+
+    setTimeout(() => {
+      setFarewellMessage("");
+      setLoginForm({ name: "", phone4: "" });
+      setLoginError("");
+    }, 1200);
   }
 
   async function handleReset() {
@@ -97,6 +145,8 @@ export default function App() {
     setSelectedDebugId(null);
     setLoginForm({ name: "", phone4: "" });
     setLoginError("");
+    setSignupPopupOpen(false);
+    setFarewellMessage("");
   }
 
   async function requestGreeting(missionTitle) {
@@ -233,6 +283,41 @@ export default function App() {
               {loginLoading ? "확인 중..." : "시작하기"}
             </button>
           </form>
+          {farewellMessage && (
+            <p className="farewell-message">{farewellMessage}</p>
+          )}
+
+          {signupPopupOpen && (
+            <div className="signup-modal-backdrop">
+              <div className="signup-modal">
+                <h3>회원가입 하기</h3>
+                <p>
+                  아직 등록된 친구가 아니야.<br />
+                  지금 바로 회원가입하고 오늘의 미션을 받아볼래?
+                </p>
+
+                <div className="signup-modal-actions">
+                  <button
+                    type="button"
+                    className="signup-yes-btn"
+                    onClick={handleSignupAgree}
+                    disabled={loginLoading}
+                  >
+                    좋아요
+                  </button>
+
+                  <button
+                    type="button"
+                    className="signup-no-btn"
+                    onClick={handleSignupCancel}
+                    disabled={loginLoading}
+                  >
+                    안할래요
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );

@@ -93,8 +93,31 @@ export async function verifyStudent(studentName, phoneLast4) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ student_name: studentName, phone_last4: phoneLast4 }),
   });
-  if (res.status === 404) throw new Error("일치하는 학생을 찾을 수 없어요.");
+  if (res.status === 404) {
+    const err = new Error("일치하는 학생을 찾을 수 없어요.");
+    err.status = 404;
+    throw err;
+  }
   if (!res.ok) throw new Error("확인 중 오류가 발생했어요.");
+  return res.json();
+}
+
+/** 시연용 신규 학생 회원가입. */
+export async function registerDemoStudent(studentName, phoneLast4) {
+  const res = await fetch("/demo-register-student", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_name: studentName,
+      phone_last4: phoneLast4,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "회원가입 중 오류가 발생했어요.");
+  }
+
   return res.json();
 }
 
