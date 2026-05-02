@@ -14,13 +14,13 @@ from executor import (
 )
 
 _ADJUSTMENT_ALREADY_SUBMITTED_MSG = "오늘 이미 미션 결과를 제출했어! 제출 후에는 미션을 바꿀 수 없어."
-_CONFLICT_MSG = "성공 기록과 취소 요청이 같이 보여서 바로 처리하지 않았어. 성공으로 기록할까, 아니면 최근 기록을 취소할까?"
+_CONFLICT_MSG = "성공으로 기록할지, 아니면 최근 기록을 취소할지 헷갈렸어! 어떻게 할지 알려줄래? 😊"
 _ALREADY_SUBMITTED_ACKS = [
-    "오늘은 이미 제출한 기록이 있어! 다시 제출하고 싶으면 먼저 취소해줘. 😁",
-    "오늘 미션 결과는 이미 기록돼 있어! 바꾸고 싶으면 먼저 취소해줘. 😊",
+    "오늘은 이미 제출한 기록이 있어! 최근에 한 행동을 취소하고 다시 할까? 😁",
+    "오늘 미션 결과는 이미 기록돼 있어! 최근 기록을 취소하고 다시 진행할래? 😊",
     "이미 오늘 기록이 남아 있어! 다시 제출하려면 최근 기록을 취소해야 해. 😋",
-    "오늘은 제출이 완료된 상태야! 다시 기록하려면 먼저 취소해줘. 😆",
-    "이미 제출한 기록이 있어! 다시 하려면 취소부터 해줘. 😀",
+    "오늘은 제출이 완료된 상태야! 최근 행동을 취소하고 다시 할 수 있어 😆",
+    "이미 제출한 기록이 있어! 취소하고 다시 진행해볼래? 😀",
 ]
 _SUCCESS_RECORDED_ACKS = [
     "성공으로 기록해뒀어! 👍 ✅",
@@ -36,10 +36,10 @@ _FAIL_RECORDED_ACKS = [
 ]
 _MISSION_CHANGED_ACKS = {
     "change": [
-        "미션을 바꿔뒀어! 🔄",
+        "미션을 새롭게 바꿔뒀어! 🔄",
         "새 미션으로 바꿔뒀어! 🔄",
-        "좋아, 미션 변경 완료! 🔄",
-        "요청한 대로 미션을 바꿨어! 🔄",
+        "좋아, 새로운 미션으로 변경 완료! 🔄",
+        "요청한 대로 새로운 미션으로 바꿨어! 🔄",
         "오늘 미션을 새로 바꿔뒀어! 🔄",
     ],
     "easier": [
@@ -98,7 +98,7 @@ def build_action_ack(exec_results: ExecResults | None) -> ActionAck | None:
             )
 
         if result.status == SubmitStatus.NO_MISSION:
-            return ActionAck("오늘은 아직 받을 수 있는 미션이 없어!", ResponseMode.SERVER_ONLY)
+            return ActionAck("오늘은 아직 할 수 있는 미션이 없어! 잠시만 기다려줘~ 😊", ResponseMode.SERVER_ONLY)
 
         if result.status == SubmitStatus.DB_ERROR:
             return ActionAck("방금 기록을 저장하지 못했어! ⚠️", ResponseMode.SERVER_ONLY)
