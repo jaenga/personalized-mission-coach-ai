@@ -21,8 +21,6 @@ KEYWORDS_COMPLETED = [
 ]
 KEYWORDS_FAILED = [
     "실패", "못했", "못 했", "안했", "안 했", "못하", "못 하", "안해", "포기",
-]
-KEYWORDS_PARTIAL = [
     "조금", "반만", "절반", "부분", "조금만", "일부", "반쯤", "절반만", "조금밖에",
 ]
 
@@ -34,13 +32,11 @@ def _get_spreadsheet():
 
 
 def detect_mission_status(user_message: str) -> str | None:
-    """유저 메시지에서 미션 결과 감지. completed / partial / failed / None"""
+    """유저 메시지에서 미션 결과 감지. success / fail / None"""
     if any(kw in user_message for kw in KEYWORDS_FAILED):
-        return "failed"
-    if any(kw in user_message for kw in KEYWORDS_PARTIAL):
-        return "partial"
+        return "fail"
     if any(kw in user_message for kw in KEYWORDS_COMPLETED):
-        return "completed"
+        return "success"
     return None
 
 
@@ -50,8 +46,8 @@ def detect_mission_completed(user_message: str) -> bool:
 
 def generate_daily_status(today: str) -> int:
     """
-    날짜 탭(예: 2026-03-29)을 생성하고 DB students 테이블의 is_active 학생 전체를 추가.
-    탭이 이미 있으면 없는 학생만 추가.
+    날짜 탭(예: 2026-03-29)을 생성하고 DB students 테이블의 is_active 학생 전체를 추가
+    탭이 이미 있으면 없는 학생만 추가
     """
     from database import get_conn
     import psycopg2.extras
@@ -94,6 +90,40 @@ def generate_daily_status(today: str) -> int:
 
     return added
 
+# 오늘 날짜 탭에서 student_id 행의 결과를 초기화 (status → assigned, result_reason 비움)
+def cancel_mission_result(student_id: int, today: str):
+    if not SPREADSHEET_ID:
+        return
+
+    ss = _get_spreadsheet()
+    try:
+        sheet = ss.worksheet(today)
+    except gspread.WorksheetNotFound:
+        return
+
+    all_rows = sheet.get_all_values()
+    headers = all_rows[0] if all_rows else DAILY_STATUS_HEADERS
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        col_student_id    = headers.index("student_id") + 1
+        col_status        = headers.index("status") + 1
+        col_result_reason = headers.index("result_reason") + 1
+        col_updated_at    = headers.index("sheet_updated_at") + 1
+        col_ai_response   = headers.index("ai_response") + 1 if "ai_response" in headers else None
+    except ValueError:
+        return
+
+    for i, row in enumerate(all_rows[1:], start=2):
+        row_student_id = row[col_student_id - 1] if len(row) >= col_student_id else ""
+        if str(row_student_id) == str(student_id):
+            sheet.update_cell(i, col_status,        "assigned")
+            sheet.update_cell(i, col_result_reason, "")
+            if col_ai_response:
+                sheet.update_cell(i, col_ai_response, "")
+            sheet.update_cell(i, col_updated_at,    now)
+            return
+
 
 def _get_or_create_daily_sheet(ss, today: str):
     try:
@@ -109,7 +139,7 @@ def update_mission_result(
     today: str,
     result_reason: str,
     ai_response: str,
-    status: str = "completed",
+    status: str = "success",
     student_name: str = "",
     age: int | None = None,
     gender: str = "",
@@ -119,7 +149,7 @@ def update_mission_result(
     category: str = "",
     difficulty: str = "",
 ):
-    """오늘 날짜 탭에서 student_id 행 찾아서 업데이트. 없으면 새 행 추가."""
+   # 오늘 날짜 탭에서 student_id 행 찾아서 업데이트(없으면 새 행 추가)
     if not SPREADSHEET_ID:
         return
 

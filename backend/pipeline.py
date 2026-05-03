@@ -1,0 +1,397 @@
+"""
+Pipeline — 통합 파이프라인 step 함수 + 멀티펑션 헬퍼.
+import 방향: pipeline → executor, hint_builder (단방향)
+"""
+from __future__ import annotations
+
+import random
+import re
+import time
+
+from intent_router import classify_intent, split_multi_intent
+from qwen_client import call_function
+from rag import search_rag
+from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MISSION_REPORT, build_system_prompt
+from database import _kst_today, get_last_action_type, fetch_profile
+from executor import (
+    ExecResults,
+    execute_submit, execute_adjustment, execute_cancel,
+)
+from hint_builder import (
+    build_one_hint, build_conflict_prompt, build_fn_hint, build_cancel_hint,
+    EQUIVALENCY_SUBMIT_TAG_INSTRUCTION,
+)
+
+
+# ── 멀티펑션 조합 상수 + 헬퍼 (main.py에서 이동) ────────────────────────────
+
+_CONFLICT_PAIRS = [
+    {"submit_mission_result", "request_mission_adjustment"},
+    {"request_mission_adjustment", "check_mission_equivalency"},
+]
+_NON_REPEATABLE = {"submit_mission_result", "cancel_mission_action", "request_mission_adjustment"}
+
+_SEQUENTIAL_PAIRS = [
+    ("check_mission_equivalency", "submit_mission_result"),
+    ("submit_mission_result", "get_user_history"),
+]
+
+_DB_BRANCH_PAIRS = {
+    frozenset({"cancel_mission_action", "submit_mission_result"}): "submit",
+    frozenset({"cancel_mission_action", "request_mission_adjustment"}): "adjustment",
+}
+
+
+def classify_multi(fn_calls: list[tuple[str, dict]]) -> str:
+    """멀티펑션 조합 분류. 반환값: 'conflict' | 'sequential' | 'db_branch' | 'independent'"""
+    names = [fn for fn, _ in fn_calls]
+
+    for name in _NON_REPEATABLE:
+        if names.count(name) > 1:
+            return "conflict"
+
+    name_set = set(names)
+
+    if any(pair.issubset(name_set) for pair in _CONFLICT_PAIRS):
+        return "conflict"
+
+    if frozenset(name_set) in _DB_BRANCH_PAIRS:
+        cancel_idx = next((i for i, n in enumerate(names) if n == "cancel_mission_action"), None)
+        if cancel_idx == 0:
+            return "db_branch"
+        return "conflict"
+
+    for first, second in _SEQUENTIAL_PAIRS:
+        if first in name_set and second in name_set:
+            return "sequential"
+
+    if "get_mission_info" in name_set:
+        mission_info_args = next((args for fn, args in fn_calls if fn == "get_mission_info"), {})
+        if mission_info_args.get("query_type") == "today":
+            if "request_mission_adjustment" in name_set or "cancel_mission_action" in name_set:
+                return "sequential"
+
+    return "independent"
+
+
+def is_equivalency_submit(fn_calls: list[tuple[str, dict]]) -> bool:
+    """equivalency→submit 조합인지 확인."""
+    names = {fn for fn, _ in fn_calls}
+    return "check_mission_equivalency" in names and "submit_mission_result" in names
+
+
+def _reorder_sequential(fn_calls: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """순차 쌍이 있으면 올바른 실행 순서로 정렬."""
+    if len(fn_calls) < 2:
+        return fn_calls
+    ordered = list(fn_calls)
+
+    for first, second in _SEQUENTIAL_PAIRS:
+        first_idx = next((i for i, (fn, _) in enumerate(ordered) if fn == first), None)
+        second_idx = next((i for i, (fn, _) in enumerate(ordered) if fn == second), None)
+        if first_idx is not None and second_idx is not None and first_idx > second_idx:
+            ordered[first_idx], ordered[second_idx] = ordered[second_idx], ordered[first_idx]
+
+    mi_idx = next((i for i, (fn, args) in enumerate(ordered)
+                    if fn == "get_mission_info" and args.get("query_type") == "today"), None)
+    if mi_idx is not None:
+        for priority_fn in ("request_mission_adjustment", "cancel_mission_action"):
+            p_idx = next((i for i, (fn, _) in enumerate(ordered) if fn == priority_fn), None)
+            if p_idx is not None and p_idx > mi_idx:
+                ordered[p_idx], ordered[mi_idx] = ordered[mi_idx], ordered[p_idx]
+                break
+
+    return ordered
+
+
+# ── Step 함수 ────────────────────────────────────────────────────────────────
+
+# ── 미션 보고 정규화 ─────────────────────────────────────────────────────────
+
+def _short(text: str | None, limit: int = 70) -> str:
+    if not text:
+        return ""
+    one_line = " ".join(str(text).split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
+def _fn_label(fn: str, args: dict | None = None) -> str:
+    args = args or {}
+    if fn == "submit_mission_result":
+        return f"submit({args.get('result_type', '?')})"
+    if fn == "request_mission_adjustment":
+        return f"adjust({args.get('adjustment_type', '?')})"
+    if fn == "cancel_mission_action":
+        return "cancel"
+    if fn == "get_mission_info":
+        return f"mission_info({args.get('query_type', '?')})"
+    if fn == "get_user_history":
+        return f"history({args.get('query_type', '?')})"
+    if fn == "check_mission_equivalency":
+        return f"equiv({args.get('equivalency_type', '?')})"
+    return fn
+
+
+def _fn_list(fn_calls: list[tuple[str, dict]]) -> str:
+    return ", ".join(_fn_label(fn, args) for fn, args in fn_calls) or "-"
+
+
+def _result_label(result: object | None) -> str:
+    if not result:
+        return "-"
+    status = getattr(getattr(result, "status", None), "value", getattr(result, "status", None))
+    action = getattr(getattr(result, "action", None), "value", None)
+    changed = getattr(result, "db_changed", False)
+    detail = (
+        getattr(result, "result_type", None)
+        or getattr(result, "adjustment_type", None)
+        or getattr(result, "new_mission_name", None)
+    )
+    pieces = [str(status)]
+    if detail:
+        pieces.append(str(detail))
+    pieces.append(f"db={'Y' if changed else 'N'}")
+    if action:
+        pieces.append(str(action))
+    return "/".join(pieces)
+
+
+def _exec_label(results: ExecResults) -> str:
+    return (
+        f"submit={_result_label(results.submit)} "
+        f"adjust={_result_label(results.adjustment)} "
+        f"cancel={_result_label(results.cancel)}"
+    )
+
+
+_CANCEL_TARGET_RE = re.compile(
+    r"(?:미션\s*)?(?:성공|실패)(?:\s*(?:제출|기록|한\s*거|한거))?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+    r"|(?:방금|최근|아까)?\s*(?:미션\s*결과\s*)?(?:제출|기록)(?:한\s*거|한거|된\s*거|된거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+    r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+)
+
+
+# 다중 의도 키워드 — 명시적 접속사
+_MULTI_INTENT_RE = re.compile(
+    r"그리고|그리구|또\s|이랑\s|랑\s|하고\s|마감도|기록도|성공하고|취소하고|바꾸고"
+)
+# 제출 동사 + 조회 동사가 같이 있으면 공백으로 이어진 다중 의도일 가능성이 높음
+_SUBMIT_HINT_RE = re.compile(r"성공|실패|완료|했어|못했|해냈")
+_QUERY_HINT_RE = re.compile(r"보여|알려|뭐야|뭔데|언제|기록|조회|마감")
+
+# 위로/격려 상황 감지
+_COMFORT_RE = re.compile(
+    r"힘들|슬퍼|슬프|짜증|우울|싫어|못하겠|포기|지쳐|피곤|하기 싫"
+)
+
+
+def _should_call_name(
+    is_greet: bool,
+    intent: str,
+    exec_results: ExecResults | None,
+    user_message: str,
+) -> bool:
+    """서버가 이름 호출 여부를 결정한다. 모델에 판단을 맡기지 않는다.
+
+    - 첫 인사: 70%
+    - 미션 성공/실패 직후: 30%
+    - 위로/격려 상황 (A 인텐트): 50%
+    """
+    if is_greet:
+        return random.random() < 0.70
+
+    if (
+        intent == "B"
+        and exec_results is not None
+        and exec_results.submit is not None
+        and exec_results.submit.status.value == "saved"
+    ):
+        return random.random() < 0.30
+
+    if intent == "A" and _COMFORT_RE.search(user_message):
+        return random.random() < 0.50
+
+    return False
+
+
+async def step_classify(message: str, mission_name: str = "") -> tuple[str, int]:
+    """인텐트 분류. (intent, ms) 반환."""
+    t0 = time.perf_counter()
+    intent = await classify_intent(message, mission_name)
+    ms = round((time.perf_counter() - t0) * 1000)
+    print(f"[Intent] {intent} ({ms}ms)")
+    return intent, ms
+
+
+async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], int]:
+    """문장 분리 + Qwen 호출 + 중복 제거. (fn_calls, ms) 반환."""
+    t0 = time.perf_counter()
+    if _CANCEL_TARGET_RE.search(message):
+        ms = round((time.perf_counter() - t0) * 1000)
+        fn_calls = [("cancel_mission_action", {})]
+        print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, direct)")
+        return fn_calls, ms
+
+    # 다중 의도 키워드 없으면 split 호출 자체를 스킵 (LLM 호출 1회 절감)
+    # 명시적 접속사 또는 제출+조회 동시 존재 시 split 실행
+    has_multi_intent = _MULTI_INTENT_RE.search(message) or (
+        _SUBMIT_HINT_RE.search(message) and _QUERY_HINT_RE.search(message)
+    )
+    if has_multi_intent:
+        parts = await split_multi_intent(message)
+    else:
+        parts = [message]
+    fn_calls: list[tuple[str, dict]] = []
+    seen: set[tuple] = set()
+    for part in parts:
+        calls, _ = await call_function(part)
+        for c in calls:
+            key = (c[0], tuple(sorted(c[1].items())))
+            if key not in seen:
+                fn_calls.append(c)
+                seen.add(key)
+    if _CANCEL_TARGET_RE.search(message) and any(fn == "cancel_mission_action" for fn, _ in fn_calls):
+        fn_calls = [("cancel_mission_action", {})]
+        print("[Function] cancel-target forced to cancel only")
+    ms = round((time.perf_counter() - t0) * 1000)
+    print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, parts={len(parts)})")
+    return fn_calls, ms
+
+
+def step_execute(
+    student_id: int,
+    fn_calls: list[tuple[str, dict]],
+    combo: str,
+) -> tuple[ExecResults, list[tuple[str, dict]], dict | None, str]:
+    """
+    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args, effective_combo) 반환.
+    cancel은 실행 후 fn_calls에서 제거.
+    reorder는 cancel 제거 후 적용.
+    """
+    print(f"[DB] start student={student_id} combo={combo or '-'} calls={_fn_list(fn_calls)}")
+    results = ExecResults()
+    pending_submit_args: dict | None = None
+
+    if combo == "conflict":
+        print("[DB] skipped: conflict")
+        return results, fn_calls, None, combo
+
+    # db_branch는 cancel 실행 전에 "원래 직전 액션"을 검증해야 한다.
+    if combo == "db_branch":
+        name_set = frozenset(fn for fn, _ in fn_calls)
+        expected = _DB_BRANCH_PAIRS.get(name_set)
+        last_action = get_last_action_type(student_id)
+        print(f"[DB] branch expected={expected} last={last_action}")
+        if last_action != expected:
+            print("[DB] branch mismatch -> conflict")
+            return results, fn_calls, None, "conflict"
+
+    # 1. cancel 분리 + 실행 + fn_calls에서 제거
+    if any(fn == "cancel_mission_action" for fn, _ in fn_calls):
+        results.cancel = execute_cancel(student_id)
+        fn_calls = [(fn, args) for fn, args in fn_calls if fn != "cancel_mission_action"]
+
+    # 3. 남은 fn_calls를 콤보에 따라 처리 (sequential이면 reorder 적용)
+    ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
+
+    eq_submit = is_equivalency_submit(fn_calls)  # cancel 제거 후 판정
+    for fn, args in ordered:
+        if fn == "submit_mission_result":
+            if eq_submit:
+                pending_submit_args = args  # LLM 판단 후 실행
+                print(f"[DB] submit deferred for equivalency")
+            else:
+                results.submit = execute_submit(student_id, args)
+        elif fn == "request_mission_adjustment":
+            results.adjustment = execute_adjustment(student_id, args)
+        # equivalency, mission_info, history → DB write 없음
+
+    print(f"[DB] done combo={combo or '-'} {_exec_label(results)}")
+    return results, fn_calls, pending_submit_args, combo
+
+
+def _build_function_hint(
+    student_id: int | None,
+    fn_calls: list[tuple[str, dict]],
+    exec_results: ExecResults,
+    combo: str | None,
+) -> str:
+    """B 인텐트 전용 힌트 문자열 생성. DB write 없음."""
+    has_exec_hint = exec_results.cancel is not None
+    if not fn_calls and not has_exec_hint:
+        return ""
+
+    if combo == "conflict":
+        return build_conflict_prompt(fn_calls).strip()
+
+    hints: list[str] = []
+
+    if combo == "db_branch":
+        # db_branch에서 직전 액션 불일치면 step_execute에서 충돌 전환됨.
+        # 여기까지 왔으면 정상 순차 → cancel hint + 나머지 hint.
+        if student_id is not None:
+            if exec_results.cancel:
+                hints.append(build_cancel_hint(exec_results.cancel))
+            for fn, args in _reorder_sequential(fn_calls):
+                hints.append(build_one_hint(student_id, fn, args, exec_results))
+        else:
+            for fn, args in fn_calls:
+                hints.append(build_fn_hint(fn, args))
+        return "\n\n".join(hints)
+
+    # sequential / independent
+    if student_id is not None:
+        ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
+        eq_submit = is_equivalency_submit(fn_calls)
+        if exec_results.cancel:
+            hints.append(build_cancel_hint(exec_results.cancel))
+        for fn, args in ordered:
+            if fn == "submit_mission_result" and eq_submit:
+                continue  # submit 힌트 스킵 (LLM이 태그로 판정)
+            hints.append(build_one_hint(student_id, fn, args, exec_results))
+        if eq_submit:
+            hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
+    else:
+        for fn, args in fn_calls:
+            hints.append(build_fn_hint(fn, args))
+
+    return "\n\n".join(hints)
+
+
+def step_build_hints(
+    student_id: int | None,
+    fn_calls: list[tuple[str, dict]],
+    exec_results: ExecResults,
+    combo: str | None,
+    mission_title: str,
+    rag_context: str,
+    intent: str,
+    is_greet: bool,
+    clarify_hint_override: str = "",
+    student_name: str = "",
+    user_message: str = "",
+) -> str:
+    """시스템 프롬프트 조립. DB write 없음."""
+    function_hint = ""
+    if intent == "B":
+        function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo)
+        print(f"[Prompt] function_hint={'Y' if function_hint else 'N'} combo={combo or '-'} len={len(function_hint)}")
+
+    clarify_hint = ""
+    if intent == "D":
+        clarify_hint = clarify_hint_override or CLARIFY_HINT_DEFAULT
+
+    name_call_allowed = _should_call_name(is_greet, intent, exec_results, user_message)
+    if name_call_allowed:
+        print(f"[Name] 이름 호출 허용: {student_name!r}")
+
+    return build_system_prompt(
+        intent=intent,
+        mission=mission_title if intent == "A" and is_greet else "",
+        hint=function_hint,
+        rag_context=rag_context if intent == "C" and not is_greet else "",
+        clarify_hint=clarify_hint,
+        is_greeting=is_greet,
+        student_name=student_name,
+        name_call_allowed=name_call_allowed,
+    )

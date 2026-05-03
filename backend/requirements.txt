@@ -11,3 +11,7 @@ openpyxl==3.1.5
 sentence-transformers==3.2.1
 pgvector==0.3.6
 SQLAlchemy==2.0.36
+torch>=2.1.0
+transformers>=4.40.0
+peft>=0.10.0
+accelerate>=0.29.0
