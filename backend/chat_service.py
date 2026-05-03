@@ -19,6 +19,7 @@ from database import (
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
+from qwen_client import detect_history_call
 from pipeline import (
     classify_multi,
     is_equivalency_submit,
@@ -353,8 +354,15 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     if not is_greet:
         intent, intent_ms = await step_classify(body.message, mission_title)
+        history_call = detect_history_call(body.message)
+        if history_call:
+            intent = "B"
+            fn_calls = [history_call]
+            detected_function = history_call[0]
+            fn_args = history_call[1]
+            print("[Route] history query forced to get_user_history")
 
-        if intent == "B":
+        if intent == "B" and not fn_calls:
             norm = normalize_b_input(body.message, mission_title, mission_id)
             if norm.should_clarify:
                 intent = "D"
@@ -538,10 +546,20 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
         if not is_greet:
             intent, intent_ms = await step_classify(body.message, current_mission_title)
+            history_call = detect_history_call(body.message)
+            if history_call:
+                intent = "B"
+                fn_calls = [history_call]
+                detected_function = history_call[0]
+                fn_args = history_call[1]
+                print("[Route] history query forced to get_user_history")
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
-            if intent == "B":
+            if fn_calls:
+                qwen_ms = 0
+                yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'calls': [[fn, args] for fn, args in fn_calls], 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
+            elif intent == "B":
                 norm = normalize_b_input(body.message, current_mission_title, mission_id)
                 if norm.should_clarify:
                     intent = "D"
