@@ -26,9 +26,9 @@ from pipeline import (
     step_classify,
     step_execute,
     step_extract_functions,
-    step_normalize_b_input,
 )
-from prompts import CLARIFY_HINT_MISSION_REPORT
+from normalizer import normalize_b_input
+from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MAP
 from rag import search_rag
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
@@ -332,6 +332,16 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}},
         }
 
+    profile = await run_in_threadpool(fetch_profile, body.session_id)
+    student_id = profile["student_id"] if profile else None
+    student_name = profile.get("student_name", "") if profile else ""
+    mission_id = None
+    if student_id:
+        mission_row = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
+        if mission_row:
+            mission_id = mission_row.get("mission_id")
+            mission_title = mission_row.get("mission_name") or mission_title
+
     intent = "A"
     fn_calls: list[tuple[str, dict]] = []
     detected_function = None
@@ -345,13 +355,13 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         intent, intent_ms = await step_classify(body.message, mission_title)
 
         if intent == "B":
-            qwen_input, should_clarify = step_normalize_b_input(body.message, mission_title)
-            if should_clarify:
+            norm = normalize_b_input(body.message, mission_title, mission_id)
+            if norm.should_clarify:
                 intent = "D"
-                clarify_hint_override = CLARIFY_HINT_MISSION_REPORT
-                print("[Route] B -> D clarify (mission report)")
+                clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
+                print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
             else:
-                fn_calls, qwen_ms = await step_extract_functions(qwen_input)
+                fn_calls, qwen_ms = await step_extract_functions(norm.message)
                 detected_function = fn_calls[0][0] if fn_calls else None
                 fn_args = fn_calls[0][1] if fn_calls else {}
         if intent == "C":
@@ -361,9 +371,6 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 print(f"[RAG] 검색 실패 (무시): {e}")
 
     combo = classify_multi(fn_calls) if fn_calls else None
-    profile = await run_in_threadpool(fetch_profile, body.session_id)
-    student_id = profile["student_id"] if profile else None
-    student_name = profile.get("student_name", "") if profile else ""
     print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     exec_results = ExecResults()
     pending_submit_args = None
@@ -507,6 +514,17 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             yield _sse({"type": "done", "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}}})
             return
 
+        current_mission_title = mission_title
+        profile = await run_in_threadpool(fetch_profile, body.session_id)
+        student_id = profile["student_id"] if profile else None
+        student_name = profile.get("student_name", "") if profile else ""
+        mission_id = None
+        if student_id:
+            mission_row = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
+            if mission_row:
+                mission_id = mission_row.get("mission_id")
+                current_mission_title = mission_row.get("mission_name") or current_mission_title
+
         intent = "A"
         fn_calls: list[tuple[str, dict]] = []
         detected_function = None
@@ -519,18 +537,18 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         clarify_hint_override = ""
 
         if not is_greet:
-            intent, intent_ms = await step_classify(body.message, mission_title)
+            intent, intent_ms = await step_classify(body.message, current_mission_title)
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
             if intent == "B":
-                qwen_input, should_clarify = step_normalize_b_input(body.message, mission_title)
-                if should_clarify:
+                norm = normalize_b_input(body.message, current_mission_title, mission_id)
+                if norm.should_clarify:
                     intent = "D"
-                    clarify_hint_override = CLARIFY_HINT_MISSION_REPORT
-                    print("[Route] B -> D clarify (mission report)")
+                    clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
+                    print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
                 else:
-                    fn_calls, qwen_ms = await step_extract_functions(qwen_input)
+                    fn_calls, qwen_ms = await step_extract_functions(norm.message)
                     detected_function = fn_calls[0][0] if fn_calls else None
                     fn_args = fn_calls[0][1] if fn_calls else {}
                     yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'calls': [[fn, args] for fn, args in fn_calls], 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
@@ -545,9 +563,6 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     print(f"[RAG] 검색 실패 (무시): {e}")
 
         combo = classify_multi(fn_calls) if fn_calls else None
-        profile = await run_in_threadpool(fetch_profile, body.session_id)
-        student_id = profile["student_id"] if profile else None
-        student_name = profile.get("student_name", "") if profile else ""
         print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
         exec_results = ExecResults()
         pending_submit_args = None
@@ -570,7 +585,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             fn_calls=fn_calls,
             exec_results=exec_results,
             combo=combo,
-            mission_title=mission_title,
+            mission_title=current_mission_title,
             rag_context=rag_result["context"],
             intent=intent,
             is_greet=is_greet,
@@ -589,7 +604,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             if not is_greet:
                 history.append({"role": "user", "content": gemma_user_message})
             messages = history if history else [
-                {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
+                {"role": "user", "content": f"안녕! 오늘 미션 '{current_mission_title}'을 소개하고 응원해 줘."}
             ]
 
         yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'generating'}, ensure_ascii=False)}\n\n"
