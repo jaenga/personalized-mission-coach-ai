@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
@@ -30,6 +30,7 @@ export default function App() {
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
+  const greetingRequestedRef = useRef(false);
 
   // 로그인 화면용 상태
   const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
@@ -48,12 +49,15 @@ export default function App() {
 
   // 채팅 히스토리 로드
   useEffect(() => {
-    if (!mission || !profile) return;
+    if (!profile) return;
+
     fetchChatHistory(sessionId)
       .then((history) => {
         if (history.length === 0) {
-          requestGreeting(mission.mission_name);
+          setMessages([]);
+          greetingRequestedRef.current = false;
         } else {
+          greetingRequestedRef.current = true;
           setMessages(
             history.map((msg, i) =>
               msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
@@ -64,7 +68,16 @@ export default function App() {
       .catch(() => {
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
       });
-  }, [sessionId, mission]);
+  }, [sessionId, profile?.student_id]);
+
+  useEffect(() => {
+    if (!profile || !mission) return;
+    if (messages.length > 0) return;
+    if (greetingRequestedRef.current) return;
+
+    greetingRequestedRef.current = true;
+    requestGreeting(mission.mission_name);
+  }, [profile, mission, messages.length]);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -136,6 +149,7 @@ export default function App() {
     } catch {
       // 삭제 실패해도 초기화
     }
+    greetingRequestedRef.current = false;
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
     setProfile(null);

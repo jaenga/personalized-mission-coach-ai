@@ -137,6 +137,21 @@ def is_accepting_mission_suggestion(message: str) -> bool:
         "그걸로",
         "그걸로해줘",
         "그미션으로해줘",
+        "어좋아",
+        "음좋아",
+        "아좋아",
+        "오좋아",
+        "어응",
+        "응좋아",
+        "그래좋아",
+        "엉",
+        "엉좋아",
+        "엉해줘",
+        "응해줘",
+        "좋아해줘",
+        "그래해줘",
+        "그거해줘",
+        "그걸로바꿔줘",
     ]
 
     return text in accept_exact_words
@@ -921,14 +936,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             },
             "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
         }
-        yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
-
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
         llm_save = _filter_ai_response(
             llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
         )
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
+
+        yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type
