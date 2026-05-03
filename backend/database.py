@@ -1,12 +1,19 @@
 import os
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+DEMO_MISSION_IDS = [
+    2, 12, 16, 25, 29, 38, 43, 51, 62,
+    67, 71, 87, 96, 112, 153, 159, 168, 192,
+]
 
 
 def get_conn():
@@ -15,7 +22,6 @@ def get_conn():
 
 
 def init_db():
-    """UUID 세션 ↔ DB 정수 세션 브릿지 테이블만 생성 (나머지는 팀원 테이블 사용)"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -27,6 +33,53 @@ def init_db():
                     created_at    TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS demo_mission (
+                    order_no INTEGER PRIMARY KEY,
+                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("DELETE FROM demo_mission")
+            for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
+                cur.execute("""
+                    INSERT INTO demo_mission (order_no, mission_id, is_active)
+                    VALUES (%s, %s, TRUE)
+                    ON CONFLICT (order_no) DO UPDATE
+                        SET mission_id = EXCLUDED.mission_id,
+                            is_active = TRUE
+                """, (idx, mission_id))
+            cur.execute("SELECT to_regclass('public.student_daily_missions')")
+            if cur.fetchone()[0]:
+                cur.execute("""
+                    ALTER TABLE student_daily_missions
+                    ADD COLUMN IF NOT EXISTS assigned_by TEXT DEFAULT 'system'
+                """)
+            cur.execute("SELECT to_regclass('public.checkin_log')")
+            if cur.fetchone()[0]:
+                cur.execute("""
+                    DELETE FROM checkin_log
+                    WHERE checkin_id IN (
+                        SELECT checkin_id
+                        FROM (
+                            SELECT
+                                checkin_id,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY student_id, checkin_date
+                                    ORDER BY created_at DESC NULLS LAST, checkin_id DESC
+                                ) AS rn
+                            FROM checkin_log
+                            WHERE function_called = 'submit_mission_result'
+                        ) ranked
+                        WHERE rn > 1
+                      )
+                """)
+                cur.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_checkin_submit_once_per_day
+                    ON checkin_log (student_id, checkin_date)
+                    WHERE function_called = 'submit_mission_result'
+                """)
         conn.commit()
 
 
@@ -48,6 +101,49 @@ def get_student_by_credentials(student_name: str, phone_last4: str) -> dict | No
 
 
 # ── 채팅 세션 (chat_sessions 테이블) ──────────────────────────────────────────
+
+def create_demo_student(student_name: str, phone_last4: str) -> dict:
+    """
+    Create a demo signup student in the existing students table.
+    New demo signups are marked with student_note = '신규 가입'.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM students
+                WHERE student_name = %s
+                  AND is_active = TRUE
+                """,
+                (student_name,),
+            )
+            rows = cur.fetchall()
+
+            for row in rows:
+                phone = str(row.get("phone_number", "")).replace("-", "")
+                if phone[-4:] == phone_last4:
+                    return dict(row)
+
+            cur.execute("""
+                INSERT INTO students (
+                    student_name,
+                    phone_number,
+                    age,
+                    gender,
+                    location,
+                    is_active,
+                    student_note
+                )
+                VALUES (%s, %s, NULL, '', '', TRUE, '신규 가입')
+                RETURNING *
+            """, (student_name, phone_last4))
+            student = cur.fetchone()
+
+        conn.commit()
+
+    return dict(student)
+
 
 def create_chat_session(student_id: int) -> int:
     with get_conn() as conn:
@@ -126,7 +222,6 @@ def fetch_messages(session_id: str) -> list[dict]:
         {
             "role": "user" if r["speaker"] == "student" else "assistant",
             "content": r["message_text"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
         for r in rows
     ]
@@ -148,15 +243,177 @@ def delete_messages(session_id: str) -> int:
     return count
 
 
+# ── 오늘의 미션 자동 배정 ─────────────────────────────────────────────────────
+
+def _kst_today() -> str:
+    """한국 시간(KST) 기준 오늘 날짜 반환."""
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d")
+
+
+def assign_daily_missions() -> int:
+    """
+    오늘(KST) 미션이 배정 안 된 학생에게 자동 배정
+    - 최근 7일간 배정된 미션은 제외
+    - 7일 기록 없으면 랜덤 1개 배정
+    """
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO student_daily_missions (
+                    student_id, mission_id, assigned_date, status, assigned_by
+                )
+                SELECT
+                    s.student_id,
+                    COALESCE(preferred.mission_id, fallback.mission_id) AS mission_id,
+                    %s::date,
+                    'assigned',
+                    'system'
+                FROM students s
+
+                LEFT JOIN LATERAL (
+                    SELECT m.mission_id
+                    FROM missions m
+                    WHERE m.is_active = TRUE
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM student_daily_missions sdm
+                          WHERE sdm.student_id = s.student_id
+                            AND sdm.assigned_date >= %s::date - INTERVAL '7 days'
+                            AND sdm.assigned_date < %s::date
+                            AND sdm.mission_id = m.mission_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM mission_changes mc
+                          WHERE mc.student_id = s.student_id
+                            AND mc.change_date >= %s::date - INTERVAL '7 days'
+                            AND mc.change_date < %s::date
+                            AND mc.old_mission_id = m.mission_id
+                      )
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                ) preferred ON TRUE
+
+                LEFT JOIN LATERAL (
+                    SELECT m.mission_id
+                    FROM missions m
+                    WHERE m.is_active = TRUE
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                ) fallback ON TRUE
+
+                WHERE s.is_active = TRUE
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM student_daily_missions sdm_today
+                    WHERE sdm_today.student_id = s.student_id
+                      AND sdm_today.assigned_date = %s::date
+                )
+            """, (today, today, today, today, today, today))
+            assigned = cur.rowcount
+        conn.commit()
+    return assigned
+
+
 # ── 오늘의 미션 (student_daily_missions + missions 테이블) ─────────────────────
 
-def get_student_mission_db(student_id: int, today: str) -> dict | None:
+def assign_demo_mission_on_signup(student_id: int) -> dict | None:
+    """
+    Assign active demo missions in order to demo students.
+    The sequence wraps after the last active demo_mission row.
+    """
+    today = _kst_today()
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(20260502)")
+
+            cur.execute("""
+                SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
+                       m.main_category, m.sub_category,
+                       m.mission_location, m.reward_xp, m.mission_group,
+                       m.mission_rule, sdm.status
+                FROM student_daily_missions sdm
+                JOIN missions m ON sdm.mission_id = m.mission_id
+                WHERE sdm.student_id = %s
+                  AND sdm.assigned_date = %s::date
+            """, (student_id, today))
+            existing = cur.fetchone()
+            if existing:
+                conn.commit()
+                return dict(existing)
+
+            cur.execute("""
+                SELECT COUNT(*) AS assigned_count
+                FROM student_daily_missions sdm
+                JOIN demo_mission dm ON sdm.mission_id = dm.mission_id
+                WHERE sdm.assigned_date = %s::date
+                  AND sdm.assigned_by = 'demo'
+                  AND dm.is_active = TRUE
+            """, (today,))
+            assigned_count = cur.fetchone()["assigned_count"]
+
+            cur.execute("""
+                SELECT mission_id
+                FROM demo_mission
+                WHERE is_active = TRUE
+                ORDER BY order_no
+            """)
+            pool = [row["mission_id"] for row in cur.fetchall()]
+
+            if not pool:
+                conn.commit()
+                return None
+
+            next_mission_id = pool[assigned_count % len(pool)]
+
+            cur.execute("""
+                INSERT INTO student_daily_missions (
+                    student_id,
+                    mission_id,
+                    assigned_date,
+                    status,
+                    assigned_by
+                )
+                SELECT %s, %s, %s::date, 'assigned', 'demo'
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM student_daily_missions
+                    WHERE student_id = %s
+                      AND assigned_date = %s::date
+                )
+            """, (student_id, next_mission_id, today, student_id, today))
+
+            cur.execute("""
+                SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
+                       m.main_category, m.sub_category,
+                       m.mission_location, m.reward_xp, m.mission_group,
+                       m.mission_rule, sdm.status
+                FROM student_daily_missions sdm
+                JOIN missions m ON sdm.mission_id = m.mission_id
+                WHERE sdm.student_id = %s
+                  AND sdm.assigned_date = %s::date
+            """, (student_id, today))
+            mission = cur.fetchone()
+
+        conn.commit()
+
+    return dict(mission) if mission else None
+
+
+def get_student_mission_db(student_id: int, today: str | None = None) -> dict | None:
+    if today is None:
+        today = _kst_today()
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
-                       m.mission_description, sdm.status
+                       m.main_category, m.sub_category,
+                       m.mission_location, m.reward_xp, m.mission_group,
+                       m.mission_rule, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s AND sdm.assigned_date = %s
@@ -184,31 +441,31 @@ def get_student_info_db(student_id: int) -> dict | None:
 
 def save_mission_result(
     student_id: int,
-    student_name: str,
-    mission_id: int | None,
-    mission_name: str,
+    mission_id: int,
     status: str,
-    result_reason: str,
-    ai_response: str,
-    session_id: str,
+    result_reason: str | None = None,
     detected_function: str = "submit_mission_result",
-) -> int:
-    today = datetime.now(timezone.utc).date()
+) -> int | None:
+    today = _kst_today()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO checkin_log
                     (student_id, mission_id, checkin_date, mission_result,
-                     result_reason, ai_response, function_called,
+                     result_reason, function_called,
                      sheet_update_status, created_at, last_updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', NOW(), NOW())
+                ON CONFLICT (student_id, checkin_date)
+                    WHERE function_called = 'submit_mission_result'
+                DO NOTHING
                 RETURNING checkin_id
                 """,
                 (student_id, mission_id, today, status,
-                 result_reason, ai_response, detected_function),
+                 result_reason, detected_function),
             )
-            row_id = cur.fetchone()[0]
+            row = cur.fetchone()
+            row_id = row[0] if row else None
         conn.commit()
     return row_id
 
@@ -223,32 +480,242 @@ def mark_synced(result_id: int):
         conn.commit()
 
 
-# ── Function 감지 (questions 테이블 기반) ──────────────────────────────────────
+def get_user_history_db(student_id: int, query_type: str) -> dict:
+    """
+    query_type: 'weekly_summary' | 'monthly_summary'
+    이번 주/달 기록 조회. 없으면 지난 주/달 폴백.
+    """
+    today_str = _kst_today()
+    today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
 
-def detect_function_from_db(user_message: str) -> str | None:
-    """
-    questions 테이블 텍스트 오버랩으로 function 감지.
-    (추후 embedding 기반 시맨틱 검색으로 업그레이드 가능)
-    """
+    if query_type == "weekly_summary":
+        period_start = today_date - timedelta(days=today_date.weekday())  # 이번 주 월요일
+        period_label = f"이번 주 ({period_start.strftime('%m/%d')}~{today_date.strftime('%m/%d')})"
+        prev_start = period_start - timedelta(days=7)
+        prev_end = period_start
+        fallback_label = "지난주"
+    else:
+        period_start = today_date.replace(day=1)  # 이번 달 1일
+        period_label = f"이번 달 ({period_start.strftime('%m')}월)"
+        last_month_end = period_start - timedelta(days=1)
+        prev_start = last_month_end.replace(day=1)
+        prev_end = period_start
+        fallback_label = "지난달"
+
+    def fetch(start, end=None):
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if end:
+                    cur.execute("""
+                        SELECT DISTINCT ON (cl.checkin_date)
+                               m.mission_name, m.category, cl.mission_result,
+                               cl.checkin_date::text
+                        FROM checkin_log cl
+                        JOIN missions m ON cl.mission_id = m.mission_id
+                        WHERE cl.student_id = %s
+                          AND cl.checkin_date >= %s::date
+                          AND cl.checkin_date < %s::date
+                          AND cl.function_called = 'submit_mission_result'
+                        ORDER BY cl.checkin_date, cl.created_at DESC
+                    """, (student_id, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
+                else:
+                    cur.execute("""
+                        SELECT DISTINCT ON (cl.checkin_date)
+                               m.mission_name, m.category, cl.mission_result,
+                               cl.checkin_date::text
+                        FROM checkin_log cl
+                        JOIN missions m ON cl.mission_id = m.mission_id
+                        WHERE cl.student_id = %s
+                          AND cl.checkin_date >= %s::date
+                          AND cl.function_called = 'submit_mission_result'
+                        ORDER BY cl.checkin_date, cl.created_at DESC
+                    """, (student_id, start.strftime("%Y-%m-%d")))
+                return [dict(r) for r in cur.fetchall()]
+
+    records = fetch(period_start)
+    fallback = False
+    if not records:
+        records = fetch(prev_start, prev_end)
+        fallback = True
+
+    return {
+        "period_label": period_label,
+        "records": records,
+        "fallback": fallback,
+        "fallback_label": fallback_label,
+    }
+
+
+def has_checkin_today(student_id: int) -> bool:
+    """오늘 이미 제출된 checkin_log 기록이 있는지 확인."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM checkin_log WHERE student_id = %s AND checkin_date = %s "
+                "AND function_called = 'submit_mission_result' LIMIT 1",
+                (student_id, today),
+            )
+            return cur.fetchone() is not None
+
+
+_DIFFICULTY_ORDER = ["easy", "medium", "hard"]
+
+
+def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission_id: int) -> dict | None:
+    """adjustment_type에 따라 새 미션 선택. 없으면 None."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT main_category, difficulty FROM missions WHERE mission_id = %s",
+                (current_mission_id,),
+            )
+            current = cur.fetchone()
+    if not current:
+        return None
+
+    main_category = current["main_category"]
+    difficulty = current["difficulty"]
+
+    if adjustment_type == "easier":
+        idx = _DIFFICULTY_ORDER.index(difficulty) if difficulty in _DIFFICULTY_ORDER else 1
+        target_difficulty = _DIFFICULTY_ORDER[idx - 1] if idx > 0 else difficulty
+    elif adjustment_type == "harder":
+        idx = _DIFFICULTY_ORDER.index(difficulty) if difficulty in _DIFFICULTY_ORDER else 1
+        target_difficulty = _DIFFICULTY_ORDER[idx + 1] if idx < len(_DIFFICULTY_ORDER) - 1 else difficulty
+    else:  # change: 같은 난이도
+        target_difficulty = difficulty
+
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT q.question_text, f.function_name
-                FROM questions q
-                JOIN functions f ON q.function_id = f.function_id
-                WHERE f.is_active = TRUE
+                SELECT mission_id, mission_name, mission_rule
+                FROM missions
+                WHERE main_category = %s
+                  AND difficulty = %s
+                  AND is_active = TRUE
+                  AND mission_id != %s
+                  AND mission_id NOT IN (
+                      SELECT mission_id FROM student_daily_missions
+                      WHERE student_id = %s
+                        AND assigned_date >= %s::date - INTERVAL '7 days'
+                        AND assigned_date < %s::date
+                  )
+                ORDER BY RANDOM()
+                LIMIT 1
                 """,
+                (main_category, target_difficulty, current_mission_id, student_id, today, today),
             )
-            rows = cur.fetchall()
+            row = cur.fetchone()
+    return dict(row) if row else None
 
-    best_fn = None
-    best_score = 0
-    msg_chars = set(user_message)
-    for r in rows:
-        score = len(set(r["question_text"]) & msg_chars)
-        if score > best_score:
-            best_score = score
-            best_fn = r["function_name"]
 
-    return best_fn if best_score >= 3 else None
+def save_mission_adjustment(student_id: int, old_mission_id: int, new_mission_id: int) -> None:
+    """미션 변경 이력 저장(mission_changes) + student_daily_missions 업데이트."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mission_changes
+                    (student_id, old_mission_id, new_mission_id, change_date,
+                     changed_by, sheet_update_status, last_updated_at, created_at)
+                VALUES (%s, %s, %s, %s, 'ai', 'pending', NOW(), NOW())
+                """,
+                (student_id, old_mission_id, new_mission_id, today),
+            )
+            cur.execute(
+                "UPDATE student_daily_missions SET mission_id = %s, updated_at = NOW() "
+                "WHERE student_id = %s AND assigned_date = %s",
+                (new_mission_id, student_id, today),
+            )
+        conn.commit()
+
+
+def cancel_last_action(student_id: int) -> str | None:
+    """오늘(KST) 해당 학생의 가장 최근 행동을 취소.
+    checkin_log(제출)와 mission_changes(미션 변경) 중 더 최근 것을 찾아 취소한다.
+    반환값: 취소한 행동 타입 ('submit' | 'adjustment') 또는 None(취소할 것 없음).
+    """
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 가장 최근 제출 기록
+            cur.execute(
+                "SELECT checkin_id, created_at FROM checkin_log "
+                "WHERE student_id = %s AND checkin_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_submit = cur.fetchone()
+
+            # 가장 최근 미션 변경 기록
+            cur.execute(
+                "SELECT change_id, old_mission_id, created_at FROM mission_changes "
+                "WHERE student_id = %s AND change_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_change = cur.fetchone()
+
+        # 둘 다 없으면 취소할 것 없음
+        if not last_submit and not last_change:
+            return None
+
+        # 더 최근 행동 판별
+        submit_time = last_submit["created_at"] if last_submit else None
+        change_time = last_change["created_at"] if last_change else None
+
+        cancel_type = None
+        with conn.cursor() as cur:
+            if submit_time and (not change_time or submit_time >= change_time):
+                # 제출 취소: checkin_log 삭제 + status 복원
+                cur.execute("DELETE FROM checkin_log WHERE checkin_id = %s", (last_submit["checkin_id"],))
+                cur.execute(
+                    "UPDATE student_daily_missions SET status = 'assigned', updated_at = NOW() "
+                    "WHERE student_id = %s AND assigned_date = %s",
+                    (student_id, today),
+                )
+                cancel_type = "submit"
+            else:
+                # 미션 변경 취소: mission_changes 삭제 + 이전 미션 복원
+                cur.execute("DELETE FROM mission_changes WHERE change_id = %s", (last_change["change_id"],))
+                cur.execute(
+                    "UPDATE student_daily_missions SET mission_id = %s, updated_at = NOW() "
+                    "WHERE student_id = %s AND assigned_date = %s",
+                    (last_change["old_mission_id"], student_id, today),
+                )
+                cancel_type = "adjustment"
+        conn.commit()
+    return cancel_type
+
+
+def get_last_action_type(student_id: int) -> str | None:
+    """오늘(KST) 해당 학생의 가장 최근 행동 타입 반환. 'submit' | 'adjustment' | None."""
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT created_at FROM checkin_log "
+                "WHERE student_id = %s AND checkin_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_submit = cur.fetchone()
+            cur.execute(
+                "SELECT created_at FROM mission_changes "
+                "WHERE student_id = %s AND change_date = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (student_id, today),
+            )
+            last_change = cur.fetchone()
+
+    if not last_submit and not last_change:
+        return None
+    submit_time = last_submit["created_at"] if last_submit else None
+    change_time = last_change["created_at"] if last_change else None
+    if submit_time and (not change_time or submit_time >= change_time):
+        return "submit"
+    return "adjustment"

@@ -1,9 +1,10 @@
 #RAG 검색 모듈
-#유저의 메시지를 임베딩 → NeonDB에서 관련 chunks/faqs 벡터 검색 → 프롬프트용 컨텍스트 반환
+#유저 메시지를 임베딩 → NeonDB에서 관련 chunks/faqs 벡터 검색 → 프롬프트용 컨텍스트 반환
 
 from __future__ import annotations
 
 import os
+import time
 import psycopg2
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ _model: SentenceTransformer | None = None
 
 CHUNK_THRESHOLD = 0.75
 FAQ_THRESHOLD = 0.65  
+CHUNK_LIMIT = 3
 FAQ_LIMIT = 2
 
 
@@ -39,8 +41,10 @@ def _to_pgvector(vec: list[float]) -> str:
 
 
 def search_rag(query: str) -> dict:
+    t0 = time.perf_counter()
     model = _get_model()
     vec = model.encode([query], normalize_embeddings=True)[0].tolist()
+    embed_ms = round((time.perf_counter() - t0) * 1000)
     vec_str = _to_pgvector(vec)
 
     chunks: list[dict] = []
@@ -88,7 +92,9 @@ def search_rag(query: str) -> dict:
                         "distance": round(float(dist), 4),
                     })
 
+    total_ms = round((time.perf_counter() - t0) * 1000)
     context = _format_context(chunks, faqs)
+    print(f"[RAG] 검색 결과: chunks={len(chunks)}, faqs={len(faqs)}, context={'있음' if context else '없음'} | embed={embed_ms}ms, 총={total_ms}ms")
     return {"chunks": chunks, "faqs": faqs, "context": context}
 
 

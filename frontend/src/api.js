@@ -30,14 +30,46 @@ export async function sendMessage(message, sessionId, mission = null) {
 }
 
 /**
- * 백그라운드 분석 결과 폴링.
- * @returns {object|null} 준비됐으면 결과 객체, 아직이면 null
+ * 채팅 스트리밍 전송.
+ * onToken(token): 토큰 수신 시 호출
+ * onPipeline(stage): 파이프라인 단계 이벤트 수신 시 호출
  */
-export async function fetchAnalysis(analysisId) {
-  const res = await fetch(`/analysis/${analysisId}`);
-  if (res.status === 202) return null;
-  if (!res.ok) throw new Error("분석 조회 실패");
-  return res.json();
+export async function sendMessageStream(message, sessionId, mission = null, { onToken, onPipeline, onDone } = {}) {
+  const res = await fetch("/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_id: sessionId, mission }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "메시지 전송 실패");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const data = JSON.parse(line.slice(6));
+        if (data.type === "pipeline") {
+          onPipeline?.(data);
+        } else if (data.type === "token") {
+          onToken?.(data.content);
+        } else if (data.type === "done") {
+          onDone?.(data.debug);
+        }
+      } catch {}
+    }
+  }
 }
 
 /** 세션의 대화 히스토리 조회. */
@@ -61,8 +93,31 @@ export async function verifyStudent(studentName, phoneLast4) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ student_name: studentName, phone_last4: phoneLast4 }),
   });
-  if (res.status === 404) throw new Error("일치하는 학생을 찾을 수 없어요.");
+  if (res.status === 404) {
+    const err = new Error("일치하는 학생을 찾을 수 없어요.");
+    err.status = 404;
+    throw err;
+  }
   if (!res.ok) throw new Error("확인 중 오류가 발생했어요.");
+  return res.json();
+}
+
+/** 시연용 신규 학생 회원가입. */
+export async function registerDemoStudent(studentName, phoneLast4) {
+  const res = await fetch("/demo-register-student", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_name: studentName,
+      phone_last4: phoneLast4,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "회원가입 중 오류가 발생했어요.");
+  }
+
   return res.json();
 }
 

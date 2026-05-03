@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, fetchChatHistory, fetchAnalysis, clearChatHistory } from "./api.js";
+import { useEffect, useRef, useState } from "react";
+import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
 
@@ -25,15 +25,19 @@ export default function App() {
   const [mission, setMission] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [pipeline, setPipeline] = useState([]); // 실시간 파이프라인 단계
   const [debugMap, setDebugMap] = useState({});
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
+  const loadedHistoryKeyRef = useRef(null);
 
   // 로그인 화면용 상태
   const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [signupPopupOpen, setSignupPopupOpen] = useState(false);
+  const [farewellMessage, setFarewellMessage] = useState("");
 
   // 미션 로드 (프로필 확정 후)
   useEffect(() => {
@@ -46,10 +50,14 @@ export default function App() {
   // 채팅 히스토리 로드
   useEffect(() => {
     if (!mission || !profile) return;
+    const historyKey = `${sessionId}:${profile.student_id}`;
+    if (loadedHistoryKeyRef.current === historyKey) return;
+    loadedHistoryKeyRef.current = historyKey;
+
     fetchChatHistory(sessionId)
       .then((history) => {
         if (history.length === 0) {
-          requestGreeting(mission.mission_name);
+          requestGreeting(mission);
         } else {
           setMessages(
             history.map((msg, i) =>
@@ -61,23 +69,69 @@ export default function App() {
       .catch(() => {
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
       });
-  }, [sessionId, mission]);
+  }, [sessionId, profile, mission]);
 
   async function handleLogin(e) {
     e.preventDefault();
     setLoginError("");
+    setFarewellMessage("");
     setLoginLoading(true);
     try {
       const student = await verifyStudent(loginForm.name.trim(), loginForm.phone4.trim());
-      await saveProfile(sessionId, student.student_id, student.student_name);
+      const profileResult = await saveProfile(sessionId, student.student_id, student.student_name);
       const saved = { student_id: student.student_id, student_name: student.student_name };
       localStorage.setItem("user_profile", JSON.stringify(saved));
       setProfile(saved);
+      if (profileResult.mission) {
+        setMission(profileResult.mission);
+      }
     } catch (err) {
-      setLoginError(err.message);
+      if (err.status === 404 || err.message.includes("일치하는 학생")) {
+        setSignupPopupOpen(true);
+      } else {
+        setLoginError(err.message);
+      }
     } finally {
       setLoginLoading(false);
     }
+  }
+
+  async function handleSignupAgree() {
+    setLoginError("");
+    setFarewellMessage("");
+    setLoginLoading(true);
+
+    try {
+      const result = await registerDemoStudent(loginForm.name.trim(), loginForm.phone4.trim());
+      const student = result.student;
+
+      await saveProfile(sessionId, student.student_id, student.student_name);
+
+      const saved = { student_id: student.student_id, student_name: student.student_name };
+      localStorage.setItem("user_profile", JSON.stringify(saved));
+      setSignupPopupOpen(false);
+      setProfile(saved);
+
+      if (result.mission) {
+        setMission(result.mission);
+      }
+    } catch (err) {
+      setLoginError(err.message);
+      setSignupPopupOpen(false);
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  function handleSignupCancel() {
+    setSignupPopupOpen(false);
+    setFarewellMessage("다음에 만나요!");
+
+    setTimeout(() => {
+      setFarewellMessage("");
+      setLoginForm({ name: "", phone4: "" });
+      setLoginError("");
+    }, 1200);
   }
 
   async function handleReset() {
@@ -89,6 +143,7 @@ export default function App() {
     }
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
+    loadedHistoryKeyRef.current = null;
     setProfile(null);
     setMission(null);
     setMessages([]);
@@ -96,44 +151,23 @@ export default function App() {
     setSelectedDebugId(null);
     setLoginForm({ name: "", phone4: "" });
     setLoginError("");
+    setSignupPopupOpen(false);
+    setFarewellMessage("");
   }
 
-  async function pollAnalysis(analysisId, debugId) {
-    const MAX = 40;
-    for (let i = 0; i < MAX; i++) {
-      await new Promise((r) => setTimeout(r, 800));
-      try {
-        const result = await fetchAnalysis(analysisId);
-        if (result) {
-          setDebugMap((prev) => ({
-            ...prev,
-            [debugId]: {
-              ...prev[debugId],
-              reasoning: result.reasoning,
-              timing: { ...prev[debugId]?.timing, ...result.timing },
-              analysing: false,
-            },
-          }));
-          return;
-        }
-      } catch {
-        // 일시적 오류 무시
-      }
+  async function requestGreeting(currentMission) {
+    if (currentMission?.mission_message) {
+      setMessages([{ role: "assistant", content: currentMission.mission_message }]);
+      return;
     }
-    setDebugMap((prev) =>
-      prev[debugId] ? { ...prev, [debugId]: { ...prev[debugId], analysing: false } } : prev
-    );
-  }
 
-  async function requestGreeting(missionTitle) {
     setLoading(true);
     try {
-      const res = await sendMessage("__GREET__", sessionId, missionTitle);
+      const res = await sendMessage("__GREET__", sessionId, currentMission?.mission_name);
       const debugId = crypto.randomUUID();
       setMessages([{ role: "assistant", content: res.response, debugId }]);
-      setDebugMap({ [debugId]: { ...res.debug, analysing: !!res.analysis_id } });
+      setDebugMap({ [debugId]: { ...res.debug } });
       setSelectedDebugId(debugId);
-      if (res.analysis_id) pollAnalysis(res.analysis_id, debugId);
     } catch {
       setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
@@ -144,18 +178,76 @@ export default function App() {
   async function handleSend(text) {
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
+    setPipeline([]); // 파이프라인 초기화
+    const debugId = crypto.randomUUID();
+
+    // 빈 어시스턴트 버블 먼저 추가
+    setMessages((prev) => [...prev, { role: "assistant", content: "", debugId, streaming: true }]);
+
     try {
-      const res = await sendMessage(text, sessionId, mission?.mission_name);
-      const debugId = crypto.randomUUID();
-      setMessages((prev) => [...prev, { role: "assistant", content: res.response, debugId }]);
-      setDebugMap((prev) => ({ ...prev, [debugId]: { ...res.debug, analysing: !!res.analysis_id } }));
-      setSelectedDebugId(debugId);
-      if (res.analysis_id) pollAnalysis(res.analysis_id, debugId);
+      await sendMessageStream(
+        text,
+        sessionId,
+        mission?.mission_name,
+        {
+          onPipeline: (stage) => {
+            setPipeline((prev) => [...prev, stage]);
+            // 디버그맵에도 최신 파이프라인 정보 반영
+            if (stage.stage === "intent") {
+              setDebugMap((prev) => ({
+                ...prev,
+                [debugId]: { ...prev[debugId], intent: stage.value },
+              }));
+              setSelectedDebugId(debugId);
+            }
+            if (stage.stage === "qwen") {
+              setDebugMap((prev) => ({
+                ...prev,
+                [debugId]: {
+                  ...prev[debugId],
+                  detected_function: stage.fn,
+                  fn_args: stage.args,
+                },
+              }));
+            }
+          },
+          onToken: (token) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.debugId === debugId ? { ...m, content: m.content + token } : m
+              )
+            );
+          },
+          onDone: (debug) => {
+            if (debug) {
+              setDebugMap((prev) => ({
+                ...prev,
+                [debugId]: { ...prev[debugId], ...debug },
+              }));
+              // adjustment 후 미션 제목 갱신
+              if (debug.fn_args?.adjustment_type || debug.detected_function === "request_mission_adjustment") {
+                fetchMissionByStudent(profile.student_id)
+                  .then(setMission)
+                  .catch(() => {});
+              }
+            }
+          },
+        }
+      );
+      // 스트리밍 완료 — 파이프라인 로그 숨김
+      setMessages((prev) =>
+        prev.map((m) => (m.debugId === debugId ? { ...m, streaming: false } : m))
+      );
+      setPipeline([]);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "앗, 연결이 끊겼어. 다시 말해줄래?" },
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.debugId === debugId
+            ? { ...m, content: "앗, 연결이 끊겼어. 다시 말해줄래?", streaming: false }
+            : m
+        )
+      );
+      setPipeline([]);
     } finally {
       setLoading(false);
     }
@@ -202,6 +294,41 @@ export default function App() {
               {loginLoading ? "확인 중..." : "시작하기"}
             </button>
           </form>
+          {farewellMessage && (
+            <p className="farewell-message">{farewellMessage}</p>
+          )}
+
+          {signupPopupOpen && (
+            <div className="signup-modal-backdrop">
+              <div className="signup-modal">
+                <h3>회원가입 하기</h3>
+                <p>
+                  아직 등록된 친구가 아니야.<br />
+                  지금 바로 회원가입하고 오늘의 미션을 받아볼래?
+                </p>
+
+                <div className="signup-modal-actions">
+                  <button
+                    type="button"
+                    className="signup-yes-btn"
+                    onClick={handleSignupAgree}
+                    disabled={loginLoading}
+                  >
+                    좋아요
+                  </button>
+
+                  <button
+                    type="button"
+                    className="signup-no-btn"
+                    onClick={handleSignupCancel}
+                    disabled={loginLoading}
+                  >
+                    안할래요
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -219,18 +346,61 @@ export default function App() {
 
       {mission && (
         <div className="mission-banner">
-          🎯 오늘 미션: <strong>{mission.mission_name}</strong>
+          <div>
+            🎯 오늘 미션: <strong>{mission.mission_name}</strong>
+          </div>
+          {mission.mission_message && (
+            <p className="mission-banner-message">{mission.mission_message}</p>
+          )}
         </div>
       )}
 
       <div className="main-area">
-        <ChatWindow
-          messages={messages}
-          onSend={handleSend}
-          loading={loading}
-          selectedDebugId={selectedDebugId}
-          onSelectMessage={setSelectedDebugId}
-        />
+        <div className="chat-area">
+          <ChatWindow
+            messages={messages}
+            onSend={handleSend}
+            loading={loading}
+            selectedDebugId={selectedDebugId}
+            onSelectMessage={setSelectedDebugId}
+          />
+          {pipeline.length > 0 && (
+            <div className="pipeline-log">
+              {pipeline.map((s, i) => {
+                if (s.stage === "intent") {
+                  const colors = { A: "#6c757d", B: "#0d6efd", C: "#198754", D: "#dc3545" };
+                  return (
+                    <span key={i} className="pipeline-chip" style={{ borderColor: colors[s.value] ?? "#aaa" }}>
+                      🔍 인텐트 <strong>{s.value}</strong> — {s.label} <em>({s.ms}ms)</em>
+                    </span>
+                  );
+                }
+                if (s.stage === "qwen") {
+                  return (
+                    <span key={i} className="pipeline-chip" style={{ borderColor: "#fd7e14" }}>
+                      ⚡ Qwen → <strong>{s.fn ?? "없음"}</strong> <em>({s.ms}ms)</em>
+                    </span>
+                  );
+                }
+                if (s.stage === "rag") {
+                  return (
+                    <span key={i} className="pipeline-chip" style={{ borderColor: "#198754" }}>
+                      📚 RAG <strong>{s.hits}개</strong> 결과
+                    </span>
+                  );
+                }
+                if (s.stage === "generating") {
+                  return (
+                    <span key={i} className="pipeline-chip generating" style={{ borderColor: "#6f42c1" }}>
+                      ✨ Gemma4 응답 생성 중...
+                    </span>
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
+        </div>
         <DebugPanel
           debugInfo={debugMap[selectedDebugId] ?? null}
           selected={selectedDebugId !== null}

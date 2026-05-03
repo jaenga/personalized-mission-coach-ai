@@ -1,0 +1,31 @@
+# Qwen3 파인튜닝 펑션콜링 모델 Modelfile
+# 사용법: ollama create qwen3-function:latest -f backend/Modelfile
+#
+# 주의: FROM 경로를 본인의 GGUF 파일 경로로 수정 후 실행
+# FROM /your/path/to/merged_qwen.Q4_K_M.gguf
+
+FROM ./merged_qwen.Q4_K_M.gguf
+
+TEMPLATE """{{- $lastUserIdx := -1 -}}
+{{- range $idx, $msg := .Messages -}}
+{{- if eq $msg.Role "user" }}{{ $lastUserIdx = $idx }}{{ end -}}
+{{- end }}
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ if .Content }}{{ .Content }}{{ end }}{{ if not $last }}<|im_end|>
+{{ end }}
+{{- end }}
+{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+{{ end }}
+{{- end }}"""
+
+PARAMETER stop <|im_start|>
+PARAMETER stop <|im_end|>
+PARAMETER temperature 0.0
+PARAMETER num_predict 256

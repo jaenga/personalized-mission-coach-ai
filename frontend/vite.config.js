@@ -6,13 +6,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/mission": "http://localhost:8000",
-      "/feedback": "http://localhost:8000",
-      "/logs": "http://localhost:8000",
-      "/chat": "http://localhost:8000",
-      "/analysis": "http://localhost:8000",
-      "/profile": "http://localhost:8000",
-      "/verify-student": "http://localhost:8000",
+      "/mission": "http://127.0.0.1:8000",
+      "/feedback": "http://127.0.0.1:8000",
+      "/logs": "http://127.0.0.1:8000",
+      "/chat": "http://127.0.0.1:8000",
+      "/analysis": "http://127.0.0.1:8000",
+      "/profile": "http://127.0.0.1:8000",
+      "/verify-student": "http://127.0.0.1:8000",
+      "/demo-register-student": "http://127.0.0.1:8000",
     },
   },
 });
