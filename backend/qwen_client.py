@@ -220,8 +220,34 @@ async def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000)
     calls = _parse_tool_calls(raw)
-    calls = _coerce_history_call(user_message, calls)
+    calls = _coerce_function_calls(user_message, calls)
     return calls, elapsed_ms
+
+
+def _coerce_function_calls(
+    user_message: str,
+    calls: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    calls = _coerce_history_call(user_message, calls)
+    return [_coerce_mission_info_call(user_message, call) for call in calls]
+
+
+def _coerce_mission_info_call(
+    user_message: str,
+    call: tuple[str, dict],
+) -> tuple[str, dict]:
+    fn, args = call
+    if fn != "get_mission_info":
+        return call
+
+    query_type = args.get("query_type")
+    if query_type in {"today", "deadline", "general_rule"}:
+        return call
+    if "마감" in user_message or "기한" in user_message:
+        return fn, {"query_type": "deadline"}
+    if "규칙" in user_message or "인정" in user_message or "인증" in user_message:
+        return fn, {"query_type": "general_rule"}
+    return fn, {"query_type": "today"}
 
 
 _HISTORY_QUERY_RE = re.compile(r"기록|조회|요약|뭐\s*했|했었|성공.*몇|실패.*몇")
@@ -234,8 +260,15 @@ def _coerce_history_call(
     user_message: str,
     calls: list[tuple[str, dict]],
 ) -> list[tuple[str, dict]]:
+    history_call = detect_history_call(user_message)
+    if history_call:
+        return [history_call]
+    return calls
+
+
+def detect_history_call(user_message: str) -> tuple[str, dict] | None:
     if not _HISTORY_QUERY_RE.search(user_message):
-        return calls
+        return None
 
     month_match = _MONTH_HISTORY_RE.search(user_message)
     if month_match:
@@ -243,48 +276,48 @@ def _coerce_history_call(
         month = int(month_raw)
         if 1 <= month <= 12:
             target_month = f"{year}-{month:02d}" if year else f"{month:02d}"
-            return [("get_user_history", {
+            return ("get_user_history", {
                 "query_type": "monthly_summary",
                 "target_month": target_month,
-            })]
+            })
 
     if "그저께" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "daily_summary",
             "target_date": "day_before_yesterday",
-        })]
+        })
     if "어제" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "daily_summary",
             "target_date": "yesterday",
-        })]
+        })
     if "오늘" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "daily_summary",
             "target_date": "today",
-        })]
+        })
     if "지난주" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "weekly_summary",
             "target_period": "last_week",
-        })]
+        })
     if "이번 주" in user_message or "이번주" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "weekly_summary",
             "target_period": "this_week",
-        })]
+        })
     if "지난달" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "monthly_summary",
             "target_period": "last_month",
-        })]
+        })
     if "이번 달" in user_message or "이번달" in user_message:
-        return [("get_user_history", {
+        return ("get_user_history", {
             "query_type": "monthly_summary",
             "target_period": "this_month",
-        })]
+        })
 
-    return calls
+    return None
 
 
 def _parse_tool_calls(text: str) -> list[tuple[str, dict]]:
