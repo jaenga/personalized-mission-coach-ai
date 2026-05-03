@@ -179,29 +179,92 @@ def build_mission_info_hint(student_id: int, fn_args: dict) -> str:
     return "\n".join(lines)
 
 
+def _normalize_history_args(fn_args: dict) -> dict:
+    fn_args = fn_args or {}
+    query_type = fn_args.get("query_type") or "weekly_summary"
+    target_period = fn_args.get("target_period")
+    target_date = fn_args.get("target_date")
+    target_month = fn_args.get("target_month")
+
+    if query_type in ("today", "오늘"):
+        query_type = "daily_summary"
+        target_date = target_date or "today"
+    elif query_type in ("yesterday", "어제"):
+        query_type = "daily_summary"
+        target_date = target_date or "yesterday"
+    elif query_type in ("day_before_yesterday", "그저께"):
+        query_type = "daily_summary"
+        target_date = target_date or "day_before_yesterday"
+    elif query_type in ("last_week_summary", "지난주"):
+        query_type = "weekly_summary"
+        target_period = target_period or "last_week"
+    elif query_type in ("last_month_summary", "지난달"):
+        query_type = "monthly_summary"
+        target_period = target_period or "last_month"
+    elif query_type in ("month_summary", "월간"):
+        query_type = "monthly_summary"
+
+    if target_date and query_type not in ("daily_summary",):
+        query_type = "daily_summary"
+    if target_month and query_type not in ("monthly_summary",):
+        query_type = "monthly_summary"
+
+    return {
+        "query_type": query_type,
+        "target_period": target_period,
+        "target_date": target_date,
+        "target_month": target_month,
+    }
+
+
 def build_history_hint(student_id: int, fn_args: dict) -> str:
-    query_type = fn_args.get("query_type", "weekly_summary")
-    period_name = "이번 주" if query_type == "weekly_summary" else "이번 달"
+    args = _normalize_history_args(fn_args)
+    query_type = args["query_type"]
+    period_name = {
+        "daily_summary": "하루",
+        "weekly_summary": "주간",
+        "monthly_summary": "월간",
+    }.get(query_type, "미션")
 
-    result = get_user_history_db(student_id, query_type)
+    result = get_user_history_db(
+        student_id,
+        query_type,
+        target_period=args.get("target_period"),
+        target_date=args.get("target_date"),
+        target_month=args.get("target_month"),
+    )
+
+    if result.get("need_clarification"):
+        return f"아이가 미션 기록을 물어봤어. {result['clarification_message']}"
+
     records = result["records"]
-
     if not records:
-        return f"아이가 {period_name} 미션 기록을 물어봤어. 아직 기록이 전혀 없어. 아직 미션을 수행한 기록이 없다고 따뜻하게 알려줘."
+        return (
+            f"아이가 {result['period_label']} 미션 기록을 물어봤어. "
+            "해당 기간에는 제출된 미션 기록이 없다고 따뜻하게 알려줘."
+        )
 
-    success_count = sum(1 for r in records if r["mission_result"] == "success")
+    success_count = sum(1 for r in records if r["mission_result"] in ("success", "completed"))
+    fail_count = len(records) - success_count
 
     fallback_notice = ""
-    if result["fallback"]:
+    if result.get("fallback"):
         fallback_notice = (
             f'"{period_name} 기준으로는 아직 기록이 없어요. '
             f'{result["fallback_label"]} 기록을 함께 보여드릴게요."라고 먼저 말하고 '
         )
 
+    record_lines = []
+    for r in records:
+        status = "성공" if r["mission_result"] in ("success", "completed") else "실패"
+        record_lines.append(f"- {r['checkin_date']}: {r['mission_name']} / {status}")
+
     return (
-        f"아이가 {period_name} 미션 기록을 물어봤어. "
+        f"아이가 {result['period_label']} 미션 기록을 물어봤어. "
         f"{fallback_notice}아래 내용을 바탕으로 친절하게 알려줘.\n\n"
-        f"{result['period_label']} 성공 횟수: {success_count}회"
+        f"{result['period_label']} 성공 횟수: {success_count}회\n"
+        f"{result['period_label']} 실패 횟수: {fail_count}회\n"
+        + "\n".join(record_lines)
     )
 
 
@@ -236,6 +299,7 @@ def build_fn_hint(detected_function: str, fn_args: dict) -> str:
         }.get(fn_args.get("equivalency_type", ""), "아이가 대체 수행 가능 여부를 물어봤어. 친절하게 안내해줘.")
     if detected_function == "get_user_history":
         return {
+            "daily_summary": "아이가 하루 미션 기록을 조회했어. 일간 기록을 안내해줘.",
             "weekly_summary": "아이가 이번 주 미션 기록을 조회했어. 주간 기록을 안내해줘.",
             "monthly_summary": "아이가 이번 달 미션 기록을 조회했어. 월간 기록을 안내해줘.",
         }.get(fn_args.get("query_type", ""), "아이가 미션 기록을 조회했어. 기록을 안내해줘.")
