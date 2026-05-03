@@ -57,6 +57,14 @@ COMMON_PERSONA_PROMPT = """
 
 CLARIFY_HINT_DEFAULT = "아이의 말이 무슨 뜻인지 불분명해. 판단하지 말고 딱 한 문장으로 다시 물어봐."
 CLARIFY_HINT_MISSION_REPORT = "아이가 미션 수행 결과를 말한 것 같은데 성공인지 실패인지 불명확해. 저장하지 말고 '미션 성공한 거야?' 처럼 딱 한 문장으로만 확인해줘."
+CLARIFY_HINT_MAP = {
+    "negation_verb": "사용자가 부정 표현을 했어. 오늘 미션 기준으로 그 행동을 하지 않은 게 맞는지 확인해줘.",
+    "numeric": "사용자가 숫자를 말했지만 미션 기준과 맞는지 불명확해. 목표를 충족했는지 확인해줘.",
+    "numeric_no_count": "사용자가 했다고만 말했어. 총 몇 회/몇 분을 했는지 구체적인 수치를 말하게 해줘.",
+    "numeric_ambiguous": "사용자가 목표보다 적은 수치를 말했어. 총 몇 회/몇 분을 했는지 구체적으로 다시 말하게 해줘. 예/아니오로 답하게 하지 마.",
+    "qualifier": "사용자가 '조금', '거의' 등 한정적으로 표현했어. 미션을 완전히 끝낸 건지, 일부만 한 건지 확인해줘.",
+    "past_ambiguous": CLARIFY_HINT_MISSION_REPORT,
+}
 
 # ==== 말투 프롬프트 ===================
 CHAT_STYLE_PROMPT = """

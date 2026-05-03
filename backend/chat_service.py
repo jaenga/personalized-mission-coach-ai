@@ -26,6 +26,7 @@ from database import (
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
+from qwen_client import detect_history_call, detect_submit_report_call
 from pipeline import (
     classify_multi,
     is_equivalency_submit,
@@ -33,9 +34,9 @@ from pipeline import (
     step_classify,
     step_execute,
     step_extract_functions,
-    step_normalize_b_input,
 )
-from prompts import CLARIFY_HINT_MISSION_REPORT
+from normalizer import normalize_b_input
+from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MAP
 from rag import search_rag
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
@@ -95,7 +96,11 @@ def _fn_label(fn: str, args: dict | None = None) -> str:
     if fn == "cancel_mission_action":
         return "cancel"
     if fn == "get_mission_info":
-        return f"mission_info({args.get('query_type', '?')})"
+        query_type = args.get("query_type", "?")
+        target_date = args.get("target_date")
+        if target_date:
+            return f"mission_info({query_type}/{target_date})"
+        return f"mission_info({query_type})"
     if fn == "get_user_history":
         return f"history({args.get('query_type', '?')})"
     if fn == "check_mission_equivalency":
@@ -152,9 +157,35 @@ def is_accepting_mission_suggestion(message: str) -> bool:
         "그래해줘",
         "그거해줘",
         "그걸로바꿔줘",
+        "어해봐",
+        "어바꿔줘",
+        "어그걸로",
+        "어그걸로해줘",
+        "응해봐",
+        "그래해봐",
+        "좋아해봐",
+        "그걸로해봐",
+        "그걸로바꿔",
     ]
 
     return text in accept_exact_words
+
+
+def _is_meaningless_mission_candidate(candidate: str | None) -> bool:
+    if not candidate:
+        return True
+
+    compact = candidate.replace(" ", "").strip()
+    if len(compact) < 2:
+        return True
+
+    generic_words = {
+        "어", "으", "음", "아", "오",
+        "다른", "다른거", "다른것", "새", "새로운",
+        "그거", "그걸", "그걸로", "이거", "이걸", "이걸로",
+    }
+
+    return compact in generic_words
 
 
 def extract_mission_candidate_text(user_message: str) -> str | None:
@@ -166,9 +197,21 @@ def extract_mission_candidate_text(user_message: str) -> str | None:
         return None
 
     text = user_message.strip()
+    compact_text = text.replace(" ", "")
+
+    generic_change_requests = {
+        "다른미션으로바꿔줘",
+        "새로운미션으로바꿔줘",
+        "새미션으로바꿔줘",
+        "다른걸로바꿔줘",
+        "다른거로바꿔줘",
+        "다른것으로바꿔줘",
+    }
+    if compact_text in generic_change_requests:
+        return None
 
     # 전치사 기준으로 분리
-    prepositions = ["으로", "로", "으로 바꿔", "로 바꿔", "으로 변경", "로 변경"]
+    prepositions = ["으로 바꿔", "로 바꿔", "으로 변경", "로 변경", "으로", "로"]
     for prep in prepositions:
         if prep in text:
             parts = text.split(prep, 1)
@@ -181,8 +224,10 @@ def extract_mission_candidate_text(user_message: str) -> str | None:
                 for word in remove_words:
                     candidate = candidate.replace(word, " ").strip()
                 candidate = " ".join(candidate.split())
-                if candidate:
+                if candidate and not _is_meaningless_mission_candidate(candidate):
                     return candidate
+                if candidate and _is_meaningless_mission_candidate(candidate):
+                    return None
 
     # 변경 키워드 기준으로도 시도
     change_keywords = ["미션바꿔", "미션변경", "바꿔줘", "바꿔줄래", "변경해줘", "바꾸고싶어"]
@@ -201,8 +246,10 @@ def extract_mission_candidate_text(user_message: str) -> str | None:
             for word in remove_words:
                 candidate = candidate.replace(word, " ").strip()
             candidate = " ".join(candidate.split())
-            if candidate:
+            if candidate and not _is_meaningless_mission_candidate(candidate):
                 return candidate
+            if candidate and _is_meaningless_mission_candidate(candidate):
+                return None
 
     return None
 
@@ -534,6 +581,16 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}},
         }
 
+    profile = await run_in_threadpool(fetch_profile, body.session_id)
+    student_id = profile["student_id"] if profile else None
+    student_name = profile.get("student_name", "") if profile else ""
+    mission_id = None
+    if student_id:
+        mission_row = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
+        if mission_row:
+            mission_id = mission_row.get("mission_id")
+            mission_title = mission_row.get("mission_name") or mission_title
+
     intent = "A"
     fn_calls: list[tuple[str, dict]] = []
     detected_function = None
@@ -545,15 +602,29 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     if not is_greet:
         intent, intent_ms = await step_classify(body.message, mission_title)
+        submit_report_call = detect_submit_report_call(body.message)
+        history_call = None if submit_report_call else detect_history_call(body.message)
+        if submit_report_call:
+            intent = "B"
+            fn_calls = [submit_report_call]
+            detected_function = submit_report_call[0]
+            fn_args = submit_report_call[1]
+            print("[Route] submit report forced to submit_mission_result")
+        elif history_call:
+            intent = "B"
+            fn_calls = [history_call]
+            detected_function = history_call[0]
+            fn_args = history_call[1]
+            print("[Route] history query forced to get_user_history")
 
-        if intent == "B":
-            qwen_input, should_clarify = step_normalize_b_input(body.message, mission_title)
-            if should_clarify:
+        if intent == "B" and not fn_calls:
+            norm = normalize_b_input(body.message, mission_title, mission_id)
+            if norm.should_clarify:
                 intent = "D"
-                clarify_hint_override = CLARIFY_HINT_MISSION_REPORT
-                print("[Route] B -> D clarify (mission report)")
+                clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
+                print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
             else:
-                fn_calls, qwen_ms = await step_extract_functions(qwen_input)
+                fn_calls, qwen_ms = await step_extract_functions(norm.message)
                 detected_function = fn_calls[0][0] if fn_calls else None
                 fn_args = fn_calls[0][1] if fn_calls else {}
         if intent == "C":
@@ -563,12 +634,9 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 print(f"[RAG] 검색 실패 (무시): {e}")
 
     combo = classify_multi(fn_calls) if fn_calls else None
-    profile = await run_in_threadpool(fetch_profile, body.session_id)
-    student_id = profile["student_id"] if profile else None
-    student_name = profile.get("student_name", "") if profile else ""
     mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
 
-    # guard가 fn_calls를 바꿨을 수 있으므로 combo 재계산
+    # Recompute combo because the guard may have changed fn_calls.
     combo = classify_multi(fn_calls) if fn_calls else None
     if mission_change_guard_result and not fn_calls:
         detected_function = "request_mission_adjustment"
@@ -722,6 +790,17 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             yield _sse({"type": "done", "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}}})
             return
 
+        current_mission_title = mission_title
+        profile = await run_in_threadpool(fetch_profile, body.session_id)
+        student_id = profile["student_id"] if profile else None
+        student_name = profile.get("student_name", "") if profile else ""
+        mission_id = None
+        if student_id:
+            mission_row = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
+            if mission_row:
+                mission_id = mission_row.get("mission_id")
+                current_mission_title = mission_row.get("mission_name") or current_mission_title
+
         intent = "A"
         fn_calls: list[tuple[str, dict]] = []
         detected_function = None
@@ -734,18 +813,35 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         clarify_hint_override = ""
 
         if not is_greet:
-            intent, intent_ms = await step_classify(body.message, mission_title)
+            intent, intent_ms = await step_classify(body.message, current_mission_title)
+            submit_report_call = detect_submit_report_call(body.message)
+            history_call = None if submit_report_call else detect_history_call(body.message)
+            if submit_report_call:
+                intent = "B"
+                fn_calls = [submit_report_call]
+                detected_function = submit_report_call[0]
+                fn_args = submit_report_call[1]
+                print("[Route] submit report forced to submit_mission_result")
+            elif history_call:
+                intent = "B"
+                fn_calls = [history_call]
+                detected_function = history_call[0]
+                fn_args = history_call[1]
+                print("[Route] history query forced to get_user_history")
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
-            if intent == "B":
-                qwen_input, should_clarify = step_normalize_b_input(body.message, mission_title)
-                if should_clarify:
+            if fn_calls:
+                qwen_ms = 0
+                yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'calls': [[fn, args] for fn, args in fn_calls], 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
+            elif intent == "B":
+                norm = normalize_b_input(body.message, current_mission_title, mission_id)
+                if norm.should_clarify:
                     intent = "D"
-                    clarify_hint_override = CLARIFY_HINT_MISSION_REPORT
-                    print("[Route] B -> D clarify (mission report)")
+                    clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
+                    print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
                 else:
-                    fn_calls, qwen_ms = await step_extract_functions(qwen_input)
+                    fn_calls, qwen_ms = await step_extract_functions(norm.message)
                     detected_function = fn_calls[0][0] if fn_calls else None
                     fn_args = fn_calls[0][1] if fn_calls else {}
                     yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'qwen', 'calls': [[fn, args] for fn, args in fn_calls], 'ms': qwen_ms}, ensure_ascii=False)}\n\n"
@@ -760,12 +856,9 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     print(f"[RAG] 검색 실패 (무시): {e}")
 
         combo = classify_multi(fn_calls) if fn_calls else None
-        profile = await run_in_threadpool(fetch_profile, body.session_id)
-        student_id = profile["student_id"] if profile else None
-        student_name = profile.get("student_name", "") if profile else ""
         mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
 
-        # guard가 fn_calls를 바꿨을 수 있으므로 combo 재계산
+        # Recompute combo because the guard may have changed fn_calls.
         combo = classify_multi(fn_calls) if fn_calls else None
         if mission_change_guard_result and not fn_calls:
             detected_function = "request_mission_adjustment"
@@ -794,7 +887,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             fn_calls=fn_calls,
             exec_results=exec_results,
             combo=combo,
-            mission_title=mission_title,
+            mission_title=current_mission_title,
             rag_context=rag_result["context"],
             intent=intent,
             is_greet=is_greet,
@@ -813,7 +906,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             if not is_greet:
                 history.append({"role": "user", "content": gemma_user_message})
             messages = history if history else [
-                {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
+                {"role": "user", "content": f"안녕! 오늘 미션 '{current_mission_title}'을 소개하고 응원해 줘."}
             ]
 
         yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'generating'}, ensure_ascii=False)}\n\n"

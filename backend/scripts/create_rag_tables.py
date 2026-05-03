@@ -9,6 +9,7 @@ import psycopg2
 
 load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 if not DATABASE_URL:
     raise ValueError('DATABASE_URL이 없습니다. backend/.env 확인')
 
@@ -26,7 +27,7 @@ SQLS = [
         collected_date DATE
     );
     ''',
-    '''
+    f'''
     CREATE TABLE IF NOT EXISTS chunks (
         chunk_id TEXT PRIMARY KEY,
         doc_id TEXT NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
@@ -37,17 +38,19 @@ SQLS = [
         chunk_index INTEGER NOT NULL,
         chunk_intent TEXT,
         chunk_text TEXT NOT NULL,
-        embedding vector(1024)
+        embedding vector({EMBEDDING_DIM}),
+        embedding_model TEXT
     );
     ''',
-    '''
+    f'''
     CREATE TABLE IF NOT EXISTS faqs (
         faq_id TEXT PRIMARY KEY,
         doc_id TEXT NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         question TEXT NOT NULL,
         answer TEXT NOT NULL,
-        embedding vector(1024)
+        embedding vector({EMBEDDING_DIM}),
+        embedding_model TEXT
     );
     ''',
     'CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);',

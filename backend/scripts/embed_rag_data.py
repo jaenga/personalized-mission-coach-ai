@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
 MODEL_NAME = os.getenv('EMBEDDING_MODEL', 'BAAI/bge-m3')
+EMBEDDING_DIM = int(os.getenv('EMBEDDING_DIM', 1024))
 if not DATABASE_URL:
     raise ValueError('DATABASE_URL이 없습니다. backend/.env 확인')
 
@@ -31,8 +32,13 @@ def update_chunks(model: SentenceTransformer) -> int:
             vectors = model.encode(texts, normalize_embeddings=True)
             for chunk_id, vec in zip(ids, vectors):
                 cur.execute(
-                    'UPDATE chunks SET embedding = %s::vector WHERE chunk_id = %s',
-                    (to_pgvector(vec.tolist()), chunk_id),
+                    """
+                    UPDATE chunks
+                    SET embedding = %s::vector,
+                        embedding_model = %s
+                    WHERE chunk_id = %s
+                    """,
+                    (to_pgvector(vec.tolist()), MODEL_NAME, chunk_id),
                 )
         conn.commit()
     return len(rows)
@@ -50,7 +56,12 @@ def update_faqs(model: SentenceTransformer) -> int:
             vectors = model.encode(texts, normalize_embeddings=True)
             for faq_id, vec in zip(ids, vectors):
                 cur.execute(
-                    'UPDATE faqs SET embedding = %s::vector WHERE faq_id = %s',
+                    """
+                    UPDATE faqs
+                    SET embedding = %s::vector,
+                        embedding_model = %s
+                    WHERE faq_id = %s
+                    """,
                     (to_pgvector(vec.tolist()), faq_id),
                 )
         conn.commit()
@@ -60,7 +71,12 @@ def update_faqs(model: SentenceTransformer) -> int:
 def main() -> None:
     print(f'임베딩 모델 로드: {MODEL_NAME}')
     model = SentenceTransformer(MODEL_NAME)
-    print("임베딩 차원:", model.get_sentence_embedding_dimension())
+    actual_dim = model.get_sentence_embedding_dimension()
+    print("임베딩 차원:", actual_dim)
+    if actual_dim != EMBEDDING_DIM:
+        raise ValueError(
+            f"EMBEDDING_DIM 불일치: env={EMBEDDING_DIM}, model={actual_dim}"
+        )
     chunk_count = update_chunks(model)
     faq_count = update_faqs(model)
     print(f'chunks 임베딩 업데이트: {chunk_count}건')

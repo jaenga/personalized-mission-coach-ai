@@ -110,12 +110,18 @@ body {
 }
 
 .mission-banner {
-  padding: 9px 16px;
+  padding: 10px 16px;
   background: #eff6ff;
   border-bottom: 1px solid #dbeafe;
   font-size: 0.88rem;
   color: #1e40af;
   flex-shrink: 0;
+}
+
+.mission-banner-message {
+  margin: 4px 0 0;
+  color: #334155;
+  line-height: 1.45;
 }
 
 /* ── 채팅 컨테이너 ────────────────────────────────────────────────────────── */

@@ -31,6 +31,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
   const greetingRequestedRef = useRef(false);
+  const loadedHistoryKeyRef = useRef(null);
 
   // 로그인 화면용 상태
   const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
@@ -49,7 +50,11 @@ export default function App() {
 
   // 채팅 히스토리 로드
   useEffect(() => {
-    if (!profile) return;
+    if (!profile?.student_id) return;
+
+    const historyKey = `${sessionId}:${profile.student_id}`;
+    if (loadedHistoryKeyRef.current === historyKey) return;
+    loadedHistoryKeyRef.current = historyKey;
 
     fetchChatHistory(sessionId)
       .then((history) => {
@@ -76,8 +81,8 @@ export default function App() {
     if (greetingRequestedRef.current) return;
 
     greetingRequestedRef.current = true;
-    requestGreeting(mission.mission_name);
-  }, [profile, mission, messages.length]);
+    requestGreeting(mission);
+  }, [profile?.student_id, mission?.mission_id, messages.length]);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -152,6 +157,7 @@ export default function App() {
     greetingRequestedRef.current = false;
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
+    loadedHistoryKeyRef.current = null;
     setProfile(null);
     setMission(null);
     setMessages([]);
@@ -163,10 +169,15 @@ export default function App() {
     setFarewellMessage("");
   }
 
-  async function requestGreeting(missionTitle) {
+  async function requestGreeting(currentMission) {
+    if (currentMission?.mission_message) {
+      setMessages([{ role: "assistant", content: currentMission.mission_message }]);
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await sendMessage("__GREET__", sessionId, missionTitle);
+      const res = await sendMessage("__GREET__", sessionId, currentMission?.mission_name);
       const debugId = crypto.randomUUID();
       setMessages([{ role: "assistant", content: res.response, debugId }]);
       setDebugMap({ [debugId]: { ...res.debug } });
@@ -356,7 +367,12 @@ export default function App() {
 
       {mission && (
         <div className="mission-banner">
-          🎯 오늘 미션: <strong>{mission.mission_name}</strong>
+          <div>
+            🎯 오늘 미션: <strong>{mission.mission_name}</strong>
+          </div>
+          {mission.mission_message && (
+            <p className="mission-banner-message">{mission.mission_message}</p>
+          )}
         </div>
       )}
 
