@@ -103,16 +103,42 @@ AVAILABLE_FUNCTIONS: list[dict] = [
         "name": "get_user_history",
         "description": (
             "미션 수행 기록을 조회할 때 호출합니다.\n"
-            "- weekly_summary: 이번 주 기록\n"
-            "- monthly_summary: 이번 달 기록"
+            "- daily_summary: 하루 기록 조회\n"
+            "- weekly_summary: 주간 기록 조회\n"
+            "- monthly_summary: 월간 기록 조회\n"
+            "예시:\n"
+            "- 이번 주 기록 → query_type='weekly_summary', target_period='this_week'\n"
+            "- 지난주 기록 → query_type='weekly_summary', target_period='last_week'\n"
+            "- 이번 달 기록 → query_type='monthly_summary', target_period='this_month'\n"
+            "- 지난달 기록 → query_type='monthly_summary', target_period='last_month'\n"
+            "- 특정 월 기록을 물으면 target_month에 해당 월을 2자리 숫자로 넣습니다.\n"
+            "  예: 4월 기록 → query_type='monthly_summary', target_month='04', "
+            "5월 기록 → query_type='monthly_summary', target_month='05'\n"
+            "- 오늘 기록 → query_type='daily_summary', target_date='today'\n"
+            "- 어제 기록 → query_type='daily_summary', target_date='yesterday'\n"
+            "- 그저께 기록 → query_type='daily_summary', target_date='day_before_yesterday'\n"
+            "- 4월 12일 기록 → query_type='daily_summary', target_date='YYYY-MM-DD'"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query_type": {
                     "type": "string",
-                    "enum": ["weekly_summary", "monthly_summary"],
+                    "enum": ["daily_summary", "weekly_summary", "monthly_summary"],
                     "description": "조회할 기록의 범위",
+                },
+                "target_period": {
+                    "type": "string",
+                    "enum": ["this_week", "last_week", "this_month", "last_month"],
+                    "description": "주간/월간 조회 대상 기간. 명확할 때만 사용",
+                },
+                "target_date": {
+                    "type": "string",
+                    "description": "일간 조회 날짜. today, yesterday, day_before_yesterday 또는 YYYY-MM-DD",
+                },
+                "target_month": {
+                    "type": "string",
+                    "description": "월간 조회 월. MM 또는 YYYY-MM",
                 },
             },
             "required": ["query_type"],
@@ -135,6 +161,16 @@ _SYSTEM_PROMPT = """당신은 어린이 건강 습관 코치 앱의 AI입니다.
 함수 선택 시 주의사항:
 - 마감 시간·기한을 물으면 → get_mission_info(deadline)
 - 규칙·인정 기준·인증 방법을 물으면 → get_mission_info(general_rule)
+- 미션 기록/조회/요약을 물으면 → get_user_history
+- 이번 주 기록 → query_type="weekly_summary", target_period="this_week"
+- 지난주 기록 → query_type="weekly_summary", target_period="last_week"
+- 이번 달 기록 → query_type="monthly_summary", target_period="this_month"
+- 지난달 기록 → query_type="monthly_summary", target_period="last_month"
+- 특정 월 기록을 물으면 target_month에 해당 월을 2자리 숫자로 넣어라.
+  예: "4월 기록" → target_month="04", "5월 기록" → target_month="05"
+- 오늘 기록 → query_type="daily_summary", target_date="today"
+- 어제 기록 → query_type="daily_summary", target_date="yesterday"
+- 그저께 기록 → query_type="daily_summary", target_date="day_before_yesterday"
 - 구체적인 대체 행동/장소/시간을 언급하면 → check_mission_equivalency
 - 미션 완료/실패를 보고하면 → submit_mission_result"""
 
@@ -184,7 +220,71 @@ async def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000)
     calls = _parse_tool_calls(raw)
+    calls = _coerce_history_call(user_message, calls)
     return calls, elapsed_ms
+
+
+_HISTORY_QUERY_RE = re.compile(r"기록|조회|요약|뭐\s*했|했었|성공.*몇|실패.*몇")
+_MONTH_HISTORY_RE = re.compile(
+    r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월.*(?:기록|조회|요약|보여|알려)"
+)
+
+
+def _coerce_history_call(
+    user_message: str,
+    calls: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    if not _HISTORY_QUERY_RE.search(user_message):
+        return calls
+
+    month_match = _MONTH_HISTORY_RE.search(user_message)
+    if month_match:
+        year, month_raw = month_match.groups()
+        month = int(month_raw)
+        if 1 <= month <= 12:
+            target_month = f"{year}-{month:02d}" if year else f"{month:02d}"
+            return [("get_user_history", {
+                "query_type": "monthly_summary",
+                "target_month": target_month,
+            })]
+
+    if "그저께" in user_message:
+        return [("get_user_history", {
+            "query_type": "daily_summary",
+            "target_date": "day_before_yesterday",
+        })]
+    if "어제" in user_message:
+        return [("get_user_history", {
+            "query_type": "daily_summary",
+            "target_date": "yesterday",
+        })]
+    if "오늘" in user_message:
+        return [("get_user_history", {
+            "query_type": "daily_summary",
+            "target_date": "today",
+        })]
+    if "지난주" in user_message:
+        return [("get_user_history", {
+            "query_type": "weekly_summary",
+            "target_period": "last_week",
+        })]
+    if "이번 주" in user_message or "이번주" in user_message:
+        return [("get_user_history", {
+            "query_type": "weekly_summary",
+            "target_period": "this_week",
+        })]
+    if "지난달" in user_message:
+        return [("get_user_history", {
+            "query_type": "monthly_summary",
+            "target_period": "last_month",
+        })]
+    if "이번 달" in user_message or "이번달" in user_message:
+        return [("get_user_history", {
+            "query_type": "monthly_summary",
+            "target_period": "this_month",
+        })]
+
+    return calls
 
 
 def _parse_tool_calls(text: str) -> list[tuple[str, dict]]:

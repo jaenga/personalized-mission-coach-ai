@@ -1,7 +1,7 @@
 import os
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -480,61 +480,145 @@ def mark_synced(result_id: int):
         conn.commit()
 
 
-def get_user_history_db(student_id: int, query_type: str) -> dict:
+def _resolve_target_date(target_date: str | None, today_date: date) -> date | None:
+    if not target_date:
+        return None
+    value = target_date.strip()
+    if value == "today":
+        return today_date
+    if value == "yesterday":
+        return today_date - timedelta(days=1)
+    if value == "day_before_yesterday":
+        return today_date - timedelta(days=2)
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _resolve_target_month(target_month: str | None, today_date: date) -> date | None:
+    if not target_month:
+        return None
+    value = target_month.strip()
+    for fmt in ("%Y-%m", "%m"):
+        try:
+            parsed = datetime.strptime(value, fmt)
+            year = parsed.year if fmt == "%Y-%m" else today_date.year
+            return date(year, parsed.month, 1)
+        except ValueError:
+            continue
+    return None
+
+
+def get_user_history_db(
+    student_id: int,
+    query_type: str,
+    target_period: str | None = None,
+    target_date: str | None = None,
+    target_month: str | None = None,
+) -> dict:
     """
-    query_type: 'weekly_summary' | 'monthly_summary'
-    이번 주/달 기록 조회. 없으면 지난 주/달 폴백.
+    query_type: 'daily_summary' | 'weekly_summary' | 'monthly_summary'
+    target_period: 'this_week' | 'last_week' | 'this_month' | 'last_month'
+    target_date: 'today' | 'yesterday' | 'day_before_yesterday' | 'YYYY-MM-DD'
+    target_month: 'MM' | 'YYYY-MM'
     """
     today_str = _kst_today()
     today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
 
-    if query_type == "weekly_summary":
-        period_start = today_date - timedelta(days=today_date.weekday())  # 이번 주 월요일
-        period_label = f"이번 주 ({period_start.strftime('%m/%d')}~{today_date.strftime('%m/%d')})"
-        prev_start = period_start - timedelta(days=7)
-        prev_end = period_start
-        fallback_label = "지난주"
-    else:
-        period_start = today_date.replace(day=1)  # 이번 달 1일
-        period_label = f"이번 달 ({period_start.strftime('%m')}월)"
-        last_month_end = period_start - timedelta(days=1)
-        prev_start = last_month_end.replace(day=1)
-        prev_end = period_start
-        fallback_label = "지난달"
+    def empty(label: str, clarification_message: str = "") -> dict:
+        return {
+            "period_label": label,
+            "records": [],
+            "fallback": False,
+            "fallback_label": "",
+            "need_clarification": bool(clarification_message),
+            "clarification_message": clarification_message,
+        }
 
-    def fetch(start, end=None):
+    if query_type == "daily_summary":
+        resolved_date = _resolve_target_date(target_date, today_date)
+        if not resolved_date:
+            return empty("하루 기록", "어느 날 기록을 보고 싶은지 오늘, 어제, 그저께처럼 다시 물어봐줘.")
+        period_start = resolved_date
+        period_end = resolved_date + timedelta(days=1)
+        if resolved_date == today_date:
+            period_label = f"오늘 ({resolved_date.strftime('%m/%d')})"
+        elif resolved_date == today_date - timedelta(days=1):
+            period_label = f"어제 ({resolved_date.strftime('%m/%d')})"
+        elif resolved_date == today_date - timedelta(days=2):
+            period_label = f"그저께 ({resolved_date.strftime('%m/%d')})"
+        else:
+            period_label = resolved_date.strftime("%Y-%m-%d")
+        prev_start = prev_end = None
+        fallback_label = ""
+    elif query_type == "weekly_summary":
+        this_week_start = today_date - timedelta(days=today_date.weekday())
+        if target_period == "last_week":
+            period_start = this_week_start - timedelta(days=7)
+            period_end = this_week_start
+            period_label = (
+                f"지난주 ({period_start.strftime('%m/%d')}~"
+                f"{(period_end - timedelta(days=1)).strftime('%m/%d')})"
+            )
+            prev_start = prev_end = None
+            fallback_label = ""
+        else:
+            period_start = this_week_start
+            period_end = today_date + timedelta(days=1)
+            period_label = f"이번 주 ({period_start.strftime('%m/%d')}~{today_date.strftime('%m/%d')})"
+            prev_start = period_start - timedelta(days=7)
+            prev_end = period_start
+            fallback_label = "지난주"
+    elif query_type == "monthly_summary":
+        if target_month:
+            period_start = _resolve_target_month(target_month, today_date)
+            if not period_start:
+                return empty("월간 기록", "몇 월 기록을 보고 싶은지 다시 물어봐줘.")
+            period_end = date(period_start.year + (period_start.month // 12), (period_start.month % 12) + 1, 1)
+            period_label = period_start.strftime("%Y년 %m월")
+            prev_start = prev_end = None
+            fallback_label = ""
+        elif target_period == "last_month":
+            this_month_start = today_date.replace(day=1)
+            last_month_end = this_month_start - timedelta(days=1)
+            period_start = last_month_end.replace(day=1)
+            period_end = this_month_start
+            period_label = f"지난달 ({period_start.strftime('%m')}월)"
+            prev_start = prev_end = None
+            fallback_label = ""
+        else:
+            period_start = today_date.replace(day=1)
+            period_end = today_date + timedelta(days=1)
+            period_label = f"이번 달 ({period_start.strftime('%m')}월)"
+            last_month_end = period_start - timedelta(days=1)
+            prev_start = last_month_end.replace(day=1)
+            prev_end = period_start
+            fallback_label = "지난달"
+    else:
+        return empty("미션 기록", "어떤 기간의 기록을 보고 싶은지 다시 물어봐줘.")
+
+    def fetch(start, end):
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                if end:
-                    cur.execute("""
-                        SELECT DISTINCT ON (cl.checkin_date)
-                               m.mission_name, m.category, cl.mission_result,
-                               cl.checkin_date::text
-                        FROM checkin_log cl
-                        JOIN missions m ON cl.mission_id = m.mission_id
-                        WHERE cl.student_id = %s
-                          AND cl.checkin_date >= %s::date
-                          AND cl.checkin_date < %s::date
-                          AND cl.function_called = 'submit_mission_result'
-                        ORDER BY cl.checkin_date, cl.created_at DESC
-                    """, (student_id, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
-                else:
-                    cur.execute("""
-                        SELECT DISTINCT ON (cl.checkin_date)
-                               m.mission_name, m.category, cl.mission_result,
-                               cl.checkin_date::text
-                        FROM checkin_log cl
-                        JOIN missions m ON cl.mission_id = m.mission_id
-                        WHERE cl.student_id = %s
-                          AND cl.checkin_date >= %s::date
-                          AND cl.function_called = 'submit_mission_result'
-                        ORDER BY cl.checkin_date, cl.created_at DESC
-                    """, (student_id, start.strftime("%Y-%m-%d")))
+                cur.execute("""
+                    SELECT DISTINCT ON (cl.checkin_date)
+                           m.mission_name, m.category, m.main_category, m.sub_category,
+                           m.difficulty, cl.mission_result, cl.result_reason,
+                           cl.checkin_date::text
+                    FROM checkin_log cl
+                    JOIN missions m ON cl.mission_id = m.mission_id
+                    WHERE cl.student_id = %s
+                      AND cl.checkin_date >= %s::date
+                      AND cl.checkin_date < %s::date
+                      AND cl.function_called = 'submit_mission_result'
+                    ORDER BY cl.checkin_date, cl.created_at DESC
+                """, (student_id, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
                 return [dict(r) for r in cur.fetchall()]
 
-    records = fetch(period_start)
+    records = fetch(period_start, period_end)
     fallback = False
-    if not records:
+    if not records and prev_start and prev_end:
         records = fetch(prev_start, prev_end)
         fallback = True
 
@@ -543,6 +627,8 @@ def get_user_history_db(student_id: int, query_type: str) -> dict:
         "records": records,
         "fallback": fallback,
         "fallback_label": fallback_label,
+        "need_clarification": False,
+        "clarification_message": "",
     }
 
 
