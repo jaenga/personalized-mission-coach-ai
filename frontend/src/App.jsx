@@ -157,6 +157,13 @@ export default function App() {
       setMessages([{ role: "assistant", content: res.response, debugId }]);
       setDebugMap({ [debugId]: { ...res.debug } });
       setSelectedDebugId(debugId);
+
+      // 미션 재조회
+      if (profile?.student_id) {
+        fetchMissionByStudent(profile.student_id)
+          .then(setMission)
+          .catch(() => {});
+      }
     } catch {
       setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
@@ -190,12 +197,13 @@ export default function App() {
               setSelectedDebugId(debugId);
             }
             if (stage.stage === "qwen") {
+              const firstCall = stage.calls?.[0];
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: {
                   ...prev[debugId],
-                  detected_function: stage.fn,
-                  fn_args: stage.args,
+                  detected_function: firstCall?.[0] ?? null,
+                  fn_args: firstCall?.[1] ?? {},
                 },
               }));
             }
@@ -213,12 +221,11 @@ export default function App() {
                 ...prev,
                 [debugId]: { ...prev[debugId], ...debug },
               }));
-              // adjustment 후 미션 제목 갱신
-              if (debug.fn_args?.adjustment_type || debug.detected_function === "request_mission_adjustment") {
-                fetchMissionByStudent(profile.student_id)
-                  .then(setMission)
-                  .catch(() => {});
-              }
+            }
+            if (profile?.student_id) {
+              fetchMissionByStudent(profile.student_id)
+                .then(setMission)
+                .catch(() => {});
             }
           },
         }
@@ -362,7 +369,7 @@ export default function App() {
                 if (s.stage === "qwen") {
                   return (
                     <span key={i} className="pipeline-chip" style={{ borderColor: "#fd7e14" }}>
-                      ⚡ Qwen → <strong>{s.fn ?? "없음"}</strong> <em>({s.ms}ms)</em>
+                      ⚡ Qwen → <strong>{s.calls?.[0]?.[0] ?? "없음"}</strong> <em>({s.ms}ms)</em>
                     </span>
                   );
                 }

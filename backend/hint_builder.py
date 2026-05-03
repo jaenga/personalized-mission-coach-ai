@@ -213,7 +213,8 @@ def build_fn_hint(detected_function: str, fn_args: dict) -> str:
         result_kor = {"success": "결과: 완료.", "fail": "결과: 수행 실패."}.get(fn_args.get("result_type", ""), "")
         return (
             f"아이가 미션 결과를 제출했어. {result_kor} 자연스럽게 받아줘.\n"
-            "중요: DB 실행 결과가 없으므로 기록됐다고 말하지 마."
+            "중요: DB 실행 결과가 없으므로 기록됐다고 말하지 마. "
+            "절대로 '미션을 바꿨어', '변경했어' 같은 표현을 쓰지 마."
         )
     if detected_function == "get_mission_info":
         return {
