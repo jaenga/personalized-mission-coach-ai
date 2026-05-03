@@ -30,6 +30,7 @@ export default function App() {
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
+  const greetingRequestedRef = useRef(false);
   const loadedHistoryKeyRef = useRef(null);
 
   // 로그인 화면용 상태
@@ -49,7 +50,8 @@ export default function App() {
 
   // 채팅 히스토리 로드
   useEffect(() => {
-    if (!mission || !profile) return;
+    if (!profile?.student_id) return;
+
     const historyKey = `${sessionId}:${profile.student_id}`;
     if (loadedHistoryKeyRef.current === historyKey) return;
     loadedHistoryKeyRef.current = historyKey;
@@ -57,8 +59,10 @@ export default function App() {
     fetchChatHistory(sessionId)
       .then((history) => {
         if (history.length === 0) {
-          requestGreeting(mission);
+          setMessages([]);
+          greetingRequestedRef.current = false;
         } else {
+          greetingRequestedRef.current = true;
           setMessages(
             history.map((msg, i) =>
               msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
@@ -69,7 +73,16 @@ export default function App() {
       .catch(() => {
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
       });
-  }, [sessionId, profile, mission]);
+  }, [sessionId, profile?.student_id]);
+
+  useEffect(() => {
+    if (!profile || !mission) return;
+    if (messages.length > 0) return;
+    if (greetingRequestedRef.current) return;
+
+    greetingRequestedRef.current = true;
+    requestGreeting(mission);
+  }, [profile?.student_id, mission?.mission_id, messages.length]);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -141,6 +154,7 @@ export default function App() {
     } catch {
       // 삭제 실패해도 초기화
     }
+    greetingRequestedRef.current = false;
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
     loadedHistoryKeyRef.current = null;
@@ -168,6 +182,13 @@ export default function App() {
       setMessages([{ role: "assistant", content: res.response, debugId }]);
       setDebugMap({ [debugId]: { ...res.debug } });
       setSelectedDebugId(debugId);
+
+      // 미션 재조회
+      if (profile?.student_id) {
+        fetchMissionByStudent(profile.student_id)
+          .then(setMission)
+          .catch(() => {});
+      }
     } catch {
       setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
@@ -201,12 +222,13 @@ export default function App() {
               setSelectedDebugId(debugId);
             }
             if (stage.stage === "qwen") {
+              const firstCall = stage.calls?.[0];
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: {
                   ...prev[debugId],
-                  detected_function: stage.fn,
-                  fn_args: stage.args,
+                  detected_function: firstCall?.[0] ?? null,
+                  fn_args: firstCall?.[1] ?? {},
                 },
               }));
             }
@@ -224,12 +246,11 @@ export default function App() {
                 ...prev,
                 [debugId]: { ...prev[debugId], ...debug },
               }));
-              // adjustment 후 미션 제목 갱신
-              if (debug.fn_args?.adjustment_type || debug.detected_function === "request_mission_adjustment") {
-                fetchMissionByStudent(profile.student_id)
-                  .then(setMission)
-                  .catch(() => {});
-              }
+            }
+            if (profile?.student_id) {
+              fetchMissionByStudent(profile.student_id)
+                .then(setMission)
+                .catch(() => {});
             }
           },
         }
@@ -378,7 +399,7 @@ export default function App() {
                 if (s.stage === "qwen") {
                   return (
                     <span key={i} className="pipeline-chip" style={{ borderColor: "#fd7e14" }}>
-                      ⚡ Qwen → <strong>{s.fn ?? "없음"}</strong> <em>({s.ms}ms)</em>
+                      ⚡ Qwen → <strong>{s.calls?.[0]?.[0] ?? "없음"}</strong> <em>({s.ms}ms)</em>
                     </span>
                   );
                 }

@@ -4,7 +4,7 @@ Hint Builder — 실행 결과를 LLM 시스템 프롬프트용 텍스트로 변
 """
 from __future__ import annotations
 
-from database import _kst_today, get_student_mission_db, get_user_history_db
+from database import _kst_today, get_student_mission_db, get_user_history_db, resolve_mission_query_date
 from category_prompts import get_category_equivalency_prompt
 from executor import (
     SubmitStatus, SubmitResult,
@@ -167,12 +167,32 @@ def build_mission_info_hint(student_id: int, fn_args: dict) -> str:
     if query_type == "general_rule":
         return f"아이가 앱 규칙을 물어봤어. 아래 규칙을 친절하게 안내해줘.\n\n{GENERAL_RULE_TEXT}"
 
-    today = _kst_today()
-    mission = get_student_mission_db(student_id, today)
-    if not mission:
-        return "아이가 오늘 미션을 물어봤어. 오늘 배정된 미션이 없어. 미션이 아직 배정되지 않았다고 알려줘."
+    target_date = fn_args.get("target_date", "today")
+    mission_date = resolve_mission_query_date(target_date)
+    date_label = {
+        "today": "오늘",
+        "yesterday": "어제",
+        "day_before_yesterday": "그저께",
+    }.get(target_date, mission_date)
 
-    lines = ["아이가 오늘 미션 내용을 물어봤어. 아래 정보를 바탕으로 친절하게 안내해줘.\n"]
+    mission = get_student_mission_db(student_id, mission_date)
+    if not mission:
+        return (
+            f"아이가 {date_label} 배정 미션을 물어봤어.\n"
+            f"DB 조회 결과: {date_label} 배정된 미션이 없음.\n"
+            "반드시 아래 의미로만 답해.\n"
+            f"- {date_label} 배정된 미션은 없다고 말한다.\n"
+            "- 시스템 문제, 오류, 잠깐 문제가 생겼다는 식으로 말하지 않는다.\n"
+            "- 아이가 다시 알려줘야 한다고 말하지 않는다.\n"
+            "- 아이에게 부드럽고 짧게 안내한다.\n"
+            "응답 예시:\n"
+            f"{date_label} 배정된 미션은 아직 없었어."
+        )
+
+    lines = [
+        f"아이가 {date_label} 미션 내용을 물어봤어. 아래 정보를 바탕으로 친절하게 안내해줘.\n",
+        f"날짜: {date_label}",
+    ]
     lines.append(f"미션명: {mission.get('mission_name', '')}")
     if mission.get("mission_rule"):
         lines.append(f"수행 규칙: {mission['mission_rule']}")
@@ -276,7 +296,8 @@ def build_fn_hint(detected_function: str, fn_args: dict) -> str:
         result_kor = {"success": "결과: 완료.", "fail": "결과: 수행 실패."}.get(fn_args.get("result_type", ""), "")
         return (
             f"아이가 미션 결과를 제출했어. {result_kor} 자연스럽게 받아줘.\n"
-            "중요: DB 실행 결과가 없으므로 기록됐다고 말하지 마."
+            "중요: DB 실행 결과가 없으므로 기록됐다고 말하지 마. "
+            "절대로 '미션을 바꿨어', '변경했어' 같은 표현을 쓰지 마."
         )
     if detected_function == "get_mission_info":
         return {

@@ -80,6 +80,17 @@ def init_db():
                     ON checkin_log (student_id, checkin_date)
                     WHERE function_called = 'submit_mission_result'
                 """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pending_mission_suggestions (
+                    suggestion_id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    suggested_mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    source_text TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    resolved_at TIMESTAMPTZ
+                )
+            """)
         conn.commit()
 
 
@@ -249,6 +260,22 @@ def _kst_today() -> str:
     """한국 시간(KST) 기준 오늘 날짜 반환."""
     from datetime import timedelta
     return (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d")
+
+
+def resolve_mission_query_date(target_date: str | None) -> str:
+    today = datetime.strptime(_kst_today(), "%Y-%m-%d").date()
+
+    if not target_date or target_date == "today":
+        return today.strftime("%Y-%m-%d")
+    if target_date == "yesterday":
+        return (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    if target_date == "day_before_yesterday":
+        return (today - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    try:
+        return datetime.strptime(target_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return today.strftime("%Y-%m-%d")
 
 
 def assign_daily_missions() -> int:
@@ -422,6 +449,177 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
             )
             row = cur.fetchone()
     return dict(row) if row else None
+
+
+def normalize_mission_text(text: str) -> str:
+    """미션명 비교용 정규화: 공백 제거 + 소문자화."""
+    return (text or "").replace(" ", "").strip().lower()
+
+
+def find_mission_by_user_text(user_text: str) -> dict | None:
+    """
+    사용자 발화 안에 missions.mission_name이 정확히 포함되어 있으면 해당 미션 반환.
+
+    예:
+    user_text = "채소 반찬 먹기로 미션 바꿔줘"
+    mission_name = "채소 반찬 먹기"
+    → 공백 제거 후 "채소반찬먹기"가 사용자 발화에 포함되면 정확 매칭으로 판단
+    """
+    normalized_text = normalize_mission_text(user_text)
+    if not normalized_text:
+        return None
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT mission_id, mission_name, mission_rule
+                FROM missions
+                WHERE is_active = TRUE
+                ORDER BY mission_id
+            """)
+            rows = cur.fetchall()
+
+    for row in rows:
+        mission_name_norm = normalize_mission_text(row["mission_name"])
+        if mission_name_norm and mission_name_norm in normalized_text:
+            return dict(row)
+
+    return None
+
+
+def find_similar_mission_by_user_text(user_text: str) -> dict | None:
+    """
+    사용자 발화에서 2글자 이상 토큰을 뽑아 mission_name과 부분 매칭한다.
+    정확 매칭이 없을 때 유사 미션 제안용으로 사용한다.
+    """
+    cleaned = (user_text or "").strip()
+    if not cleaned:
+        return None
+
+    remove_words = [
+        "미션", "바꿔줘", "바꿔줄래", "변경해줘", "변경", "바꾸고싶어",
+        "그럼", "나", "으로", "로", "좀", "해줘", "하는", "거야",
+    ]
+
+    keyword_text = cleaned
+    for word in remove_words:
+        keyword_text = keyword_text.replace(word, " ")
+
+    tokens = [
+        token.strip()
+        for token in keyword_text.split()
+        if len(token.strip()) >= 2
+    ]
+
+    if not tokens:
+        return None
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            for token in tokens:
+                cur.execute("""
+                    SELECT mission_id, mission_name, mission_rule
+                    FROM missions
+                    WHERE is_active = TRUE
+                      AND mission_name ILIKE %s
+                    ORDER BY mission_id
+                    LIMIT 1
+                """, (f"%{token}%",))
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+
+    return None
+
+
+def save_pending_mission_suggestion(
+    student_id: int,
+    suggested_mission_id: int,
+    source_text: str | None = None,
+) -> None:
+    """
+    기존 pending 제안은 취소하고 새 제안을 저장한다.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE pending_mission_suggestions
+                SET status = 'cancelled',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND status = 'pending'
+            """, (student_id,))
+
+            cur.execute("""
+                INSERT INTO pending_mission_suggestions (
+                    student_id,
+                    suggested_mission_id,
+                    source_text,
+                    status
+                )
+                VALUES (%s, %s, %s, 'pending')
+            """, (student_id, suggested_mission_id, source_text))
+
+        conn.commit()
+
+
+def get_pending_mission_suggestion(student_id: int) -> dict | None:
+    today = _kst_today()
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT
+                    pms.suggestion_id,
+                    pms.student_id,
+                    pms.suggested_mission_id,
+                    m.mission_name,
+                    m.mission_rule,
+                    pms.source_text,
+                    pms.created_at
+                FROM pending_mission_suggestions pms
+                JOIN missions m ON m.mission_id = pms.suggested_mission_id
+                WHERE pms.student_id = %s
+                  AND pms.status = 'pending'
+                  AND (pms.created_at AT TIME ZONE 'Asia/Seoul')::date = %s::date
+                ORDER BY pms.created_at DESC
+                LIMIT 1
+            """, (student_id, today))
+            row = cur.fetchone()
+
+    return dict(row) if row else None
+
+
+def resolve_pending_mission_suggestion(suggestion_id: int, status: str = "accepted") -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE pending_mission_suggestions
+                SET status = %s,
+                    resolved_at = NOW()
+                WHERE suggestion_id = %s
+            """, (status, suggestion_id))
+        conn.commit()
+
+
+def has_checkin_today(student_id: int) -> bool:
+    """
+    오늘(KST) 미션 결과를 이미 제출했는지 확인.
+    checkin_log에 submit_mission_result 기록이 있으면 True.
+    """
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1
+                FROM checkin_log
+                WHERE student_id = %s
+                  AND checkin_date = %s::date
+                  AND function_called = 'submit_mission_result'
+                LIMIT 1
+            """, (student_id, today))
+            row = cur.fetchone()
+    return row is not None
 
 
 # ── 학생 정보 조회 (students 테이블) ──────────────────────────────────────────
@@ -630,19 +828,6 @@ def get_user_history_db(
         "need_clarification": False,
         "clarification_message": "",
     }
-
-
-def has_checkin_today(student_id: int) -> bool:
-    """오늘 이미 제출된 checkin_log 기록이 있는지 확인."""
-    today = _kst_today()
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM checkin_log WHERE student_id = %s AND checkin_date = %s "
-                "AND function_called = 'submit_mission_result' LIMIT 1",
-                (student_id, today),
-            )
-            return cur.fetchone() is not None
 
 
 _DIFFICULTY_ORDER = ["easy", "medium", "hard"]

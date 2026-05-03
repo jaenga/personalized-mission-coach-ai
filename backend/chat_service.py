@@ -12,14 +12,21 @@ from database import (
     _kst_today,
     fetch_messages,
     fetch_profile,
+    find_mission_by_user_text,
+    find_similar_mission_by_user_text,
+    get_pending_mission_suggestion,
     get_student_info_db,
     get_student_mission_db,
+    has_checkin_today,
     mark_synced,
+    resolve_pending_mission_suggestion,
+    save_mission_adjustment,
     save_message,
+    save_pending_mission_suggestion,
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
-from qwen_client import detect_history_call
+from qwen_client import detect_history_call, detect_submit_report_call
 from pipeline import (
     classify_multi,
     is_equivalency_submit,
@@ -89,7 +96,11 @@ def _fn_label(fn: str, args: dict | None = None) -> str:
     if fn == "cancel_mission_action":
         return "cancel"
     if fn == "get_mission_info":
-        return f"mission_info({args.get('query_type', '?')})"
+        query_type = args.get("query_type", "?")
+        target_date = args.get("target_date")
+        if target_date:
+            return f"mission_info({query_type}/{target_date})"
+        return f"mission_info({query_type})"
     if fn == "get_user_history":
         return f"history({args.get('query_type', '?')})"
     if fn == "check_mission_equivalency":
@@ -99,6 +110,148 @@ def _fn_label(fn: str, args: dict | None = None) -> str:
 
 def _fn_list(fn_calls: list[tuple[str, dict]]) -> str:
     return ", ".join(_fn_label(fn, args) for fn, args in fn_calls) or "-"
+
+
+def should_force_mission_adjustment(message: str) -> bool:
+    text = (message or "").replace(" ", "")
+    change_words = [
+        "미션바꿔",
+        "미션변경",
+        "바꿔줘",
+        "바꿔줄래",
+        "변경해줘",
+        "바꾸고싶어",
+    ]
+    return any(word in text for word in change_words)
+
+
+def is_accepting_mission_suggestion(message: str) -> bool:
+    text = (message or "").replace(" ", "").strip()
+
+    reject_words = ["아니", "싫어", "말고", "다른", "취소"]
+    if any(word in text for word in reject_words):
+        return False
+
+    accept_exact_words = [
+        "응",
+        "좋아",
+        "그래",
+        "ㅇㅇ",
+        "네",
+        "맞아",
+        "그걸로",
+        "그걸로해줘",
+        "그미션으로해줘",
+        "어좋아",
+        "음좋아",
+        "아좋아",
+        "오좋아",
+        "어응",
+        "응좋아",
+        "그래좋아",
+        "엉",
+        "엉좋아",
+        "엉해줘",
+        "응해줘",
+        "좋아해줘",
+        "그래해줘",
+        "그거해줘",
+        "그걸로바꿔줘",
+        "어해봐",
+        "어바꿔줘",
+        "어그걸로",
+        "어그걸로해줘",
+        "응해봐",
+        "그래해봐",
+        "좋아해봐",
+        "그걸로해봐",
+        "그걸로바꿔",
+    ]
+
+    return text in accept_exact_words
+
+
+def _is_meaningless_mission_candidate(candidate: str | None) -> bool:
+    if not candidate:
+        return True
+
+    compact = candidate.replace(" ", "").strip()
+    if len(compact) < 2:
+        return True
+
+    generic_words = {
+        "어", "으", "음", "아", "오",
+        "다른", "다른거", "다른것", "새", "새로운",
+        "그거", "그걸", "그걸로", "이거", "이걸", "이걸로",
+    }
+
+    return compact in generic_words
+
+
+def extract_mission_candidate_text(user_message: str) -> str | None:
+    """
+    미션 변경 요청에서 원하는 미션 후보 텍스트를 추출한다.
+    "으로", "로" 같은 전치사를 기준으로 텍스트를 분리한다.
+    """
+    if not user_message:
+        return None
+
+    text = user_message.strip()
+    compact_text = text.replace(" ", "")
+
+    generic_change_requests = {
+        "다른미션으로바꿔줘",
+        "새로운미션으로바꿔줘",
+        "새미션으로바꿔줘",
+        "다른걸로바꿔줘",
+        "다른거로바꿔줘",
+        "다른것으로바꿔줘",
+    }
+    if compact_text in generic_change_requests:
+        return None
+
+    # 전치사 기준으로 분리
+    prepositions = ["으로 바꿔", "로 바꿔", "으로 변경", "로 변경", "으로", "로"]
+    for prep in prepositions:
+        if prep in text:
+            parts = text.split(prep, 1)
+            if parts[0].strip():
+                candidate = parts[0].strip()
+                # 불필요한 단어 제거
+                remove_words = [
+                    "그럼", "나", "좀", "해줘", "하는", "거야", "다른", "새로운", "새", "또", "다시", "한번", "미션",
+                ]
+                for word in remove_words:
+                    candidate = candidate.replace(word, " ").strip()
+                candidate = " ".join(candidate.split())
+                if candidate and not _is_meaningless_mission_candidate(candidate):
+                    return candidate
+                if candidate and _is_meaningless_mission_candidate(candidate):
+                    return None
+
+    # 변경 키워드 기준으로도 시도
+    change_keywords = ["미션바꿔", "미션변경", "바꿔줘", "바꿔줄래", "변경해줘", "바꾸고싶어"]
+    for keyword in change_keywords:
+        if keyword in text:
+            parts = text.split(keyword, 1)
+            candidate = ""
+            if parts[0].strip():
+                candidate = parts[0].strip()
+            elif len(parts) > 1 and parts[1].strip():
+                candidate = parts[1].strip()
+
+            remove_words = [
+                "그럼", "나", "좀", "해줘", "하는", "거야", "으로", "로", "다른", "새로운", "새", "또", "다시", "한번", "미션",
+            ]
+            for word in remove_words:
+                candidate = candidate.replace(word, " ").strip()
+            candidate = " ".join(candidate.split())
+            if candidate and not _is_meaningless_mission_candidate(candidate):
+                return candidate
+            if candidate and _is_meaningless_mission_candidate(candidate):
+                return None
+
+    return None
 
 
 def _response_mode_label(action_ack, eq_submit: bool) -> str:
@@ -140,6 +293,101 @@ def _gemma_user_message(original_message: str, exec_results: ExecResults | None)
             f"새 미션: {result.new_mission_name or ''}",
         ])
     return original_message
+
+
+def _prepare_mission_change_guard(student_id: int | None, user_message: str, fn_calls: list[tuple[str, dict]]) -> tuple[dict | None, list[tuple[str, dict]]]:
+    guard_result = None
+    if not student_id or not user_message:
+        return guard_result, fn_calls
+
+    pending = get_pending_mission_suggestion(student_id)
+    if pending and is_accepting_mission_suggestion(user_message):
+        current_mission = get_student_mission_db(student_id)
+        if current_mission:
+            if has_checkin_today(student_id):
+                guard_result = {
+                    "type": "already_submitted",
+                    "message": "오늘 미션 결과를 이미 저장해서 지금은 미션을 바꿀 수 없어. 바꾸고 싶으면 먼저 방금 기록을 취소해줘!",
+                }
+                return guard_result, []
+            save_mission_adjustment(
+                student_id=student_id,
+                old_mission_id=current_mission["mission_id"],
+                new_mission_id=pending["suggested_mission_id"],
+            )
+            resolve_pending_mission_suggestion(pending["suggestion_id"], status="accepted")
+            guard_result = {
+                "type": "adjustment_saved",
+                "mission_id": pending["suggested_mission_id"],
+                "mission_name": pending["mission_name"],
+                "message": f'좋아! 오늘 미션을 "{pending["mission_name"]}"로 바꿨어.',
+            }
+            return guard_result, []
+
+    if should_force_mission_adjustment(user_message):
+        print("[Guard] force request_mission_adjustment because user asked to change mission")
+        fn_calls = [call for call in fn_calls if call[0] != "submit_mission_result"]
+
+        # 후보 텍스트 추출
+        candidate_text = extract_mission_candidate_text(user_message)
+        if not candidate_text:
+            # 후보 텍스트 없음: generic 변경으로
+            fn_calls = [
+                ("request_mission_adjustment", {
+                    "adjustment_type": "change",
+                    "requested_text": user_message,
+                })
+            ]
+            return guard_result, fn_calls
+
+        # 후보 텍스트 있음: 정확 매칭 시도
+        exact_mission = find_mission_by_user_text(candidate_text)
+        if exact_mission:
+            current_mission = get_student_mission_db(student_id)
+            if current_mission:
+                if has_checkin_today(student_id):
+                    guard_result = {
+                        "type": "already_submitted",
+                        "message": "오늘 미션 결과를 이미 저장해서 지금은 미션을 바꿀 수 없어. 바꾸고 싶으면 먼저 방금 기록을 취소해줘!",
+                    }
+                    return guard_result, []
+                save_mission_adjustment(
+                    student_id=student_id,
+                    old_mission_id=current_mission["mission_id"],
+                    new_mission_id=exact_mission["mission_id"],
+                )
+                guard_result = {
+                    "type": "adjustment_saved",
+                    "mission_id": exact_mission["mission_id"],
+                    "mission_name": exact_mission["mission_name"],
+                    "message": f'좋아! 오늘 미션을 "{exact_mission["mission_name"]}"로 바꿨어.',
+                }
+                return guard_result, []
+
+        # 정확 미션 없음: 유사 매칭 시도
+        similar_mission = find_similar_mission_by_user_text(candidate_text)
+        if similar_mission:
+            save_pending_mission_suggestion(
+                student_id=student_id,
+                suggested_mission_id=similar_mission["mission_id"],
+                source_text=user_message,
+            )
+            guard_result = {
+                "type": "suggestion",
+                "mission_id": similar_mission["mission_id"],
+                "mission_name": similar_mission["mission_name"],
+                "message": f'비슷한 미션으로 "{similar_mission["mission_name"]}"가 있어! 이 미션으로 바꿔볼까?',
+            }
+            return guard_result, []
+
+        # 유사 미션도 없음: 찾지 못했음 안내
+        guard_result = {
+            "type": "not_found",
+            "message": f'아직 "{candidate_text}"에 맞는 미션은 찾지 못했어. 다른 미션으로 바꾸고 싶으면 "다른 미션으로 바꿔줘"라고 말해줘!',
+        }
+        return guard_result, []
+
+    return guard_result, fn_calls
 
 
 # ── 가드: AI/캐릭터 정체성 질문 전처리 ────────────────────────────────────────
@@ -354,8 +602,15 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     if not is_greet:
         intent, intent_ms = await step_classify(body.message, mission_title)
-        history_call = detect_history_call(body.message)
-        if history_call:
+        submit_report_call = detect_submit_report_call(body.message)
+        history_call = None if submit_report_call else detect_history_call(body.message)
+        if submit_report_call:
+            intent = "B"
+            fn_calls = [submit_report_call]
+            detected_function = submit_report_call[0]
+            fn_args = submit_report_call[1]
+            print("[Route] submit report forced to submit_mission_result")
+        elif history_call:
             intent = "B"
             fn_calls = [history_call]
             detected_function = history_call[0]
@@ -379,6 +634,15 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 print(f"[RAG] 검색 실패 (무시): {e}")
 
     combo = classify_multi(fn_calls) if fn_calls else None
+    mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
+
+    # Recompute combo because the guard may have changed fn_calls.
+    combo = classify_multi(fn_calls) if fn_calls else None
+    if mission_change_guard_result and not fn_calls:
+        detected_function = "request_mission_adjustment"
+        fn_args = {"adjustment_type": "change", "requested_text": body.message}
+    elif should_force_mission_adjustment(body.message):
+        detected_function = "request_mission_adjustment"
     print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     exec_results = ExecResults()
     pending_submit_args = None
@@ -426,7 +690,11 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
     llm_only = ""
     call1_ms = 0
-    if action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
+    if mission_change_guard_result and not fn_calls:
+        ai_message = mission_change_guard_result["message"]
+        llm_only = ai_message
+        print(f"[Guard] direct response={_short(ai_message)!r}")
+    elif action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
         ai_message = action_ack.message
     else:
         try:
@@ -546,8 +814,15 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
         if not is_greet:
             intent, intent_ms = await step_classify(body.message, current_mission_title)
-            history_call = detect_history_call(body.message)
-            if history_call:
+            submit_report_call = detect_submit_report_call(body.message)
+            history_call = None if submit_report_call else detect_history_call(body.message)
+            if submit_report_call:
+                intent = "B"
+                fn_calls = [submit_report_call]
+                detected_function = submit_report_call[0]
+                fn_args = submit_report_call[1]
+                print("[Route] submit report forced to submit_mission_result")
+            elif history_call:
                 intent = "B"
                 fn_calls = [history_call]
                 detected_function = history_call[0]
@@ -581,6 +856,15 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     print(f"[RAG] 검색 실패 (무시): {e}")
 
         combo = classify_multi(fn_calls) if fn_calls else None
+        mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
+
+        # Recompute combo because the guard may have changed fn_calls.
+        combo = classify_multi(fn_calls) if fn_calls else None
+        if mission_change_guard_result and not fn_calls:
+            detected_function = "request_mission_adjustment"
+            fn_args = {"adjustment_type": "change", "requested_text": body.message}
+        elif should_force_mission_adjustment(body.message):
+            detected_function = "request_mission_adjustment"
         print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
         exec_results = ExecResults()
         pending_submit_args = None
@@ -640,7 +924,11 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         llm_message = ""
         prefix_buffer_mode = bool(server_prefix) and not eq_submit
 
-        if action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
+        if mission_change_guard_result and not fn_calls:
+            ai_message = mission_change_guard_result["message"]
+            async for event in _fake_stream_template_response(ai_message):
+                yield event
+        elif action_ack and action_ack.mode is ResponseMode.SERVER_ONLY:
             ai_message = action_ack.message
             async for event in _fake_stream_template_response(ai_message):
                 yield event
@@ -741,14 +1029,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             },
             "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
         }
-        yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
-
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
         llm_save = _filter_ai_response(
             llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
         )
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
+
+        yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type

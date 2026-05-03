@@ -42,7 +42,10 @@ AVAILABLE_FUNCTIONS: list[dict] = [
         "name": "get_mission_info",
         "description": (
             "미션 관련 정보(오늘 미션, 마감 시간, 규칙)를 물어볼 때 호출합니다.\n"
-            "- today: 오늘 미션의 내용, 수행 방법, 주의사항, 수행 조건을 물을 때\n"
+            "- today: 오늘/어제/그저께/특정 날짜에 배정된 미션의 내용, 수행 방법, 주의사항, 수행 조건을 물을 때\n"
+            "- \"오늘 미션 뭐야?\" → query_type='today', target_date='today'\n"
+            "- \"어제 미션 뭐였어?\", \"어제 나 뭐 해야 했어?\" → query_type='today', target_date='yesterday'\n"
+            "- \"그저께 미션 뭐였어?\" → query_type='today', target_date='day_before_yesterday'\n"
             "- deadline: 제출 마감, 기한을 물을 때\n"
             "- general_rule: 앱/시스템 차원의 제출·인증·판정·운영 규칙을 물을 때\n"
             "- 사용하지 않는 경우: 결과 보고, 미션 변경 요청, 대체 수행 가능 여부 질문"
@@ -54,6 +57,10 @@ AVAILABLE_FUNCTIONS: list[dict] = [
                     "type": "string",
                     "enum": ["today", "deadline", "general_rule"],
                     "description": "조회할 정보의 종류",
+                },
+                "target_date": {
+                    "type": "string",
+                    "description": "조회할 미션 날짜. today, yesterday, day_before_yesterday 또는 YYYY-MM-DD",
                 },
             },
             "required": ["query_type"],
@@ -159,9 +166,14 @@ AVAILABLE_FUNCTIONS: list[dict] = [
 _SYSTEM_PROMPT = """당신은 어린이 건강 습관 코치 앱의 AI입니다. 사용자 발화를 보고 반드시 제공된 함수 중 하나를 호출해야 합니다. 자연어 답변은 절대 생성하지 마세요. 함수 호출만 출력하세요.
 
 함수 선택 시 주의사항:
+- 오늘/어제/그저께/특정 날짜에 배정된 미션이 무엇인지 물으면 → get_mission_info(query_type="today", target_date=...)
+- "오늘 미션 뭐야?" → get_mission_info(query_type="today", target_date="today")
+- "어제 미션 뭐였어?", "어제 나 뭐 해야 했어?" → get_mission_info(query_type="today", target_date="yesterday")
+- "그저께 미션 뭐였어?" → get_mission_info(query_type="today", target_date="day_before_yesterday")
 - 마감 시간·기한을 물으면 → get_mission_info(deadline)
 - 규칙·인정 기준·인증 방법을 물으면 → get_mission_info(general_rule)
-- 미션 기록/조회/요약을 물으면 → get_user_history
+- 미션 기록/조회/요약/성공 여부/실패 여부를 물으면 → get_user_history
+- "어제 기록 보여줘"는 get_user_history, "어제 미션 뭐였어"는 get_mission_info
 - 이번 주 기록 → query_type="weekly_summary", target_period="this_week"
 - 지난주 기록 → query_type="weekly_summary", target_period="last_week"
 - 이번 달 기록 → query_type="monthly_summary", target_period="this_month"
@@ -228,6 +240,13 @@ def _coerce_function_calls(
     user_message: str,
     calls: list[tuple[str, dict]],
 ) -> list[tuple[str, dict]]:
+    mission_info_call = detect_mission_info_call(user_message)
+    if mission_info_call:
+        calls = [mission_info_call]
+    submit_report_call = detect_submit_report_call(user_message)
+    if submit_report_call:
+        calls = [submit_report_call]
+        return calls
     calls = _coerce_history_call(user_message, calls)
     return [_coerce_mission_info_call(user_message, call) for call in calls]
 
@@ -240,17 +259,106 @@ def _coerce_mission_info_call(
     if fn != "get_mission_info":
         return call
 
+    args = dict(args or {})
     query_type = args.get("query_type")
-    if query_type in {"today", "deadline", "general_rule"}:
-        return call
-    if "마감" in user_message or "기한" in user_message:
-        return fn, {"query_type": "deadline"}
-    if "규칙" in user_message or "인정" in user_message or "인증" in user_message:
-        return fn, {"query_type": "general_rule"}
-    return fn, {"query_type": "today"}
+
+    if query_type not in {"today", "deadline", "general_rule"}:
+        if "마감" in user_message or "기한" in user_message:
+            args = {"query_type": "deadline"}
+        elif "규칙" in user_message or "인정" in user_message or "인증" in user_message:
+            args = {"query_type": "general_rule"}
+        else:
+            args = {"query_type": "today"}
+
+    if args.get("query_type") == "today":
+        if "그저께" in user_message:
+            args["target_date"] = "day_before_yesterday"
+        elif "어제" in user_message:
+            args["target_date"] = "yesterday"
+        elif "오늘" in user_message:
+            args["target_date"] = "today"
+        else:
+            args.setdefault("target_date", "today")
+
+    return fn, args
 
 
-_HISTORY_QUERY_RE = re.compile(r"기록|조회|요약|뭐\s*했|했었|성공.*몇|실패.*몇")
+def detect_mission_info_call(user_message: str) -> tuple[str, dict] | None:
+    text = user_message or ""
+    compact = text.replace(" ", "")
+    has_date = (
+        "오늘" in text
+        or "어제" in text
+        or "그저께" in text
+        or re.search(r"\d{4}-\d{2}-\d{2}", text)
+    )
+    asks_assigned_mission = (
+        "미션" in text
+        and any(word in compact for word in ("뭐", "무엇", "머였", "뭐였", "내용", "배정"))
+    ) or any(word in compact for word in ("뭐해야", "해야했어", "해야했", "뭘해야"))
+    asks_history = any(word in text for word in ("기록", "요약", "성공", "실패", "완료", "제출"))
+
+    if has_date and asks_assigned_mission and not asks_history:
+        return ("get_mission_info", {"query_type": "today"})
+    return None
+
+
+def detect_submit_report_call(user_message: str) -> tuple[str, dict] | None:
+    text = user_message or ""
+    compact = text.replace(" ", "")
+
+    is_question = (
+        "?" in text
+        or any(word in compact for word in [
+            "확인해줘",
+            "확인해",
+            "맞아",
+            "맞나요",
+            "맞는거야",
+            "된거야",
+            "인거야",
+            "했어?",
+            "성공이야?",
+        ])
+    )
+    if is_question:
+        return None
+
+    fail_words = [
+        "미션실패",
+        "오늘미션실패",
+        "실패했",
+        "못했",
+        "못했어",
+        "안했",
+        "안했어",
+        "까먹",
+        "못끝",
+    ]
+    success_words = [
+        "미션성공",
+        "오늘미션성공",
+        "성공했",
+        "미션완료",
+        "오늘미션완료",
+        "완료했",
+        "끝냈",
+        "다했",
+        "다했어",
+        "수행했",
+    ]
+
+    if any(word in compact for word in fail_words):
+        return ("submit_mission_result", {"result_type": "fail"})
+    if any(word in compact for word in success_words):
+        return ("submit_mission_result", {"result_type": "success"})
+
+    return None
+
+
+_HISTORY_QUERY_RE = re.compile(
+    r"기록|조회|요약|뭐\s*했|했었|성공.*몇|실패.*몇|성공했|실패했|완료했|제출했"
+)
 _MONTH_HISTORY_RE = re.compile(
     r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월.*(?:기록|조회|요약|보여|알려)"
 )
@@ -260,6 +368,8 @@ def _coerce_history_call(
     user_message: str,
     calls: list[tuple[str, dict]],
 ) -> list[tuple[str, dict]]:
+    if detect_mission_info_call(user_message):
+        return calls
     history_call = detect_history_call(user_message)
     if history_call:
         return [history_call]
@@ -267,6 +377,51 @@ def _coerce_history_call(
 
 
 def detect_history_call(user_message: str) -> tuple[str, dict] | None:
+    text = user_message or ""
+    compact = text.replace(" ", "")
+
+    has_date = (
+        "오늘" in text
+        or "어제" in text
+        or "그저께" in text
+        or re.search(r"\d{4}-\d{2}-\d{2}", text)
+    )
+    asks_status = any(word in compact for word in [
+        "성공했",
+        "실패했",
+        "완료했",
+        "제출했",
+        "기록됐",
+        "저장됐",
+    ])
+    is_question = (
+        "?" in text
+        or compact.endswith(("어", "나", "니", "나요", "었어", "였어"))
+    )
+
+    if has_date and asks_status and is_question:
+        iso_date = re.search(r"\d{4}-\d{2}-\d{2}", text)
+        if "그저께" in text:
+            return ("get_user_history", {
+                "query_type": "daily_summary",
+                "target_date": "day_before_yesterday",
+            })
+        if "어제" in text:
+            return ("get_user_history", {
+                "query_type": "daily_summary",
+                "target_date": "yesterday",
+            })
+        if "오늘" in text:
+            return ("get_user_history", {
+                "query_type": "daily_summary",
+                "target_date": "today",
+            })
+        if iso_date:
+            return ("get_user_history", {
+                "query_type": "daily_summary",
+                "target_date": iso_date.group(0),
+            })
+
     if not _HISTORY_QUERY_RE.search(user_message):
         return None
 

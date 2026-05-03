@@ -164,11 +164,30 @@ def _exec_label(results: ExecResults) -> str:
     )
 
 
+_B_COMMAND_RE = re.compile(
+    r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
+)
 _CANCEL_TARGET_RE = re.compile(
     r"(?:미션\s*)?(?:성공|실패)(?:\s*(?:제출|기록|한\s*거|한거))?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
     r"|(?:방금|최근|아까)?\s*(?:미션\s*결과\s*)?(?:제출|기록)(?:한\s*거|한거|된\s*거|된거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
     r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
 )
+# 행동+부정: 금지형 미션("과자 안 먹기")에서 성공일 수 있어 별도 처리
+# 주의: 못했/안했(일반 실패)은 여기 포함 안 함 → _FAIL_RE에서 처리
+_NEGATION_VERB_RE = re.compile(
+    r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안먹|못먹|안마|못마"
+)
+# 명확한 실패 표현 (금지형 미션과 무관)
+_FAIL_RE = re.compile(r"실패|못했|안했|안해|못해|하기 싫|못하겠")
+_EXPLICIT_SUCCESS_RE = re.compile(r"성공|완료|해냈|끝냈|다 했|다했|클리어")
+_SUCCESS_RE = re.compile(
+    r"했어(?:요)?|먹었어(?:요)?|마셨어(?:요)?|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
+)
+_NUMERIC_REPORT_RE = re.compile(
+    r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
+    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
+)
+_PAST_VERB_RE = re.compile(r"[가-힣]{1,8}(?:었|았|했|겼|켰|렸|웠|냈|봤)어(?:요)?")
 
 
 # 다중 의도 키워드 — 명시적 접속사
@@ -183,6 +202,29 @@ _QUERY_HINT_RE = re.compile(r"보여|알려|뭐야|뭔데|언제|기록|조회|�
 _COMFORT_RE = re.compile(
     r"힘들|슬퍼|슬프|짜증|우울|싫어|못하겠|포기|지쳐|피곤|하기 싫"
 )
+
+_OVERLAP_STOPWORDS = frozenset({
+    "안", "못", "하기", "오늘", "한", "의", "에", "을", "를", "이", "가", "은", "는", "도", "로", "와", "과", "매일", "하루",
+    "대신", "작은", "큰", "개", "잔", "번", "분", "초",
+})
+
+
+def _tokenize_koreanish(text: str) -> set[str]:
+    return set(re.findall(r"[가-힣A-Za-z0-9]+", text))
+
+
+def _mission_overlap(message: str, mission_name: str) -> bool:
+    """미션명과 메시지의 핵심 토큰이 겹치면 True."""
+    if not mission_name or mission_name == "오늘의 미션":
+        return False
+
+    mission_tokens = {
+        token
+        for token in _tokenize_koreanish(mission_name)
+        if token not in _OVERLAP_STOPWORDS
+    }
+    message_tokens = _tokenize_koreanish(message)
+    return bool(mission_tokens & message_tokens)
 
 
 def _should_call_name(
@@ -212,6 +254,59 @@ def _should_call_name(
         return random.random() < 0.50
 
     return False
+
+
+def step_normalize_b_input(message: str, mission_name: str) -> tuple[str, bool]:
+    """
+    B 인텐트 메시지를 Qwen 전에 정규화.
+    반환: (qwen에 넘길 메시지, should_clarify)
+    should_clarify=True → D로 리다이렉트해서 확인 질문
+    """
+    # "성공 취소"의 성공/실패는 새 제출이 아니라 취소 대상 설명이다.
+    if _CANCEL_TARGET_RE.search(message):
+        normalized = "최근 미션 결과 제출을 취소해줘"
+        print(f"[Normalize] cancel-target: {_short(message)!r} -> cancel")
+        return normalized, False
+
+    # 커맨드형 B → 정규화 불필요, 그대로 통과
+    if _B_COMMAND_RE.search(message):
+        return message, False
+
+    # 행동+부정: 금지형 미션에서 성공일 수 있음 → 항상 D로 확인
+    if _NEGATION_VERB_RE.search(message):
+        print(f"[Normalize] clarify negation: {_short(message)!r}")
+        return message, True
+
+    if _FAIL_RE.search(message):
+        normalized = f"오늘 미션 '{mission_name}' 실패했어요"
+        print(f"[Normalize] fail: {_short(message)!r}")
+        return normalized, False
+
+    if _EXPLICIT_SUCCESS_RE.search(message):
+        normalized = f"오늘 미션 '{mission_name}' 성공했어요"
+        print(f"[Normalize] success: {_short(message)!r}")
+        return normalized, False
+
+    # 숫자+단위 보고는 미션 기준과 비교하지 않고 저장하면 오판 위험이 큼
+    if _NUMERIC_REPORT_RE.search(message):
+        print(f"[Normalize] clarify numeric: {_short(message)!r}")
+        return message, True
+
+    # 미션 키워드 겹침 없으면 정규화 스킵
+    if not _mission_overlap(message, mission_name):
+        return message, False
+
+    if _SUCCESS_RE.search(message):
+        normalized = f"오늘 미션 '{mission_name}' 성공했어요"
+        print(f"[Normalize] success: {_short(message)!r}")
+        return normalized, False
+
+    # 과거형 동사 있는데 성공/실패 불명확 → 확인 질문
+    if _PAST_VERB_RE.search(message):
+        print(f"[Normalize] clarify past: {_short(message)!r}")
+        return message, True
+
+    return message, False
 
 
 async def step_classify(message: str, mission_name: str = "") -> tuple[str, int]:
