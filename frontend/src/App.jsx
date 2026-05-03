@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
@@ -30,6 +30,7 @@ export default function App() {
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
+  const loadedHistoryKeyRef = useRef(null);
 
   // 로그인 화면용 상태
   const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
@@ -49,10 +50,14 @@ export default function App() {
   // 채팅 히스토리 로드
   useEffect(() => {
     if (!mission || !profile) return;
+    const historyKey = `${sessionId}:${profile.student_id}`;
+    if (loadedHistoryKeyRef.current === historyKey) return;
+    loadedHistoryKeyRef.current = historyKey;
+
     fetchChatHistory(sessionId)
       .then((history) => {
         if (history.length === 0) {
-          requestGreeting(mission.mission_name);
+          requestGreeting(mission);
         } else {
           setMessages(
             history.map((msg, i) =>
@@ -64,7 +69,7 @@ export default function App() {
       .catch(() => {
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
       });
-  }, [sessionId, mission]);
+  }, [sessionId, profile, mission]);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -138,6 +143,7 @@ export default function App() {
     }
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
+    loadedHistoryKeyRef.current = null;
     setProfile(null);
     setMission(null);
     setMessages([]);
@@ -149,10 +155,15 @@ export default function App() {
     setFarewellMessage("");
   }
 
-  async function requestGreeting(missionTitle) {
+  async function requestGreeting(currentMission) {
+    if (currentMission?.mission_message) {
+      setMessages([{ role: "assistant", content: currentMission.mission_message }]);
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await sendMessage("__GREET__", sessionId, missionTitle);
+      const res = await sendMessage("__GREET__", sessionId, currentMission?.mission_name);
       const debugId = crypto.randomUUID();
       setMessages([{ role: "assistant", content: res.response, debugId }]);
       setDebugMap({ [debugId]: { ...res.debug } });
@@ -335,7 +346,12 @@ export default function App() {
 
       {mission && (
         <div className="mission-banner">
-          🎯 오늘 미션: <strong>{mission.mission_name}</strong>
+          <div>
+            🎯 오늘 미션: <strong>{mission.mission_name}</strong>
+          </div>
+          {mission.mission_message && (
+            <p className="mission-banner-message">{mission.mission_message}</p>
+          )}
         </div>
       )}
 
