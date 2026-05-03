@@ -11,8 +11,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
 DEMO_MISSION_IDS = [
-    8, 33, 43, 51, 62, 64, 67, 87, 98,
-    112, 130, 150, 153, 154, 155, 159, 192,
+    2, 12, 16, 25, 29, 38, 43, 51, 62,
+    67, 71, 87, 96, 112, 153, 159, 168, 192,
 ]
 
 
@@ -41,6 +41,7 @@ def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            cur.execute("DELETE FROM demo_mission")
             for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
                 cur.execute("""
                     INSERT INTO demo_mission (order_no, mission_id, is_active)
