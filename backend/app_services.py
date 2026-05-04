@@ -10,6 +10,7 @@ from database import (
     delete_messages,
     fetch_messages,
     fetch_profile,
+    get_latest_chat_session,
     get_student_by_credentials,
     get_student_mission_db,
     init_db,
@@ -52,7 +53,11 @@ def verify_student(body: VerifyRequest):
 
 
 def save_user_profile(body: ProfileRequest):
-    db_session_id = create_chat_session(body.student_id)
+    existing_profile = fetch_profile(body.session_id)
+    if existing_profile and existing_profile["student_id"] == body.student_id:
+        db_session_id = existing_profile["db_session_id"]
+    else:
+        db_session_id = get_latest_chat_session(body.student_id) or create_chat_session(body.student_id)
     save_profile(body.session_id, body.student_id, body.student_name, db_session_id)
     mission = None
     if DEMO_MODE:

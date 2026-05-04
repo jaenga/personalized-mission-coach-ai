@@ -168,6 +168,25 @@ def create_chat_session(student_id: int) -> int:
     return db_session_id
 
 
+def get_latest_chat_session(student_id: int) -> int | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cs.session_id
+                FROM chat_sessions cs
+                LEFT JOIN chat_messages cm ON cm.session_id = cs.session_id
+                WHERE cs.student_id = %s
+                GROUP BY cs.session_id, cs.started_at
+                ORDER BY COUNT(cm.message_id) DESC, MAX(cm.created_at) DESC NULLS LAST, cs.started_at DESC
+                LIMIT 1
+                """,
+                (student_id,),
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
 def save_profile(session_id: str, student_id: int, student_name: str, db_session_id: int):
     with get_conn() as conn:
         with conn.cursor() as cur:
