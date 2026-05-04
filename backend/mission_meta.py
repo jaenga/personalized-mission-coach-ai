@@ -25,8 +25,8 @@ MISSION_META: dict[int, MissionMeta] = {
     2: MissionMeta(type="perform"),
     12: MissionMeta(
         type="substitute",
-        target_kw=["엘리베이터", "승강기"],
-        success_kw=["계단"],
+        target_kw=["엘리베이터", "엘레베이터", "엘베", "승강기"],
+        success_kw=["계단", "계단실"],
     ),
     16: MissionMeta(type="perform", numeric=NumericGoal(50, "회")),
     25: MissionMeta(type="perform", numeric=NumericGoal(10, "분")),
@@ -52,10 +52,10 @@ MISSION_META: dict[int, MissionMeta] = {
     168: MissionMeta(
         type="limit",
         numeric=NumericGoal(30, "분"),
-        target_kw=["유튜브", "영상", "쇼츠"],
+        target_kw=["유튜브", "유튭", "유투브", "영상", "쇼츠", "릴스"],
     ),
     192: MissionMeta(
         type="prohibit",
-        target_kw=["화면", "핸드폰", "폰", "TV", "유튜브", "영상"],
+        target_kw=["화면", "핸드폰", "폰", "TV", "유튜브", "유튭", "유투브", "영상", "쇼츠", "릴스"],
     ),
 }
