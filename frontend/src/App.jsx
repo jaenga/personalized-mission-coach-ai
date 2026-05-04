@@ -30,7 +30,10 @@ export default function App() {
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
+  const [profileSynced, setProfileSynced] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const greetingRequestedRef = useRef(false);
+  const syncedProfileKeyRef = useRef(null);
   const loadedHistoryKeyRef = useRef(null);
 
   // 로그인 화면용 상태
@@ -40,24 +43,70 @@ export default function App() {
   const [signupPopupOpen, setSignupPopupOpen] = useState(false);
   const [farewellMessage, setFarewellMessage] = useState("");
 
+  // 로컬 프로필을 백엔드 세션 매핑과 동기화
+  useEffect(() => {
+    if (!profile?.student_id) {
+      setProfileSynced(false);
+      return;
+    }
+
+    const profileKey = `${sessionId}:${profile.student_id}:${profile.student_name}`;
+    if (syncedProfileKeyRef.current === profileKey) {
+      setProfileSynced(true);
+      return;
+    }
+
+    let cancelled = false;
+    setProfileSynced(false);
+    setHistoryLoaded(false);
+
+    saveProfile(sessionId, profile.student_id, profile.student_name)
+      .then((result) => {
+        if (cancelled) return;
+        syncedProfileKeyRef.current = profileKey;
+        if (result.mission) {
+          setMission(result.mission);
+        }
+        setProfileSynced(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProfileSynced(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, profile?.student_id, profile?.student_name]);
+
   // 미션 로드 (프로필 확정 후)
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || !profileSynced) return;
     fetchMissionByStudent(profile.student_id)
       .then(setMission)
       .catch(() => setMission({ mission_id: 1, mission_name: "오늘의 미션" }));
-  }, [profile]);
+  }, [profile, profileSynced]);
 
   // 채팅 히스토리 로드
   useEffect(() => {
-    if (!profile?.student_id) return;
+    if (!profile?.student_id) {
+      setHistoryLoaded(false);
+      return;
+    }
+    if (!profileSynced) {
+      setHistoryLoaded(false);
+      return;
+    }
 
     const historyKey = `${sessionId}:${profile.student_id}`;
     if (loadedHistoryKeyRef.current === historyKey) return;
     loadedHistoryKeyRef.current = historyKey;
+    setHistoryLoaded(false);
 
+    let cancelled = false;
     fetchChatHistory(sessionId)
       .then((history) => {
+        if (cancelled) return;
         if (history.length === 0) {
           setMessages([]);
           greetingRequestedRef.current = false;
@@ -69,20 +118,28 @@ export default function App() {
             )
           );
         }
+        setHistoryLoaded(true);
       })
       .catch(() => {
+        if (cancelled) return;
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
+        setHistoryLoaded(true);
       });
-  }, [sessionId, profile?.student_id]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, profile?.student_id, profileSynced]);
 
   useEffect(() => {
     if (!profile || !mission) return;
+    if (!historyLoaded) return;
     if (messages.length > 0) return;
     if (greetingRequestedRef.current) return;
 
     greetingRequestedRef.current = true;
     requestGreeting(mission);
-  }, [profile?.student_id, mission?.mission_id, messages.length]);
+  }, [profile?.student_id, mission?.mission_id, historyLoaded, messages.length]);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -91,13 +148,13 @@ export default function App() {
     setLoginLoading(true);
     try {
       const student = await verifyStudent(loginForm.name.trim(), loginForm.phone4.trim());
-      const profileResult = await saveProfile(sessionId, student.student_id, student.student_name);
       const saved = { student_id: student.student_id, student_name: student.student_name };
       localStorage.setItem("user_profile", JSON.stringify(saved));
+      syncedProfileKeyRef.current = null;
+      loadedHistoryKeyRef.current = null;
+      setProfileSynced(false);
+      setHistoryLoaded(false);
       setProfile(saved);
-      if (profileResult.mission) {
-        setMission(profileResult.mission);
-      }
     } catch (err) {
       if (err.status === 404 || err.message.includes("일치하는 학생")) {
         setSignupPopupOpen(true);
@@ -118,11 +175,13 @@ export default function App() {
       const result = await registerDemoStudent(loginForm.name.trim(), loginForm.phone4.trim());
       const student = result.student;
 
-      await saveProfile(sessionId, student.student_id, student.student_name);
-
       const saved = { student_id: student.student_id, student_name: student.student_name };
       localStorage.setItem("user_profile", JSON.stringify(saved));
       setSignupPopupOpen(false);
+      syncedProfileKeyRef.current = null;
+      loadedHistoryKeyRef.current = null;
+      setProfileSynced(false);
+      setHistoryLoaded(false);
       setProfile(saved);
 
       if (result.mission) {
@@ -155,6 +214,9 @@ export default function App() {
       // 삭제 실패해도 초기화
     }
     greetingRequestedRef.current = false;
+    syncedProfileKeyRef.current = null;
+    setHistoryLoaded(false);
+    setProfileSynced(false);
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
     loadedHistoryKeyRef.current = null;
