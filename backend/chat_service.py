@@ -44,6 +44,33 @@ from sheets import cancel_mission_result, update_mission_result
 
 _FAKE_STREAM_CHARS = 4
 _FAKE_STREAM_DELAY_SEC = 0.1
+_CLARIFY_TEMPLATE_REASONS = {
+    "numeric",
+    "numeric_no_count",
+    "numeric_ambiguous",
+    "negation_verb",
+    "difficulty",
+}
+
+
+def _clarify_template(reason: str, user_message: str, mission_title: str) -> str | None:
+    if reason not in _CLARIFY_TEMPLATE_REASONS:
+        return None
+    if reason == "numeric_no_count":
+        return "몇 개나 몇 분 했는지 알려줄래? 예를 들어, '3개 했어', '10분 했어'처럼 말해주면 돼! ☺️"
+    if reason == "numeric_ambiguous":
+        return "목표까지 조금 남았어! 더 해볼래, 아니면 여기까지 기록할까? 💪"
+    if reason == "numeric":
+        if re.search(r"봤|봄|시청|유튜브|유튭|유투브|영상|쇼츠|릴스", user_message):
+            return "무엇을 몇 분 봤는지 조금 더 자세히 알려줄 수 있을까?"
+        return "어떤 걸 몇 분이나 몇 개 했는지 조금 더 자세히 알려줄래? 😃"
+    if reason == "negation_verb":
+        if "엘리베이터" in user_message or "엘레베이터" in user_message or "엘베" in user_message:
+            return "엘리베이터는 안 탔구나! 잘했어 👏 그럼 계단을 이용하여 올라가기도 실천했을까? 😆"
+        return "오늘 미션 기준으로 성공인지 같이 확인해볼까?"
+    if reason == "difficulty":
+        return "조금 어렵게 느껴졌구나. 쉬운 미션으로 바꿔줄까? 아니면 오늘 미션으로 계속 기록할래? 🧐"
+    return None
 
 
 def _sse(payload: dict) -> str:
@@ -112,8 +139,18 @@ def _fn_list(fn_calls: list[tuple[str, dict]]) -> str:
     return ", ".join(_fn_label(fn, args) for fn, args in fn_calls) or "-"
 
 
+def _has_cancel_call(fn_calls: list[tuple[str, dict]]) -> bool:
+    return any(fn == "cancel_mission_action" for fn, _ in fn_calls)
+
+
 def should_force_mission_adjustment(message: str) -> bool:
     text = (message or "").replace(" ", "")
+    if _MISSION_CHANGE_NEGATION_RE.search(text):
+        return False
+    if _CANCEL_NEGATION_RE.search(message or ""):
+        return False
+    if _CANCEL_REQUEST_RE.search(text):
+        return False
     change_words = [
         "미션바꿔",
         "미션변경",
@@ -123,6 +160,11 @@ def should_force_mission_adjustment(message: str) -> bool:
         "바꾸고싶어",
     ]
     return any(word in text for word in change_words)
+
+
+_MISSION_CHANGE_NEGATION_RE = re.compile(r"바꾸지마|바꾸지말|변경하지마|변경하지말|바꾸면안|변경하면안")
+_CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
+_CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로")
 
 
 def is_accepting_mission_suggestion(message: str) -> bool:
@@ -298,6 +340,8 @@ def _gemma_user_message(original_message: str, exec_results: ExecResults | None)
 def _prepare_mission_change_guard(student_id: int | None, user_message: str, fn_calls: list[tuple[str, dict]]) -> tuple[dict | None, list[tuple[str, dict]]]:
     guard_result = None
     if not student_id or not user_message:
+        return guard_result, fn_calls
+    if _has_cancel_call(fn_calls):
         return guard_result, fn_calls
 
     pending = get_pending_mission_suggestion(student_id)
@@ -599,11 +643,36 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     intent_ms = 0
     qwen_ms = 0
     clarify_hint_override = ""
+    clarify_reason = ""
 
     if not is_greet:
+        if _CANCEL_NEGATION_RE.search(body.message):
+            cancel_negation_message = "알겠어, 취소하지 않을게!"
+            print("[Guard] cancel negation detected -> fixed response")
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", cancel_negation_message)
+            return {
+                "response": cancel_negation_message,
+                "mission_completed": False,
+                "detected_function": None,
+                "sources": [],
+                "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}},
+            }
         intent, intent_ms = await step_classify(body.message, mission_title)
-        submit_report_call = detect_submit_report_call(body.message)
-        history_call = None if submit_report_call else detect_history_call(body.message)
+        if intent == "B" and "취소" in body.message:
+            norm = normalize_b_input(body.message, mission_title, mission_id)
+            if norm.should_clarify:
+                intent = "D"
+                clarify_reason = norm.reason
+                clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
+                print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
+            elif "취소" in norm.message:
+                fn_calls, qwen_ms = await step_extract_functions(norm.message)
+                detected_function = fn_calls[0][0] if fn_calls else None
+                fn_args = fn_calls[0][1] if fn_calls else {}
+
+        submit_report_call = None if fn_calls else detect_submit_report_call(body.message)
+        history_call = None if submit_report_call or fn_calls else detect_history_call(body.message)
         if submit_report_call:
             intent = "B"
             fn_calls = [submit_report_call]
@@ -621,6 +690,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             norm = normalize_b_input(body.message, mission_title, mission_id)
             if norm.should_clarify:
                 intent = "D"
+                clarify_reason = norm.reason
                 clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
                 print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
             else:
@@ -633,7 +703,35 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             except Exception as e:
                 print(f"[RAG] 검색 실패 (무시): {e}")
 
+    clarify_response = _clarify_template(clarify_reason, body.message, mission_title)
+    if clarify_response:
+        print(f"[Clarify] template reason={clarify_reason} response={_short(clarify_response)!r}")
+        if not is_greet:
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", clarify_response)
+        return {
+            "response": clarify_response,
+            "mission_completed": False,
+            "detected_function": None,
+            "sources": [],
+            "debug": {
+                "intent": intent,
+                "clarify_reason": clarify_reason,
+                "clarify_template": True,
+                "fn_args": fn_args,
+                "violations": detect_violations(clarify_response, body.message),
+                "system_prompt": "",
+                "history_turns": 0,
+                "model": OLLAMA_MODEL,
+                "timing": {"intent_ms": intent_ms, "qwen_ms": qwen_ms, "llm_ms": 0},
+                "rag_hits": {"chunks": 0, "faqs": 0},
+            },
+        }
+
     combo = classify_multi(fn_calls) if fn_calls else None
+    if _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
+        fn_calls = [call for call in fn_calls if call[0] != "request_mission_adjustment"]
+        combo = classify_multi(fn_calls) if fn_calls else None
     mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
 
     # Recompute combo because the guard may have changed fn_calls.
@@ -641,7 +739,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if mission_change_guard_result and not fn_calls:
         detected_function = "request_mission_adjustment"
         fn_args = {"adjustment_type": "change", "requested_text": body.message}
-    elif should_force_mission_adjustment(body.message):
+    elif not _has_cancel_call(fn_calls) and should_force_mission_adjustment(body.message):
         detected_function = "request_mission_adjustment"
     print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     exec_results = ExecResults()
@@ -754,6 +852,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         "sources": sources,
         "debug": {
             "intent": intent,
+            "clarify_reason": clarify_reason,
             "fn_args": fn_args,
             "violations": violations,
             "system_prompt": system_prompt,
@@ -811,11 +910,33 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         rag_ms = 0
         t_total = time.perf_counter()
         clarify_hint_override = ""
+        clarify_reason = ""
 
         if not is_greet:
+            if _CANCEL_NEGATION_RE.search(body.message):
+                print("[Guard] cancel negation detected -> fixed response (stream)")
+                cancel_negation_message = "알겠어, 취소하지 않을게!"
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", cancel_negation_message)
+                async for event in _fake_stream_template_response(cancel_negation_message):
+                    yield event
+                yield _sse({"type": "done", "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}}})
+                return
             intent, intent_ms = await step_classify(body.message, current_mission_title)
-            submit_report_call = detect_submit_report_call(body.message)
-            history_call = None if submit_report_call else detect_history_call(body.message)
+            if intent == "B" and "취소" in body.message:
+                norm = normalize_b_input(body.message, current_mission_title, mission_id)
+                if norm.should_clarify:
+                    intent = "D"
+                    clarify_reason = norm.reason
+                    clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
+                    print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
+                elif "취소" in norm.message:
+                    fn_calls, qwen_ms = await step_extract_functions(norm.message)
+                    detected_function = fn_calls[0][0] if fn_calls else None
+                    fn_args = fn_calls[0][1] if fn_calls else {}
+
+            submit_report_call = None if fn_calls else detect_submit_report_call(body.message)
+            history_call = None if submit_report_call or fn_calls else detect_history_call(body.message)
             if submit_report_call:
                 intent = "B"
                 fn_calls = [submit_report_call]
@@ -838,6 +959,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 norm = normalize_b_input(body.message, current_mission_title, mission_id)
                 if norm.should_clarify:
                     intent = "D"
+                    clarify_reason = norm.reason
                     clarify_hint_override = CLARIFY_HINT_MAP.get(norm.reason, CLARIFY_HINT_DEFAULT)
                     print(f"[Route] B -> D clarify ({norm.reason or 'default'})")
                 else:
@@ -855,7 +977,41 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 except Exception as e:
                     print(f"[RAG] 검색 실패 (무시): {e}")
 
+        clarify_response = _clarify_template(clarify_reason, body.message, current_mission_title)
+        if clarify_response:
+            print(f"[Clarify] template reason={clarify_reason} response={_short(clarify_response)!r}")
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", clarify_response)
+            async for event in _fake_stream_template_response(clarify_response):
+                yield event
+            total_ms = round((time.perf_counter() - t_total) * 1000)
+            yield _sse({
+                "type": "done",
+                "debug": {
+                    "intent": intent,
+                    "clarify_reason": clarify_reason,
+                    "clarify_template": True,
+                    "fn_args": fn_args,
+                    "violations": detect_violations(clarify_response, body.message),
+                    "system_prompt": "",
+                    "history_turns": 0,
+                    "model": OLLAMA_MODEL,
+                    "timing": {
+                        "intent_ms": intent_ms,
+                        "qwen_ms": qwen_ms,
+                        "rag_ms": rag_ms,
+                        "gen_ms": 0,
+                        "total_ms": total_ms,
+                    },
+                    "rag_hits": {"chunks": 0, "faqs": 0},
+                },
+            })
+            return
+
         combo = classify_multi(fn_calls) if fn_calls else None
+        if _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
+            fn_calls = [call for call in fn_calls if call[0] != "request_mission_adjustment"]
+            combo = classify_multi(fn_calls) if fn_calls else None
         mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
 
         # Recompute combo because the guard may have changed fn_calls.
@@ -863,7 +1019,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if mission_change_guard_result and not fn_calls:
             detected_function = "request_mission_adjustment"
             fn_args = {"adjustment_type": "change", "requested_text": body.message}
-        elif should_force_mission_adjustment(body.message):
+        elif not _has_cancel_call(fn_calls) and should_force_mission_adjustment(body.message):
             detected_function = "request_mission_adjustment"
         print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
         exec_results = ExecResults()
@@ -1015,6 +1171,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         user_input = body.message if not is_greet else ""
         debug_payload = {
             "intent": intent,
+            "clarify_reason": clarify_reason,
             "fn_args": fn_args,
             "violations": detect_violations(ai_message, user_input),
             "system_prompt": system_prompt,

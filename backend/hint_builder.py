@@ -89,6 +89,10 @@ def build_adjustment_hint(result: AdjustmentResult) -> str:
             "[미션 변경 완료 후 설명]",
             '서버가 이미 "미션을 바꿔뒀어!"라고 안내했다.',
             "아래 정보를 이전 미션과 새 미션으로 정확히 구분해서 답한다.",
+            "이전 미션을 성공했다고 말하지 않는다.",
+            "이전 미션 수행 여부를 추측하지 않는다.",
+            "새 미션명과 새 미션 규칙만 안내한다.",
+            "아래 [새 미션]에 없는 미션명은 절대 만들지 않는다.",
             f"변경 유형: {result.adjustment_type or 'change'} ({label} 미션)",
             "",
             "[이전 미션]",
@@ -109,6 +113,10 @@ def build_adjustment_hint(result: AdjustmentResult) -> str:
             f"1. {empathy}",
             "2. 새 미션명을 말한다.",
             "3. 새 미션 규칙을 아이가 이해하기 쉽게 1~2문장으로 설명한다.",
+            "",
+            "금지 예시:",
+            "- 이전 미션을 잘했다/해냈다/성공했다처럼 말하지 않는다.",
+            "- 이전 미션을 수행한 것처럼 칭찬하지 않는다.",
         ])
         return "\n".join(lines)
     if result.status is AdjustmentStatus.ALREADY_SUBMITTED:
@@ -123,11 +131,16 @@ def build_adjustment_hint(result: AdjustmentResult) -> str:
 
 def build_cancel_hint(result: CancelResult) -> str:
     if result.status is CancelStatus.CANCELLED_SUBMIT:
-        return "아이가 직전 제출을 취소했어. 짧게 자연스럽게 받아줘."
+        return "아이가 미션 제출 기록을 취소했어. 무엇을 취소했는지 짧게 알려줘."
     if result.status is CancelStatus.CANCELLED_ADJUSTMENT:
-        return "아이가 직전 미션 변경을 취소했어. 원래 미션으로 돌아간 상황이야. 자연스럽게 받아줘."
+        return "아이가 미션 변경을 취소했어. 원래 미션으로 돌아간 상황이야. 무엇을 취소했는지 짧게 알려줘."
     if result.status is CancelStatus.NOTHING_TO_CANCEL:
-        return "아이가 취소를 요청했어. 짧게 자연스럽게 받아줘."
+        requested = result.cancel_type or "latest"
+        if requested == "submit":
+            return "아이가 제출 취소를 요청했지만 취소할 제출 기록이 없어. 그 사실만 짧게 알려줘."
+        if requested == "adjustment":
+            return "아이가 미션 변경 취소를 요청했지만 취소할 미션 변경이 없어. 그 사실만 짧게 알려줘."
+        return "아이가 취소를 요청했지만 취소할 최근 작업이 없어. 그 사실만 짧게 알려줘."
     # DB_ERROR
     return "아이가 취소를 요청했는데 처리 중 문제가 생겼어. 잠시 후 다시 시도해달라고 안내해줘."
 
