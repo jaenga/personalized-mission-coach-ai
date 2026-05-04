@@ -1,3 +1,4 @@
+import json
 import os
 import psycopg2
 import psycopg2.extras
@@ -1180,3 +1181,104 @@ def get_relevant_user_memories(student_id: int) -> list[dict]:
             """, (student_id,))
             rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+
+# ── 멀티턴 pending actions ───────────────────────────────────────────────────
+
+VALID_PENDING_ACTION_TYPES = {
+    "submit_confirmation",
+    "mission_change_reason",
+    "mission_dislike_confirm",
+}
+
+VALID_RESOLVE_STATUSES = {
+    "accepted",
+    "rejected",
+    "cancelled",
+}
+
+
+def save_pending_action(student_id: int, action_type: str, payload: dict) -> dict:
+    """기존 pending을 취소하고 새 pending action을 저장한다."""
+    if action_type not in VALID_PENDING_ACTION_TYPES:
+        raise ValueError(f"Invalid action_type: {action_type}")
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dict")
+
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE pending_actions
+                SET status = 'cancelled',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND status = 'pending'
+            """, (student_id,))
+            cur.execute("""
+                INSERT INTO pending_actions (
+                    student_id,
+                    action_type,
+                    payload,
+                    retry_count,
+                    status
+                )
+                VALUES (%s, %s, %s::jsonb, 0, 'pending')
+                RETURNING *
+            """, (student_id, action_type, payload_json))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def get_pending_action(student_id: int) -> dict | None:
+    """학생의 현재 pending action 1개를 조회한다."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, student_id, action_type, payload, retry_count, status, created_at, resolved_at
+                FROM pending_actions
+                WHERE student_id = %s
+                  AND status = 'pending'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            """, (student_id,))
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def resolve_pending(pending_id: int, status: str) -> dict | None:
+    """pending action을 accepted/rejected/cancelled 중 하나로 종료한다."""
+    if status not in VALID_RESOLVE_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE pending_actions
+                SET status = %s,
+                    resolved_at = NOW()
+                WHERE id = %s
+                RETURNING *
+            """, (status, pending_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def increment_pending_retry(pending_id: int) -> dict | None:
+    """pending action의 retry_count를 1 증가시킨다."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE pending_actions
+                SET retry_count = retry_count + 1
+                WHERE id = %s
+                  AND status = 'pending'
+                RETURNING *
+            """, (pending_id,))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
