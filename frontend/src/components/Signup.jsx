@@ -14,7 +14,7 @@ export default function Signup({ onSubmit, loading, error }) {
   }
 
   return (
-    <div className="relative w-[402px] h-[874px] overflow-hidden bg-cream mx-auto">
+    <div className="relative w-[402px] h-[874px] overflow-hidden mx-auto" style={{ background: "#FFF3E7" }}>
       <div
         className="absolute bg-white flex items-center justify-center px-4"
         style={{

@@ -15,7 +15,7 @@ export default {
           dark: "#C44A38",
         },
         leaf: "#7BC043",
-        cream: "#FFF8F0",
+        cream: "#FFF3E7",
       },
     },
   },

@@ -27,7 +27,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
   const today = new Date().toISOString().split("T")[0];
 
   return (
-    <div className="relative w-[402px] h-[874px] overflow-hidden bg-cream mx-auto">
+    <div className="relative w-[402px] h-[874px] overflow-hidden mx-auto" style={{ background: "#FFF3E7" }}>
       <div
         className="absolute bg-white flex items-center justify-center text-center px-4"
         style={{

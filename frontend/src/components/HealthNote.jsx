@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import tomatoHealth from "../assets/tomato/health/health.png";
 import badge from "../assets/tomato/health/badge.png";
-import flower from "../assets/tomato/health/flower.png";
-import warning from "../assets/tomato/health/warning.png";
+import iconHealth from "../assets/tomato/health/icon_health.png";
+import spoon from "../assets/tomato/health/spoon.png";
 
 const ALLERGEN_OPTIONS = [
   "우유", "계란", "메밀", "땅콩", "대두", "밀",
@@ -25,7 +25,7 @@ const ACCENT = {
   chipText: "#E35D49",
 };
 
-function PickerCard({ icon, iconSize = 20, sectionTitle, subtitle, addLabel, placeholder, options, selected, onToggle, onAddCustom }) {
+function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#F2C5BA", accentPlusBg = "#FFE5DD", accentStroke = "#E35D49", sectionTitle, subtitle, addLabel, placeholder, options, selected, onToggle, onAddCustom }) {
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [customMode, setCustomMode] = useState(false);
@@ -49,30 +49,55 @@ function PickerCard({ icon, iconSize = 20, sectionTitle, subtitle, addLabel, pla
   }
 
   return (
-    <div>
-      <h3
-        className="font-sejong"
-        style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.43px", color: "#E35D49" }}
-      >
-        {sectionTitle}
-      </h3>
-      {subtitle && (
-        <p
-          className="font-sejong"
-          style={{
-            fontSize: 12.5,
-            fontWeight: 400,
-            letterSpacing: "-0.3px",
-            lineHeight: "19px",
-            color: "#6b6864",
-            marginTop: 6,
-            marginBottom: 12,
-          }}
+    <div
+      style={{
+        background: "#FFFFFF",
+        borderRadius: 20,
+        padding: "14px 16px 16px",
+        border: "1px solid rgba(227, 93, 73, 0.10)",
+        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)",
+      }}
+    >
+      <div className="flex items-start gap-3" style={{ marginBottom: 10 }}>
+        <span
+          className="inline-flex items-center justify-center flex-shrink-0"
+          style={{ width: 40, height: 40, borderRadius: "50%", background: iconBg }}
         >
-          {subtitle}
-        </p>
-      )}
-      {!subtitle && <div className="mb-3" />}
+          {typeof icon === "string" ? (
+            <img src={icon} alt="" className="object-contain" style={{ width: iconSize, height: iconSize }} />
+          ) : (
+            icon
+          )}
+        </span>
+        <div className="flex-1 min-w-0" style={{ paddingTop: 2 }}>
+          <h3
+            className="font-noto"
+            style={{
+              fontSize: 16,
+              fontWeight: 500,
+              letterSpacing: "-0.43px",
+              color: "#1a1a1a",
+            }}
+          >
+            {sectionTitle}
+          </h3>
+          {subtitle && (
+            <p
+              className="font-sejong"
+              style={{
+                fontSize: 12,
+                fontWeight: 400,
+                letterSpacing: "-0.3px",
+                lineHeight: "17px",
+                color: "#6b6864",
+                marginTop: 1,
+              }}
+            >
+              {subtitle}
+            </p>
+          )}
+        </div>
+      </div>
 
       {!expanded ? (
         <button
@@ -80,17 +105,17 @@ function PickerCard({ icon, iconSize = 20, sectionTitle, subtitle, addLabel, pla
           onClick={() => setExpanded(true)}
           className="w-full flex items-center justify-between bg-white transition active:scale-[0.995]"
           style={{
-            padding: "13px 16px",
-            borderRadius: 30,
-            border: "1.5px solid #F2C5BA",
+            padding: "14px 16px",
+            borderRadius: 16,
+            border: `1.5px solid ${accentBorder}`,
           }}
         >
           <span className="flex items-center gap-2">
             <span
               className="inline-flex items-center justify-center rounded-full"
-              style={{ width: 24, height: 24, background: "#FFE5DD" }}
+              style={{ width: 24, height: 24, background: accentPlusBg }}
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#E35D49" strokeWidth="2" strokeLinecap="round">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke={accentStroke} strokeWidth="2" strokeLinecap="round">
                 <path d="M6 2 L6 10 M2 6 L10 6" />
               </svg>
             </span>
@@ -123,16 +148,30 @@ function PickerCard({ icon, iconSize = 20, sectionTitle, subtitle, addLabel, pla
         <div
           className="bg-white"
           style={{
-            padding: "16px 18px 18px",
-            borderRadius: 30,
+            padding: "12px 14px 14px",
+            borderRadius: 20,
             border: "1.5px solid #F2C5BA",
-            minHeight: 240,
+            minHeight: 200,
           }}
         >
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <img src={icon} alt="" className="object-contain" style={{ width: iconSize, height: iconSize }} />
-              <span className="font-noto text-gray-900" style={{ fontSize: 14, fontWeight: 700 }}>
+            <div className="flex items-center gap-2.5">
+              <span
+                className="inline-flex items-center justify-center flex-shrink-0"
+                style={{ width: 30, height: 30, borderRadius: "50%", background: iconBg }}
+              >
+                {typeof icon === "string" ? (
+                  <img
+                    src={icon}
+                    alt=""
+                    className="object-contain"
+                    style={{ width: Math.round(iconSize * 0.7), height: Math.round(iconSize * 0.7) }}
+                  />
+                ) : (
+                  icon
+                )}
+              </span>
+              <span className="font-noto" style={{ fontSize: 15, fontWeight: 500, color: "#1a1a1a", letterSpacing: "-0.43px" }}>
                 {sectionTitle}
               </span>
             </div>
@@ -350,7 +389,7 @@ export default function HealthNote({ onSubmit, onSkip, onBack, loading }) {
   }
 
   return (
-    <div className="relative w-[402px] h-[874px] overflow-hidden bg-cream mx-auto flex flex-col">
+    <div className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col" style={{ background: "#FFF3E7" }}>
       <header
         className="flex items-center justify-between flex-shrink-0"
         style={{
@@ -441,7 +480,9 @@ export default function HealthNote({ onSubmit, onSkip, onBack, loading }) {
         </section>
 
         <PickerCard
-          icon={flower}
+          icon={iconHealth}
+          iconSize={36}
+          iconBg="#FCE4E1"
           sectionTitle="알레르기 설정"
           subtitle="먹으면 몸이 불편해지는 음식이 있다면 알려주세요"
           addLabel="알레르기 항목 추가"
@@ -453,8 +494,9 @@ export default function HealthNote({ onSubmit, onSkip, onBack, loading }) {
         />
 
         <PickerCard
-          icon={warning}
-          iconSize={27}
+          icon={spoon}
+          iconSize={36}
+          iconBg="#FCE4E1"
           sectionTitle="줄이고 싶은 음식"
           subtitle="건강한 습관을 위해 줄이고 싶은 음식을 골라주세요"
           addLabel="줄이고 싶은 음식 추가"

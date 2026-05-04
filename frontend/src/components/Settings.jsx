@@ -192,7 +192,7 @@ export default function Settings({
         style={{
           height: 56,
           paddingInline: 16,
-          background: "rgba(255, 243, 231, 0.92)",
+          background: "rgba(255, 248, 240, 0.92)",
           backdropFilter: "blur(8px)",
           borderBottom: "1px solid rgba(227, 93, 73, 0.12)",
         }}
