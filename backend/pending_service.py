@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from dataclasses import dataclass
 
 from starlette.concurrency import run_in_threadpool
@@ -10,9 +12,11 @@ from database import (
     increment_pending_retry,
     resolve_pending,
 )
-from executor import ExecResults, SubmitStatus, execute_submit
+from executor import AdjustmentStatus, ExecResults, SubmitStatus, execute_adjustment, execute_submit
 from ollama_client import generate_json_message
 
+
+DISLIKE_CLASSIFY_TIMEOUT_SEC = float(os.getenv("DISLIKE_CLASSIFY_TIMEOUT_SEC", "15"))
 
 POSITIVE_EXACT = {
     "응",
@@ -41,15 +45,47 @@ NEGATIVE_EXACT = {
     "다른거",
     "다른거줘",
     "다른걸로",
+    "다른거할래",
+    "다른걸로할래",
     "그냥바꿔줘",
     "바꿔줘",
 }
+
+MISSION_DISLIKE_NEGATIVE_RE = re.compile(r"다른\s*거|다른\s*걸|딴\s*거|딴\s*걸|바꿔|변경")
 
 PENDING_CLASSIFY_SYSTEM_PROMPT = """이전 질문에 대한 아이의 답변이야.
 긍정이면 yes, 부정이면 no, 애매하면 ambiguous로 분류해.
 
 출력은 JSON만:
 {"result":"yes|no|ambiguous"}
+"""
+
+DISLIKE_SIGNAL_RE = re.compile(
+    r"싫어|싫다|싫음|재미없어|재미\s*없어|재미없다|재미없음|귀찮아|별로|별로야|하기\s*싫어|하기싫어|하고\s*싶지\s*않아|하고싶지않아"
+)
+
+MISSION_DISLIKE_CLASSIFY_SYSTEM_PROMPT = """오늘 미션에 대한 아이의 발화인지 판단해.
+
+true:
+- 아이가 오늘 미션을 싫어함
+- 재미없어함
+- 하기 싫어함
+- 귀찮아함
+- 별로라고 말함
+
+false:
+- 다른 사람 이야기
+- 일반 질문
+- 예시 문장
+- 오늘 미션과 관련 없는 활동 이야기
+- 미션을 싫어한다는 뜻이 애매함
+
+주의:
+- 띄어쓰기나 가벼운 오타가 있어도 오늘 미션명이 발화에 포함되어 있고 싫어/재미없어/하기 싫어라는 뜻이면 true
+- "줄넘기가싫어", "줄넘기 싫어"처럼 붙여 쓴 표현도 true
+
+출력은 JSON만:
+{"is_dislike":true|false}
 """
 
 
@@ -69,11 +105,30 @@ def _compact(text: str) -> str:
     return (text or "").replace(" ", "").strip()
 
 
+def _loads_json_object(raw: str) -> dict:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
 async def classify_pending_reply(user_message: str, action_type: str | None = None) -> str:
     text = _compact(user_message)
     if text in POSITIVE_EXACT:
         return "yes"
     if text in NEGATIVE_EXACT:
+        return "no"
+    if action_type == "mission_dislike_confirm" and has_dislike_signal(user_message):
+        return "no"
+    if action_type == "mission_dislike_confirm" and MISSION_DISLIKE_NEGATIVE_RE.search(user_message or ""):
         return "no"
 
     try:
@@ -82,7 +137,7 @@ async def classify_pending_reply(user_message: str, action_type: str | None = No
             f"action_type: {action_type or ''}\n답변: {user_message}",
             timeout=8.0,
         )
-        data = json.loads(raw)
+        data = _loads_json_object(raw)
     except Exception as e:
         print(f"[Pending] classify fallback ambiguous error={type(e).__name__}: {e!r}")
         return "ambiguous"
@@ -92,6 +147,46 @@ async def classify_pending_reply(user_message: str, action_type: str | None = No
         return result
     print(f"[Pending] classify invalid raw={raw[:120]!r}")
     return "ambiguous"
+
+
+def has_dislike_signal(user_message: str) -> bool:
+    return bool(DISLIKE_SIGNAL_RE.search(user_message or ""))
+
+
+async def classify_mission_dislike(user_message: str, mission_name: str) -> bool:
+    if not mission_name or not has_dislike_signal(user_message):
+        return False
+
+    raw = ""
+    compact_mission = _compact(mission_name)
+    compact_message = _compact(user_message)
+    mission_related = bool(compact_mission and compact_mission in compact_message)
+    try:
+        raw = await generate_json_message(
+            MISSION_DISLIKE_CLASSIFY_SYSTEM_PROMPT,
+            "\n".join([
+                f"오늘 미션: {mission_name}",
+                f"아이 발화: {user_message}",
+                f"공백 제거 오늘 미션: {compact_mission}",
+                f"공백 제거 아이 발화: {compact_message}",
+                f"공백 제거 기준 미션명 포함 여부: {mission_related}",
+            ]),
+            timeout=DISLIKE_CLASSIFY_TIMEOUT_SEC,
+        )
+        data = _loads_json_object(raw)
+    except Exception as e:
+        print(
+            "[Dislike] classify skipped "
+            f"error={type(e).__name__}: {e!r} raw={raw[:120]!r}"
+        )
+        return False
+
+    result = data.get("is_dislike")
+    if isinstance(result, bool):
+        print(f"[Dislike] classified is_dislike={result} raw={raw[:120]!r}")
+        return result
+    print(f"[Dislike] invalid raw={raw[:120]!r}")
+    return False
 
 
 def _submit_args_from_payload(payload: dict) -> dict:
@@ -121,6 +216,35 @@ def _submit_hint(result_status: str, result_type: str | None = None) -> str:
     if result_status == SubmitStatus.NO_MISSION.value:
         return "아이가 확인 질문에 긍정으로 답했지만 오늘 배정된 미션이 없어. 그 사실만 짧게 알려줘."
     return "아이가 확인 질문에 긍정으로 답했지만 기록 저장에 문제가 있었어. 잠시 후 다시 시도해달라고 짧게 말해줘."
+
+
+def _adjustment_hint(exec_results: ExecResults) -> str:
+    adjustment = exec_results.adjustment
+    result_status = adjustment.status.value if adjustment else "db_error"
+    if result_status == AdjustmentStatus.CHANGED.value:
+        return "\n".join([
+            "아이가 기존 미션을 오늘 해보자는 제안을 거절해서 다른 미션으로 바꿨어.",
+            "이전 미션에 대해 짧게 공감하고 새 미션을 알려줘.",
+            f"이전 미션: {adjustment.old_mission_name or ''}",
+            f"새 미션: {adjustment.new_mission_name or ''}",
+        ])
+    if result_status == AdjustmentStatus.ALREADY_SUBMITTED.value:
+        return "아이가 기존 미션을 거절했지만 오늘 미션 결과가 이미 저장되어 있어서 바꿀 수 없어. 먼저 기록을 취소해야 한다고 짧게 말해줘."
+    if result_status == AdjustmentStatus.NO_MISSION.value:
+        return "아이가 기존 미션을 거절했지만 오늘 배정된 미션이 없어. 그 사실만 짧게 알려줘."
+    if result_status == AdjustmentStatus.NO_ALTERNATIVE.value:
+        return "아이가 기존 미션을 거절했지만 지금 바꿀 수 있는 다른 미션이 없어. 오늘은 현재 미션으로 가야 한다고 짧게 말해줘."
+    return "아이가 기존 미션을 거절했지만 미션 변경 중 문제가 있었어. 잠시 후 다시 시도해달라고 짧게 말해줘."
+
+
+async def _execute_dislike_fallback_change(student_id: int) -> ExecResults:
+    exec_results = ExecResults()
+    exec_results.adjustment = await run_in_threadpool(
+        execute_adjustment,
+        student_id,
+        {"adjustment_type": "change"},
+    )
+    return exec_results
 
 
 async def handle_pending_action(student_id: int | None, user_message: str) -> PendingOutcome | None:
@@ -155,16 +279,6 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
                 sync_user_message=_sync_user_message_from_payload(payload, user_message),
             )
 
-        await run_in_threadpool(resolve_pending, pending_id, "cancelled")
-        return PendingOutcome(
-            action_type=action_type,
-            decision=decision,
-            status="cancelled",
-            message_hint="아직 이어서 처리할 수 없는 확인 흐름이야. 다시 한 번 처음부터 말해달라고 짧게 안내해줘.",
-            pending_id=pending_id,
-            exec_results=exec_results,
-        )
-
         if action_type == "mission_dislike_confirm":
             await run_in_threadpool(resolve_pending, pending_id, "accepted")
             return PendingOutcome(
@@ -176,12 +290,23 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
                 exec_results=exec_results,
             )
 
+        await run_in_threadpool(resolve_pending, pending_id, "cancelled")
+        return PendingOutcome(
+            action_type=action_type,
+            decision=decision,
+            status="cancelled",
+            message_hint="아직 이어서 처리할 수 없는 확인 흐름이야. 다시 한 번 처음부터 말해달라고 짧게 안내해줘.",
+            pending_id=pending_id,
+            exec_results=exec_results,
+        )
+
     if decision == "no":
         await run_in_threadpool(resolve_pending, pending_id, "rejected")
         if action_type == "submit_confirmation":
             hint = "아이가 확인 질문에 부정으로 답했어. 미션 결과를 기록하지 않았고, 나중에 다시 알려달라고 짧게 말해줘."
         elif action_type == "mission_dislike_confirm":
-            hint = "아이가 기존 미션을 오늘 해보자는 제안을 거절했어. 아직 미션은 바꾸지 않았으니 바뀌었다고 말하지 말고, 다른 미션으로 바꿔보자고 짧게 말해줘."
+            exec_results = await _execute_dislike_fallback_change(student_id)
+            hint = _adjustment_hint(exec_results)
         else:
             hint = "아이가 이전 확인 질문에 부정으로 답했어. 짧게 알겠다고 말해줘."
         return PendingOutcome(
@@ -197,7 +322,8 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
     if next_retry > 2:
         await run_in_threadpool(resolve_pending, pending_id, "cancelled")
         if action_type == "mission_dislike_confirm":
-            hint = "아이가 두 번 넘게 애매하게 답해서 미션 싫음 확인을 취소했어. 아직 미션은 바꾸지 않았다고 짧게 말하고, 원하면 다시 바꿔달라고 하게 해줘."
+            exec_results = await _execute_dislike_fallback_change(student_id)
+            hint = _adjustment_hint(exec_results)
         else:
             hint = "아이가 두 번 넘게 애매하게 답해서 이전 확인을 취소했어. 다시 필요하면 알려달라고 짧게 말해줘."
         return PendingOutcome(

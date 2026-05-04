@@ -952,10 +952,30 @@ def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission
                         AND assigned_date >= %s::date - INTERVAL '7 days'
                         AND assigned_date < %s::date
                   )
+                  AND mission_id NOT IN (
+                      SELECT old_mission_id FROM mission_changes
+                      WHERE student_id = %s
+                        AND change_date = %s::date
+                      UNION
+                      SELECT new_mission_id FROM mission_changes
+                      WHERE student_id = %s
+                        AND change_date = %s::date
+                  )
                 ORDER BY RANDOM()
                 LIMIT 1
                 """,
-                (main_category, target_difficulty, current_mission_id, student_id, today, today),
+                (
+                    main_category,
+                    target_difficulty,
+                    current_mission_id,
+                    student_id,
+                    today,
+                    today,
+                    student_id,
+                    today,
+                    student_id,
+                    today,
+                ),
             )
             row = cur.fetchone()
     return dict(row) if row else None
@@ -1197,6 +1217,14 @@ VALID_RESOLVE_STATUSES = {
     "cancelled",
 }
 
+VALID_MISSION_CHANGE_REASON_TYPES = {
+    "too_easy",
+    "too_hard",
+    "dislike",
+    "cant_do",
+    "just_change",
+}
+
 
 def save_pending_action(student_id: int, action_type: str, payload: dict) -> dict:
     """기존 pending을 취소하고 새 pending action을 저장한다."""
@@ -1279,6 +1307,39 @@ def increment_pending_retry(pending_id: int) -> dict | None:
                   AND status = 'pending'
                 RETURNING *
             """, (pending_id,))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) -> dict | None:
+    """미션 변경 이유 로그를 저장한다. activity_key는 mission_id로 백엔드에서 조회한다."""
+    if reason_type not in VALID_MISSION_CHANGE_REASON_TYPES:
+        raise ValueError(f"Invalid reason_type: {reason_type}")
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not mission_id:
+        raise ValueError("mission_id is required")
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT activity_key FROM missions WHERE mission_id = %s",
+                (mission_id,),
+            )
+            mission = cur.fetchone()
+            if not mission:
+                return None
+            cur.execute("""
+                INSERT INTO mission_change_logs (
+                    student_id,
+                    mission_id,
+                    activity_key,
+                    reason_type
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+            """, (student_id, mission_id, mission.get("activity_key"), reason_type))
             row = cur.fetchone()
         conn.commit()
     return dict(row) if row else None

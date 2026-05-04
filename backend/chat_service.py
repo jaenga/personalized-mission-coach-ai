@@ -20,14 +20,16 @@ from database import (
     has_checkin_today,
     mark_synced,
     resolve_pending_mission_suggestion,
+    save_mission_change_log,
     save_mission_adjustment,
     save_message,
+    save_pending_action,
     save_pending_mission_suggestion,
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
 from memory_service import extract_and_save_memory
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
-from pending_service import PendingOutcome, handle_pending_action
+from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
 from qwen_client import detect_history_call, detect_submit_report_call
 from pipeline import (
     classify_multi,
@@ -316,6 +318,11 @@ _PENDING_RESPONSE_PROMPT = """너는 토미라는 토마토 캐릭터야.
 자연스럽게 한마디 해줘.
 """
 
+_MISSION_DISLIKE_PENDING_HINT = (
+    "아이가 오늘 미션을 싫어하거나 재미없어한다고 말했어. "
+    "아직 미션은 바꾸지 않았어. 그래도 오늘 딱 한 번만 해볼지 짧게 물어봐."
+)
+
 
 async def _generate_pending_response(outcome: PendingOutcome) -> tuple[str, int]:
     try:
@@ -336,6 +343,29 @@ def _pending_debug(outcome: PendingOutcome, llm_ms: int, ai_message: str) -> dic
         "pending_status": outcome.status,
         "violations": detect_violations(ai_message, ""),
         "system_prompt": _PENDING_RESPONSE_PROMPT.format(hint=outcome.message_hint),
+        "history_turns": 0,
+        "model": OLLAMA_MODEL,
+        "timing": {"llm_ms": llm_ms},
+        "rag_hits": {"chunks": 0, "faqs": 0},
+    }
+
+
+async def _generate_hint_response(hint: str) -> tuple[str, int]:
+    try:
+        return await generate_chat_message(
+            _PENDING_RESPONSE_PROMPT.format(hint=hint),
+            [{"role": "user", "content": "이 상황에 맞게 짧게 답해줘."}],
+        )
+    except Exception as e:
+        print(f"[HintResponse] generation failed: {type(e).__name__}: {e}")
+        return "그렇구나. 그럼 오늘 한 번만 해볼지 같이 정해보자!", 0
+
+
+def _hint_debug(intent: str, hint: str, llm_ms: int, ai_message: str) -> dict:
+    return {
+        "intent": intent,
+        "violations": detect_violations(ai_message, ""),
+        "system_prompt": _PENDING_RESPONSE_PROMPT.format(hint=hint),
         "history_turns": 0,
         "model": OLLAMA_MODEL,
         "timing": {"llm_ms": llm_ms},
@@ -668,6 +698,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     student_id = profile["student_id"] if profile else None
     student_name = profile.get("student_name", "") if profile else ""
     mission_id = None
+    mission_row = None
     if student_id:
         mission_row = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
         if mission_row:
@@ -699,6 +730,30 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "detected_function": pending_outcome.action_type,
                 "sources": [],
                 "debug": _pending_debug(pending_outcome, call1_ms, ai_message),
+            }
+
+    if not is_greet and student_id and mission_row:
+        if await classify_mission_dislike(body.message, mission_title):
+            payload = {
+                "mission_id": mission_row.get("mission_id"),
+                "mission_name": mission_row.get("mission_name"),
+                "mission_rule": mission_row.get("mission_rule"),
+                "reason_type": "dislike",
+                "original_user_message": body.message,
+            }
+            await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "dislike")
+            await run_in_threadpool(save_pending_action, student_id, "mission_dislike_confirm", payload)
+            ai_message, call1_ms = await _generate_hint_response(_MISSION_DISLIKE_PENDING_HINT)
+            print(f"[Dislike] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_dislike_confirm")
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+            background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
+            return {
+                "response": ai_message,
+                "mission_completed": False,
+                "detected_function": "mission_dislike_confirm",
+                "sources": [],
+                "debug": _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message),
             }
 
     intent = "A"
@@ -964,6 +1019,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         student_id = profile["student_id"] if profile else None
         student_name = profile.get("student_name", "") if profile else ""
         mission_id = None
+        mission_row = None
         if student_id:
             mission_row = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
             if mission_row:
@@ -994,6 +1050,30 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
                 debug_payload = _pending_debug(pending_outcome, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
+                yield _sse({"type": "done", "debug": debug_payload})
+                return
+
+        if not is_greet and student_id and mission_row:
+            dislike_started = time.perf_counter()
+            if await classify_mission_dislike(body.message, current_mission_title):
+                payload = {
+                    "mission_id": mission_row.get("mission_id"),
+                    "mission_name": mission_row.get("mission_name"),
+                    "mission_rule": mission_row.get("mission_rule"),
+                    "reason_type": "dislike",
+                    "original_user_message": body.message,
+                }
+                await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "dislike")
+                await run_in_threadpool(save_pending_action, student_id, "mission_dislike_confirm", payload)
+                ai_message, call1_ms = await _generate_hint_response(_MISSION_DISLIKE_PENDING_HINT)
+                print(f"[Dislike] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_dislike_confirm")
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+                background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
+                async for event in _fake_stream_template_response(ai_message):
+                    yield event
+                debug_payload = _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message)
+                debug_payload["timing"]["total_ms"] = round((time.perf_counter() - dislike_started) * 1000)
                 yield _sse({"type": "done", "debug": debug_payload})
                 return
 
