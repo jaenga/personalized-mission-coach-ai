@@ -25,6 +25,7 @@ from database import (
     save_pending_mission_suggestion,
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
+from memory_service import extract_and_save_memory
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
 from qwen_client import detect_history_call, detect_submit_report_call
 from pipeline import (
@@ -709,6 +710,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", clarify_response)
+        if not is_greet:
+            background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
         return {
             "response": clarify_response,
             "mission_completed": False,
@@ -818,6 +821,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet:
         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_only or ai_message)
+    if not is_greet:
+        background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
     user_input = body.message if not is_greet else ""
     violations = detect_violations(ai_message, user_input)
@@ -982,6 +987,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             print(f"[Clarify] template reason={clarify_reason} response={_short(clarify_response)!r}")
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", clarify_response)
+            background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
             async for event in _fake_stream_template_response(clarify_response):
                 yield event
             total_ms = round((time.perf_counter() - t_total) * 1000)
@@ -1192,6 +1198,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
         )
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
+        if not is_greet:
+            background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
         yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
         mission_status = None

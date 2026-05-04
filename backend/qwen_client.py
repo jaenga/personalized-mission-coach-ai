@@ -21,6 +21,8 @@ _FUNCTION_NAME_ALIASES = {
     "cancel_mission": "cancel_mission_action",
 }
 
+_CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
+
 AVAILABLE_FUNCTIONS: list[dict] = [
     {
         "name": "submit_mission_result",
@@ -283,7 +285,13 @@ def _coerce_function_calls(
         calls = [submit_report_call]
         return calls
     calls = _coerce_history_call(user_message, calls)
-    return [_coerce_function_call(user_message, call) for call in calls]
+    coerced = [_coerce_function_call(user_message, call) for call in calls]
+    if not _CANCEL_REQUEST_RE.search(user_message or ""):
+        before = len(coerced)
+        coerced = [call for call in coerced if call[0] != "cancel_mission_action"]
+        if before != len(coerced):
+            print("[Function] dropped cancel call without cancel expression")
+    return coerced
 
 
 def _coerce_function_call(
