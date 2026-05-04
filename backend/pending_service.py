@@ -206,6 +206,16 @@ def _sync_user_message_from_payload(payload: dict, fallback: str) -> str:
     return value if isinstance(value, str) and value.strip() else fallback
 
 
+def _submit_failure_hint(result_status: str) -> str:
+    if result_status == SubmitStatus.SAVED.value:
+        return "아이가 확인 질문에 부정으로 답해서 오늘 미션을 실패로 기록했어. 짧게 따뜻하게 받아줘."
+    if result_status == SubmitStatus.ALREADY_SUBMITTED.value:
+        return "아이가 확인 질문에 부정으로 답했지만 오늘 미션 결과가 이미 저장되어 있었어. 이미 저장됐다고 짧게 알려줘."
+    if result_status == SubmitStatus.NO_MISSION.value:
+        return "아이가 확인 질문에 부정으로 답했지만 오늘 배정된 미션이 없어. 그 사실만 짧게 알려줘."
+    return "아이가 확인 질문에 부정으로 답했지만 기록 저장에 문제가 있었어. 잠시 후 다시 시도해달라고 짧게 말해줘."
+
+
 def _submit_hint(result_status: str, result_type: str | None = None) -> str:
     if result_status == SubmitStatus.SAVED.value:
         if result_type == "success":
@@ -303,7 +313,9 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
     if decision == "no":
         await run_in_threadpool(resolve_pending, pending_id, "rejected")
         if action_type == "submit_confirmation":
-            hint = "아이가 확인 질문에 부정으로 답했어. 미션 결과를 기록하지 않았고, 나중에 다시 알려달라고 짧게 말해줘."
+            submit_args = {**_submit_args_from_payload(payload), "result_type": "failure"}
+            exec_results.submit = await run_in_threadpool(execute_submit, student_id, submit_args)
+            hint = _submit_failure_hint(exec_results.submit.status.value)
         elif action_type == "mission_dislike_confirm":
             exec_results = await _execute_dislike_fallback_change(student_id)
             hint = _adjustment_hint(exec_results)
