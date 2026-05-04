@@ -12,7 +12,7 @@ from intent_router import classify_intent, split_multi_intent
 from qwen_client import call_function
 from rag import search_rag
 from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MISSION_REPORT, build_system_prompt
-from database import _kst_today, get_last_action_type, fetch_profile
+from database import _kst_today, get_last_action_type, fetch_profile, get_relevant_user_memories
 from executor import (
     ExecResults,
     execute_submit, execute_adjustment, execute_cancel,
@@ -504,6 +504,40 @@ def _build_function_hint(
     return "\n\n".join(hints)
 
 
+def _format_memory_context(student_id: int | None) -> str:
+    if not student_id:
+        return ""
+    try:
+        rows = get_relevant_user_memories(student_id)
+    except Exception as e:
+        print(f"[Memory] context load failed: {type(e).__name__}: {e}")
+        return ""
+    if not rows:
+        return ""
+
+    lines = []
+    for row in rows:
+        subject = row.get("subject", "")
+        mtype = row.get("type", "")
+        score = row.get("score", 0)
+        count = row.get("count", 0)
+        if not subject:
+            continue
+        if mtype == "preference":
+            label = "좋아함" if (score or 0) > 0 else "싫어함"
+        elif mtype == "difficulty":
+            label = f"어려워함 ({count}회 언급)"
+        elif mtype == "restriction":
+            label = "못 함/금지"
+        else:
+            continue
+        lines.append(f"- {subject}: {label}")
+
+    if not lines:
+        return ""
+    return "\n".join(lines)
+
+
 def step_build_hints(
     student_id: int | None,
     fn_calls: list[tuple[str, dict]],
@@ -531,6 +565,10 @@ def step_build_hints(
     if name_call_allowed:
         print(f"[Name] 이름 호출 허용: {student_name!r}")
 
+    memory_context = "" if is_greet else _format_memory_context(student_id)
+    if memory_context:
+        print(f"[Memory] context injected lines={memory_context.count(chr(10)) + 1}")
+
     return build_system_prompt(
         intent=intent,
         mission=mission_title if intent == "A" and is_greet else "",
@@ -540,4 +578,5 @@ def step_build_hints(
         is_greeting=is_greet,
         student_name=student_name,
         name_call_allowed=name_call_allowed,
+        memory_context=memory_context,
     )

@@ -373,6 +373,29 @@ def _hint_debug(intent: str, hint: str, llm_ms: int, ai_message: str) -> dict:
     }
 
 
+def _save_submit_confirmation_pending(
+    student_id: int | None,
+    user_message: str,
+    clarify_reason: str,
+) -> None:
+    """성공 여부 확인 질문을 보낸 턴이면 다음 턴 답변을 제출 함수와 연결한다."""
+    if not student_id or clarify_reason != "past_ambiguous":
+        return
+    try:
+        pending = save_pending_action(
+            student_id,
+            "submit_confirmation",
+            {
+                "fn_args": {"result_type": "success"},
+                "original_user_message": user_message,
+                "clarify_reason": clarify_reason,
+            },
+        )
+        print(f"[Pending] submit_confirmation created id={pending.get('id')} reason={clarify_reason}")
+    except Exception as e:
+        print(f"[Pending] submit_confirmation create failed: {type(e).__name__}: {e}")
+
+
 def _strip_leading_ack(text: str, ack_message: str) -> str:
     """Gemma가 서버 확정 안내문을 반복하면 앞부분에서 제거한다."""
     if not text or not ack_message:
@@ -942,6 +965,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_only or ai_message)
     if not is_greet:
+        await run_in_threadpool(_save_submit_confirmation_pending, student_id, body.message, clarify_reason)
+    if not is_greet:
         background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
     user_input = body.message if not is_greet else ""
@@ -1371,6 +1396,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         )
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
         if not is_greet:
+            await run_in_threadpool(_save_submit_confirmation_pending, student_id, body.message, clarify_reason)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
         yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"

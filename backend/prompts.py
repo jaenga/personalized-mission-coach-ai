@@ -291,6 +291,11 @@ def _name_with_postfix(name: str) -> str:
     return name + ("아" if (code % 28) != 0 else "야")
 
 
+_MEMORY_CONTEXT_PROMPT = """아이에 대해 기억하고 있는 정보야.
+직접 언급하거나 "네가 싫어하는 거 알아" 처럼 말하지 마.
+미션 공감, 응원, 제안할 때 자연스럽게 배경으로만 활용해."""
+
+
 def build_system_prompt(
     intent: str | None = None,
     mission: str = "",
@@ -300,6 +305,7 @@ def build_system_prompt(
     is_greeting: bool = False,
     student_name: str = "",
     name_call_allowed: bool = False,
+    memory_context: str = "",
 ) -> str:
     prompt = COMMON_PERSONA_PROMPT
 
@@ -310,6 +316,9 @@ def build_system_prompt(
             f"이번 응답의 첫 문장 맨 앞에 '{postfix_name}'을 자연스럽게 1회만 넣는다. "
             f"이후 문장에서는 이름을 절대 다시 쓰지 않는다."
         )
+
+    if memory_context:
+        prompt += f"\n\n[아이 기억]\n{_MEMORY_CONTEXT_PROMPT}\n{memory_context}"
 
     if intent == "B":
         prompt += "\n\n" + FUNCTION_RESULT_PROMPT
