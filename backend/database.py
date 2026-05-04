@@ -1082,3 +1082,101 @@ def get_last_action_type(student_id: int) -> str | None:
     if submit_time and (not change_time or submit_time >= change_time):
         return "submit"
     return "adjustment"
+
+
+# ── 장기기억 (user_memories) ─────────────────────────────────────────────────
+
+def upsert_user_memory(
+    student_id: int,
+    subject: str,
+    memory_type: str,
+    polarity: int | None = None,
+) -> dict | None:
+    """
+    사용자 장기기억을 저장/갱신한다.
+    DB 컬럼명은 type이지만, Python 내장 type과 구분하려고 memory_type을 사용한다.
+    """
+    if memory_type not in {"preference", "difficulty", "restriction"}:
+        return None
+    subject = (subject or "").strip()
+    if not student_id or not subject:
+        return None
+
+    if memory_type == "preference":
+        delta = 1 if polarity == 1 else -1 if polarity == -1 else 0
+        if delta == 0:
+            return None
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                    VALUES (%s, %s, 'preference', %s, 0, NOW())
+                    ON CONFLICT (student_id, subject, type)
+                    DO UPDATE SET
+                        score = GREATEST(-3, LEAST(3, user_memories.score + EXCLUDED.score)),
+                        updated_at = NOW()
+                    RETURNING *
+                """, (student_id, subject, delta))
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    if memory_type == "difficulty":
+        today = _kst_today()
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                    VALUES (%s, %s, 'difficulty', 0, 1, NOW())
+                    ON CONFLICT (student_id, subject, type)
+                    DO UPDATE SET
+                        count = CASE
+                            WHEN (user_memories.updated_at AT TIME ZONE 'Asia/Seoul')::date < %s::date
+                            THEN user_memories.count + 1
+                            ELSE user_memories.count
+                        END,
+                        updated_at = CASE
+                            WHEN (user_memories.updated_at AT TIME ZONE 'Asia/Seoul')::date < %s::date
+                            THEN NOW()
+                            ELSE user_memories.updated_at
+                        END
+                    RETURNING *
+                """, (student_id, subject, today, today))
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                VALUES (%s, %s, 'restriction', 0, 0, NOW())
+                ON CONFLICT (student_id, subject, type)
+                DO UPDATE SET updated_at = NOW()
+                RETURNING *
+            """, (student_id, subject))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def get_relevant_user_memories(student_id: int) -> list[dict]:
+    """
+    추후 미션 배정/필터링에서 쓸 핵심 기억만 조회한다.
+    preference는 |score| >= 2, difficulty는 count >= 2, restriction은 전체 반환.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, student_id, subject, type, score, count, updated_at
+                FROM user_memories
+                WHERE student_id = %s
+                  AND (
+                    (type = 'preference' AND ABS(score) >= 2)
+                    OR (type = 'difficulty' AND count >= 2)
+                    OR type = 'restriction'
+                  )
+                ORDER BY updated_at DESC, id DESC
+            """, (student_id,))
+            rows = cur.fetchall()
+    return [dict(row) for row in rows]
