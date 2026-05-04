@@ -27,6 +27,7 @@ from database import (
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
 from memory_service import extract_and_save_memory
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
+from pending_service import PendingOutcome, handle_pending_action
 from qwen_client import detect_history_call, detect_submit_report_call
 from pipeline import (
     classify_multi,
@@ -303,6 +304,43 @@ def _response_mode_label(action_ack, eq_submit: bool) -> str:
     if eq_submit:
         return "equivalency"
     return "gemma"
+
+
+_PENDING_RESPONSE_PROMPT = """너는 토미라는 토마토 캐릭터야.
+아이와 친구처럼 반말로 말해.
+2문장 이내로 짧게 말해.
+
+[상황]
+{hint}
+
+자연스럽게 한마디 해줘.
+"""
+
+
+async def _generate_pending_response(outcome: PendingOutcome) -> tuple[str, int]:
+    try:
+        return await generate_chat_message(
+            _PENDING_RESPONSE_PROMPT.format(hint=outcome.message_hint),
+            [{"role": "user", "content": "이 상황에 맞게 짧게 답해줘."}],
+        )
+    except Exception as e:
+        print(f"[Pending] response generation failed: {type(e).__name__}: {e}")
+        return "알겠어! 그렇게 처리해둘게.", 0
+
+
+def _pending_debug(outcome: PendingOutcome, llm_ms: int, ai_message: str) -> dict:
+    return {
+        "intent": "PENDING_ACTION",
+        "pending_action_type": outcome.action_type,
+        "pending_decision": outcome.decision,
+        "pending_status": outcome.status,
+        "violations": detect_violations(ai_message, ""),
+        "system_prompt": _PENDING_RESPONSE_PROMPT.format(hint=outcome.message_hint),
+        "history_turns": 0,
+        "model": OLLAMA_MODEL,
+        "timing": {"llm_ms": llm_ms},
+        "rag_hits": {"chunks": 0, "faqs": 0},
+    }
 
 
 def _strip_leading_ack(text: str, ack_message: str) -> str:
@@ -636,6 +674,33 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             mission_id = mission_row.get("mission_id")
             mission_title = mission_row.get("mission_name") or mission_title
 
+    if not is_greet and student_id:
+        pending_outcome = await handle_pending_action(student_id, body.message)
+        if pending_outcome:
+            ai_message, call1_ms = await _generate_pending_response(pending_outcome)
+            print(
+                "[Pending] response "
+                f"action={pending_outcome.action_type} status={pending_outcome.status} "
+                f"response={_short(ai_message)!r}"
+            )
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, pending_outcome.action_type)
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+
+            mission_status = None
+            if pending_outcome.exec_results.submit and pending_outcome.exec_results.submit.status.value == "saved":
+                mission_status = pending_outcome.exec_results.submit.result_type
+                checkin_id = pending_outcome.exec_results.submit.checkin_id
+                sync_user_message = pending_outcome.sync_user_message or body.message
+                background_tasks.add_task(_sync_sheet_bg, body.session_id, sync_user_message, ai_message, mission_status, checkin_id)
+
+            return {
+                "response": ai_message,
+                "mission_completed": mission_status is not None,
+                "detected_function": pending_outcome.action_type,
+                "sources": [],
+                "debug": _pending_debug(pending_outcome, call1_ms, ai_message),
+            }
+
     intent = "A"
     fn_calls: list[tuple[str, dict]] = []
     detected_function = None
@@ -904,6 +969,33 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             if mission_row:
                 mission_id = mission_row.get("mission_id")
                 current_mission_title = mission_row.get("mission_name") or current_mission_title
+
+        if not is_greet and student_id:
+            pending_started = time.perf_counter()
+            pending_outcome = await handle_pending_action(student_id, body.message)
+            if pending_outcome:
+                ai_message, call1_ms = await _generate_pending_response(pending_outcome)
+                print(
+                    "[Pending] response "
+                    f"action={pending_outcome.action_type} status={pending_outcome.status} "
+                    f"response={_short(ai_message)!r}"
+                )
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, pending_outcome.action_type)
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+                async for event in _fake_stream_template_response(ai_message):
+                    yield event
+
+                mission_status = None
+                if pending_outcome.exec_results.submit and pending_outcome.exec_results.submit.status.value == "saved":
+                    mission_status = pending_outcome.exec_results.submit.result_type
+                    checkin_id = pending_outcome.exec_results.submit.checkin_id
+                    sync_user_message = pending_outcome.sync_user_message or body.message
+                    background_tasks.add_task(_sync_sheet_bg, body.session_id, sync_user_message, ai_message, mission_status, checkin_id)
+
+                debug_payload = _pending_debug(pending_outcome, call1_ms, ai_message)
+                debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
+                yield _sse({"type": "done", "debug": debug_payload})
+                return
 
         intent = "A"
         fn_calls: list[tuple[str, dict]] = []
