@@ -1,7 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
+import { useEffect, useState } from "react";
+import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
+import Login from "./components/Login.jsx";
+import Signup from "./components/Signup.jsx";
+import InfoInput from "./components/InfoInput.jsx";
+import HealthNote from "./components/HealthNote.jsx";
+import Welcome from "./components/Welcome.jsx";
+import Home from "./components/Home.jsx";
+import ChatScreen from "./components/ChatScreen.jsx";
+import DrawScreen from "./components/DrawScreen.jsx";
+import Settings from "./components/Settings.jsx";
 
 function createSessionId() {
   const id = crypto.randomUUID();
@@ -30,180 +39,103 @@ export default function App() {
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
   const [profile, setProfile] = useState(getStoredProfile);
-  const [profileSynced, setProfileSynced] = useState(false);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
-  const greetingRequestedRef = useRef(false);
-  const syncedProfileKeyRef = useRef(null);
-  const loadedHistoryKeyRef = useRef(null);
 
   // 로그인 화면용 상태
-  const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
+  const [showWelcome, setShowWelcome] = useState(true);
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
-  const [signupPopupOpen, setSignupPopupOpen] = useState(false);
-  const [farewellMessage, setFarewellMessage] = useState("");
-
-  // 로컬 프로필을 백엔드 세션 매핑과 동기화
-  useEffect(() => {
-    if (!profile?.student_id) {
-      setProfileSynced(false);
-      return;
-    }
-
-    const profileKey = `${sessionId}:${profile.student_id}:${profile.student_name}`;
-    if (syncedProfileKeyRef.current === profileKey) {
-      setProfileSynced(true);
-      return;
-    }
-
-    let cancelled = false;
-    setProfileSynced(false);
-    setHistoryLoaded(false);
-
-    saveProfile(sessionId, profile.student_id, profile.student_name)
-      .then((result) => {
-        if (cancelled) return;
-        syncedProfileKeyRef.current = profileKey;
-        if (result.mission) {
-          setMission(result.mission);
-        }
-        setProfileSynced(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setProfileSynced(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, profile?.student_id, profile?.student_name]);
+  const [needsInfoInput, setNeedsInfoInput] = useState(false);
+  const [needsHealthNote, setNeedsHealthNote] = useState(false);
+  const [needsWelcomeCelebrate, setNeedsWelcomeCelebrate] = useState(false);
+  const [showHome, setShowHome] = useState(false);
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [showDraw, setShowDraw] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [editHealthNote, setEditHealthNote] = useState(false);
+  const [extraInfo, setExtraInfo] = useState(null);
+  const [healthNote, setHealthNote] = useState(null);
 
   // 미션 로드 (프로필 확정 후)
   useEffect(() => {
-    if (!profile || !profileSynced) return;
+    if (!profile) return;
     fetchMissionByStudent(profile.student_id)
       .then(setMission)
       .catch(() => setMission({ mission_id: 1, mission_name: "오늘의 미션" }));
-  }, [profile, profileSynced]);
+  }, [profile]);
 
   // 채팅 히스토리 로드
   useEffect(() => {
-    if (!profile?.student_id) {
-      setHistoryLoaded(false);
-      return;
-    }
-    if (!profileSynced) {
-      setHistoryLoaded(false);
-      return;
-    }
-
-    const historyKey = `${sessionId}:${profile.student_id}`;
-    if (loadedHistoryKeyRef.current === historyKey) return;
-    loadedHistoryKeyRef.current = historyKey;
-    setHistoryLoaded(false);
-
-    let cancelled = false;
+    if (!mission || !profile) return;
     fetchChatHistory(sessionId)
       .then((history) => {
-        if (cancelled) return;
         if (history.length === 0) {
-          setMessages([]);
-          greetingRequestedRef.current = false;
+          requestGreeting(mission.mission_name);
         } else {
-          greetingRequestedRef.current = true;
           setMessages(
             history.map((msg, i) =>
               msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
             )
           );
         }
-        setHistoryLoaded(true);
       })
       .catch(() => {
-        if (cancelled) return;
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
-        setHistoryLoaded(true);
       });
+  }, [sessionId, mission]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, profile?.student_id, profileSynced]);
-
-  useEffect(() => {
-    if (!profile || !mission) return;
-    if (!historyLoaded) return;
-    if (messages.length > 0) return;
-    if (greetingRequestedRef.current) return;
-
-    greetingRequestedRef.current = true;
-    requestGreeting(mission);
-  }, [profile?.student_id, mission?.mission_id, historyLoaded, messages.length]);
-
-  async function handleLogin(e) {
-    e.preventDefault();
+  async function handleSignup({ name, phone4 }) {
     setLoginError("");
-    setFarewellMessage("");
     setLoginLoading(true);
-    try {
-      const student = await verifyStudent(loginForm.name.trim(), loginForm.phone4.trim());
-      const saved = { student_id: student.student_id, student_name: student.student_name };
-      localStorage.setItem("user_profile", JSON.stringify(saved));
-      syncedProfileKeyRef.current = null;
-      loadedHistoryKeyRef.current = null;
-      setProfileSynced(false);
-      setHistoryLoaded(false);
+    // 디자인 미리보기용: 백엔드 없이 바로 다음 단계로 진행
+    const MOCK_MODE = true;
+    if (MOCK_MODE) {
+      await new Promise((r) => setTimeout(r, 400));
+      const saved = { student_id: 0, student_name: name };
       setProfile(saved);
-    } catch (err) {
-      if (err.status === 404 || err.message.includes("일치하는 학생")) {
-        setSignupPopupOpen(true);
-      } else {
-        setLoginError(err.message);
-      }
-    } finally {
+      setNeedsInfoInput(true);
       setLoginLoading(false);
+      return;
     }
-  }
-
-  async function handleSignupAgree() {
-    setLoginError("");
-    setFarewellMessage("");
-    setLoginLoading(true);
-
     try {
-      const result = await registerDemoStudent(loginForm.name.trim(), loginForm.phone4.trim());
-      const student = result.student;
-
+      const student = await verifyStudent(name, phone4);
+      await saveProfile(sessionId, student.student_id, student.student_name);
       const saved = { student_id: student.student_id, student_name: student.student_name };
       localStorage.setItem("user_profile", JSON.stringify(saved));
-      setSignupPopupOpen(false);
-      syncedProfileKeyRef.current = null;
-      loadedHistoryKeyRef.current = null;
-      setProfileSynced(false);
-      setHistoryLoaded(false);
       setProfile(saved);
-
-      if (result.mission) {
-        setMission(result.mission);
-      }
+      setNeedsInfoInput(true);
     } catch (err) {
       setLoginError(err.message);
-      setSignupPopupOpen(false);
     } finally {
       setLoginLoading(false);
     }
   }
 
-  function handleSignupCancel() {
-    setSignupPopupOpen(false);
-    setFarewellMessage("다음에 만나요!");
+  function handleInfoSubmit(info) {
+    setExtraInfo(info);
+    setNeedsInfoInput(false);
+    setNeedsHealthNote(true);
+  }
 
-    setTimeout(() => {
-      setFarewellMessage("");
-      setLoginForm({ name: "", phone4: "" });
-      setLoginError("");
-    }, 1200);
+  function handleHealthSubmit(note) {
+    setHealthNote(note);
+    setNeedsHealthNote(false);
+    setNeedsWelcomeCelebrate(true);
+  }
+
+  function handleHealthSkip() {
+    setHealthNote(null);
+    setNeedsHealthNote(false);
+    setNeedsWelcomeCelebrate(true);
+  }
+
+  function handleWelcomeContinue() {
+    setNeedsWelcomeCelebrate(false);
+    setShowHome(true);
+  }
+
+  function handleHealthBack() {
+    setNeedsHealthNote(false);
+    setNeedsInfoInput(true);
   }
 
   async function handleReset() {
@@ -213,44 +145,34 @@ export default function App() {
     } catch {
       // 삭제 실패해도 초기화
     }
-    greetingRequestedRef.current = false;
-    syncedProfileKeyRef.current = null;
-    setHistoryLoaded(false);
-    setProfileSynced(false);
     localStorage.removeItem("user_profile");
     setSessionId(createSessionId());
-    loadedHistoryKeyRef.current = null;
     setProfile(null);
     setMission(null);
     setMessages([]);
     setDebugMap({});
     setSelectedDebugId(null);
-    setLoginForm({ name: "", phone4: "" });
     setLoginError("");
-    setSignupPopupOpen(false);
-    setFarewellMessage("");
+    setShowWelcome(true);
+    setNeedsInfoInput(false);
+    setExtraInfo(null);
+    setNeedsHealthNote(false);
+    setHealthNote(null);
+    setNeedsWelcomeCelebrate(false);
+    setShowHome(false);
+    setShowNewChat(false);
+    setShowDraw(false);
+    setShowSettings(false);
   }
 
-  async function requestGreeting(currentMission) {
-    if (currentMission?.mission_message) {
-      setMessages([{ role: "assistant", content: currentMission.mission_message }]);
-      return;
-    }
-
+  async function requestGreeting(missionTitle) {
     setLoading(true);
     try {
-      const res = await sendMessage("__GREET__", sessionId, currentMission?.mission_name);
+      const res = await sendMessage("__GREET__", sessionId, missionTitle);
       const debugId = crypto.randomUUID();
       setMessages([{ role: "assistant", content: res.response, debugId }]);
       setDebugMap({ [debugId]: { ...res.debug } });
       setSelectedDebugId(debugId);
-
-      // 미션 재조회
-      if (profile?.student_id) {
-        fetchMissionByStudent(profile.student_id)
-          .then(setMission)
-          .catch(() => {});
-      }
     } catch {
       setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
@@ -284,13 +206,12 @@ export default function App() {
               setSelectedDebugId(debugId);
             }
             if (stage.stage === "qwen") {
-              const firstCall = stage.calls?.[0];
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: {
                   ...prev[debugId],
-                  detected_function: firstCall?.[0] ?? null,
-                  fn_args: firstCall?.[1] ?? {},
+                  detected_function: stage.fn,
+                  fn_args: stage.args,
                 },
               }));
             }
@@ -308,11 +229,12 @@ export default function App() {
                 ...prev,
                 [debugId]: { ...prev[debugId], ...debug },
               }));
-            }
-            if (profile?.student_id) {
-              fetchMissionByStudent(profile.student_id)
-                .then(setMission)
-                .catch(() => {});
+              // adjustment 후 미션 제목 갱신
+              if (debug.fn_args?.adjustment_type || debug.detected_function === "request_mission_adjustment") {
+                fetchMissionByStudent(profile.student_id)
+                  .then(setMission)
+                  .catch(() => {});
+              }
             }
           },
         }
@@ -336,84 +258,115 @@ export default function App() {
     }
   }
 
-  // ── 로그인 화면 ──────────────────────────────────────────────────────────────
+  // ── 시작 화면 (Figma 로그인 화면) ────────────────────────────────────────────
+  if (!profile && showWelcome) {
+    return (
+      <Login onStart={() => setShowWelcome(false)} />
+    );
+  }
+
+  // ── 회원가입 화면 (Figma 1. 로그인 화면/회원가입) ─────────────────────────────
   if (!profile) {
     return (
-      <div className="app-layout">
-        <header className="app-header">
-          <span>🌟 AI 생활습관 코치</span>
-        </header>
-        <div className="profile-setup">
-          <h2>안녕! 나는 누구?</h2>
-          <form onSubmit={handleLogin} className="profile-form">
-            <div className="profile-field">
-              <label>이름</label>
-              <input
-                type="text"
-                placeholder="이름을 입력해 줘"
-                value={loginForm.name}
-                onChange={(e) => setLoginForm((f) => ({ ...f, name: e.target.value }))}
-                required
-              />
-            </div>
-            <div className="profile-field">
-              <label>전화번호 뒷 4자리</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                placeholder="0000"
-                value={loginForm.phone4}
-                onChange={(e) => setLoginForm((f) => ({ ...f, phone4: e.target.value.replace(/\D/g, "") }))}
-                required
-              />
-            </div>
-            {loginError && <p className="login-error">{loginError}</p>}
-            <button
-              type="submit"
-              className="profile-submit-btn"
-              disabled={loginLoading || !loginForm.name.trim() || loginForm.phone4.length !== 4}
-            >
-              {loginLoading ? "확인 중..." : "시작하기"}
-            </button>
-          </form>
-          {farewellMessage && (
-            <p className="farewell-message">{farewellMessage}</p>
-          )}
+      <Signup onSubmit={handleSignup} loading={loginLoading} error={loginError} />
+    );
+  }
 
-          {signupPopupOpen && (
-            <div className="signup-modal-backdrop">
-              <div className="signup-modal">
-                <h3>회원가입 하기</h3>
-                <p>
-                  아직 등록된 친구가 아니야.<br />
-                  지금 바로 회원가입하고 오늘의 미션을 받아볼래?
-                </p>
+  // ── 정보입력 화면 (Figma 1. 로그인 화면/정보입력) ─────────────────────────────
+  if (needsInfoInput) {
+    return (
+      <InfoInput onSubmit={handleInfoSubmit} loading={false} error="" />
+    );
+  }
 
-                <div className="signup-modal-actions">
-                  <button
-                    type="button"
-                    className="signup-yes-btn"
-                    onClick={handleSignupAgree}
-                    disabled={loginLoading}
-                  >
-                    좋아요
-                  </button>
+  // ── 건강노트 화면 (Figma 1. 로그인 화면/건강노트) ─────────────────────────────
+  if (needsHealthNote) {
+    return (
+      <HealthNote
+        onSubmit={handleHealthSubmit}
+        onSkip={handleHealthSkip}
+        onBack={handleHealthBack}
+        loading={false}
+      />
+    );
+  }
 
-                  <button
-                    type="button"
-                    className="signup-no-btn"
-                    onClick={handleSignupCancel}
-                    disabled={loginLoading}
-                  >
-                    안할래요
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+  // ── 가입축하 화면 (Figma 1. 로그인 화면/가입축하) ─────────────────────────────
+  if (needsWelcomeCelebrate) {
+    return <Welcome onContinue={handleWelcomeContinue} />;
+  }
+
+  // ── 홈 화면 (Figma 2. 홈 화면) ───────────────────────────────────────────────
+  if (showHome && !showNewChat && !showDraw && !showSettings) {
+    return (
+      <Home
+        studentName={profile?.student_name || "민준"}
+        onNavigate={(key) => {
+          if (key === "coach") setShowNewChat(true);
+          if (key === "learn" || key === "draw") setShowDraw(true);
+          if (key === "settings") setShowSettings(true);
+        }}
+      />
+    );
+  }
+
+  // ── 설정 → 건강 노트 수정 모드 ────────────────────────────────────────────────
+  if (showSettings && editHealthNote) {
+    return (
+      <HealthNote
+        onSubmit={(note) => {
+          setHealthNote(note);
+          setEditHealthNote(false);
+        }}
+        onSkip={() => setEditHealthNote(false)}
+        onBack={() => setEditHealthNote(false)}
+        loading={false}
+      />
+    );
+  }
+
+  // ── 설정 화면 ───────────────────────────────────────────────────────────────
+  if (showSettings) {
+    return (
+      <Settings
+        studentName={profile?.student_name || "민준"}
+        onBack={() => setShowSettings(false)}
+        onOpenHealthNote={() => setEditHealthNote(true)}
+        onLogout={handleReset}
+        onWithdraw={handleReset}
+        onNavigate={(key) => {
+          setShowSettings(false);
+          if (key === "coach") setShowNewChat(true);
+          if (key === "learn") setShowDraw(true);
+        }}
+      />
+    );
+  }
+
+  // ── 뽑기 화면 (Figma 3. 뽑기) ────────────────────────────────────────────────
+  if (showDraw) {
+    return (
+      <DrawScreen
+        onBack={() => setShowDraw(false)}
+        onNavigate={(key) => {
+          if (key === "home") setShowDraw(false);
+          if (key === "coach") {
+            setShowDraw(false);
+            setShowNewChat(true);
+          }
+          if (key === "settings") {
+            setShowDraw(false);
+            setShowSettings(true);
+          }
+        }}
+      />
+    );
+  }
+
+  // ── 새 채팅 화면 (Figma 3. 채팅 화면) ─────────────────────────────────────────
+  if (showNewChat) {
+    return (
+      <ChatScreen onBack={() => setShowNewChat(false)} />
     );
   }
 
@@ -429,12 +382,7 @@ export default function App() {
 
       {mission && (
         <div className="mission-banner">
-          <div>
-            🎯 오늘 미션: <strong>{mission.mission_name}</strong>
-          </div>
-          {mission.mission_message && (
-            <p className="mission-banner-message">{mission.mission_message}</p>
-          )}
+          🎯 오늘 미션: <strong>{mission.mission_name}</strong>
         </div>
       )}
 
@@ -461,7 +409,7 @@ export default function App() {
                 if (s.stage === "qwen") {
                   return (
                     <span key={i} className="pipeline-chip" style={{ borderColor: "#fd7e14" }}>
-                      ⚡ Qwen → <strong>{s.calls?.[0]?.[0] ?? "없음"}</strong> <em>({s.ms}ms)</em>
+                      ⚡ Qwen → <strong>{s.fn ?? "없음"}</strong> <em>({s.ms}ms)</em>
                     </span>
                   );
                 }
