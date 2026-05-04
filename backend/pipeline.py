@@ -41,9 +41,36 @@ _DB_BRANCH_PAIRS = {
     frozenset({"cancel_mission_action", "request_mission_adjustment"}): "adjustment",
 }
 
+_FUNCTION_NAME_ALIASES = {
+    "cancel_mission": "cancel_mission_action",
+}
+
+
+def detect_cancel_type(message: str) -> str:
+    text = (message or "").replace(" ", "")
+    if re.search(r"(?:성공|실패|제출|기록|결과)[\s\S]{0,12}(?:취소|되돌|철회)", text):
+        return "submit"
+    if re.search(r"(?:미션변경|변경|바꾼거|원래미션)[\s\S]{0,12}(?:취소|되돌|철회)", text):
+        return "adjustment"
+    return "latest"
+
+
+def normalize_function_calls(fn_calls: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    normalized = []
+    for fn, args in fn_calls:
+        canonical_fn = _FUNCTION_NAME_ALIASES.get(fn, fn)
+        canonical_args = dict(args or {})
+        if canonical_fn == "cancel_mission_action":
+            cancel_type = canonical_args.get("cancel_type")
+            if cancel_type not in {"submit", "adjustment", "latest"}:
+                canonical_args["cancel_type"] = "latest"
+        normalized.append((canonical_fn, canonical_args))
+    return normalized
+
 
 def classify_multi(fn_calls: list[tuple[str, dict]]) -> str:
     """멀티펑션 조합 분류. 반환값: 'conflict' | 'sequential' | 'db_branch' | 'independent'"""
+    fn_calls = normalize_function_calls(fn_calls)
     names = [fn for fn, _ in fn_calls]
 
     for name in _NON_REPEATABLE:
@@ -170,8 +197,14 @@ _B_COMMAND_RE = re.compile(
 _CANCEL_TARGET_RE = re.compile(
     r"(?:미션\s*)?(?:성공|실패)(?:\s*(?:제출|기록|한\s*거|한거))?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
     r"|(?:방금|최근|아까)?\s*(?:미션\s*결과\s*)?(?:제출|기록)(?:한\s*거|한거|된\s*거|된거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+    r"|(?:응|그래|좋아|네|ㅇㅇ)?\s*(?:취소|되돌|되돌려|철회)\s*(?:해줘|해|할래)?"
     r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
 )
+_ADJUSTMENT_CANCEL_RE = re.compile(
+    r"(?:미션\s*)?(?:변경|바꾼\s*거|바꾼거|바꾼\s*미션|원래\s*미션)"
+    r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
+)
+_CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
 # 행동+부정: 금지형 미션("과자 안 먹기")에서 성공일 수 있어 별도 처리
 # 주의: 못했/안했(일반 실패)은 여기 포함 안 함 → _FAIL_RE에서 처리
 _NEGATION_VERB_RE = re.compile(
@@ -263,8 +296,17 @@ def step_normalize_b_input(message: str, mission_name: str) -> tuple[str, bool]:
     should_clarify=True → D로 리다이렉트해서 확인 질문
     """
     # "성공 취소"의 성공/실패는 새 제출이 아니라 취소 대상 설명이다.
+    if _CANCEL_NEGATION_RE.search(message):
+        print(f"[Normalize] cancel-negation: {_short(message)!r} -> clarify")
+        return message, True
+
+    if _ADJUSTMENT_CANCEL_RE.search(message):
+        normalized = "미션 변경 취소해줘"
+        print(f"[Normalize] cancel-adjustment: {_short(message)!r} -> cancel")
+        return normalized, False
+
     if _CANCEL_TARGET_RE.search(message):
-        normalized = "최근 미션 결과 제출을 취소해줘"
+        normalized = "미션 제출 취소해줘"
         print(f"[Normalize] cancel-target: {_short(message)!r} -> cancel")
         return normalized, False
 
@@ -321,9 +363,15 @@ async def step_classify(message: str, mission_name: str = "") -> tuple[str, int]
 async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], int]:
     """문장 분리 + Qwen 호출 + 중복 제거. (fn_calls, ms) 반환."""
     t0 = time.perf_counter()
+    if _ADJUSTMENT_CANCEL_RE.search(message):
+        ms = round((time.perf_counter() - t0) * 1000)
+        fn_calls = [("cancel_mission_action", {"cancel_type": "adjustment"})]
+        print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, direct)")
+        return fn_calls, ms
+
     if _CANCEL_TARGET_RE.search(message):
         ms = round((time.perf_counter() - t0) * 1000)
-        fn_calls = [("cancel_mission_action", {})]
+        fn_calls = [("cancel_mission_action", {"cancel_type": detect_cancel_type(message)})]
         print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, direct)")
         return fn_calls, ms
 
@@ -345,10 +393,11 @@ async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], 
             if key not in seen:
                 fn_calls.append(c)
                 seen.add(key)
-    if _CANCEL_TARGET_RE.search(message) and any(fn == "cancel_mission_action" for fn, _ in fn_calls):
-        fn_calls = [("cancel_mission_action", {})]
+    if (_ADJUSTMENT_CANCEL_RE.search(message) or _CANCEL_TARGET_RE.search(message)) and any(fn == "cancel_mission_action" for fn, _ in fn_calls):
+        fn_calls = [("cancel_mission_action", {"cancel_type": detect_cancel_type(message)})]
         print("[Function] cancel-target forced to cancel only")
     ms = round((time.perf_counter() - t0) * 1000)
+    fn_calls = normalize_function_calls(fn_calls)
     print(f"[Function] calls={_fn_list(fn_calls)} ({ms}ms, parts={len(parts)})")
     return fn_calls, ms
 
@@ -363,6 +412,7 @@ def step_execute(
     cancel은 실행 후 fn_calls에서 제거.
     reorder는 cancel 제거 후 적용.
     """
+    fn_calls = normalize_function_calls(fn_calls)
     print(f"[DB] start student={student_id} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     results = ExecResults()
     pending_submit_args: dict | None = None
@@ -383,7 +433,8 @@ def step_execute(
 
     # 1. cancel 분리 + 실행 + fn_calls에서 제거
     if any(fn == "cancel_mission_action" for fn, _ in fn_calls):
-        results.cancel = execute_cancel(student_id)
+        cancel_args = next((args for fn, args in fn_calls if fn == "cancel_mission_action"), {})
+        results.cancel = execute_cancel(student_id, cancel_args)
         fn_calls = [(fn, args) for fn, args in fn_calls if fn != "cancel_mission_action"]
 
     # 3. 남은 fn_calls를 콤보에 따라 처리 (sequential이면 reorder 적용)

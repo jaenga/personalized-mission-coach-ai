@@ -905,7 +905,7 @@ def save_mission_adjustment(student_id: int, old_mission_id: int, new_mission_id
         conn.commit()
 
 
-def cancel_last_action(student_id: int) -> str | None:
+def cancel_last_action(student_id: int, cancel_type: str = "latest") -> str | None:
     """오늘(KST) 해당 학생의 가장 최근 행동을 취소.
     checkin_log(제출)와 mission_changes(미션 변경) 중 더 최근 것을 찾아 취소한다.
     반환값: 취소한 행동 타입 ('submit' | 'adjustment') 또는 None(취소할 것 없음).
@@ -939,9 +939,24 @@ def cancel_last_action(student_id: int) -> str | None:
         submit_time = last_submit["created_at"] if last_submit else None
         change_time = last_change["created_at"] if last_change else None
 
-        cancel_type = None
+        requested_cancel_type = cancel_type if cancel_type in {"submit", "adjustment", "latest"} else "latest"
+        cancelled_type = None
         with conn.cursor() as cur:
-            if submit_time and (not change_time or submit_time >= change_time):
+            if requested_cancel_type == "submit" and not submit_time:
+                return None
+            if requested_cancel_type == "adjustment" and not change_time:
+                return None
+
+            should_cancel_submit = (
+                requested_cancel_type == "submit"
+                or (
+                    requested_cancel_type == "latest"
+                    and submit_time
+                    and (not change_time or submit_time >= change_time)
+                )
+            )
+
+            if should_cancel_submit:
                 # 제출 취소: checkin_log 삭제 + status 복원
                 cur.execute("DELETE FROM checkin_log WHERE checkin_id = %s", (last_submit["checkin_id"],))
                 cur.execute(
@@ -949,7 +964,7 @@ def cancel_last_action(student_id: int) -> str | None:
                     "WHERE student_id = %s AND assigned_date = %s",
                     (student_id, today),
                 )
-                cancel_type = "submit"
+                cancelled_type = "submit"
             else:
                 # 미션 변경 취소: mission_changes 삭제 + 이전 미션 복원
                 cur.execute("DELETE FROM mission_changes WHERE change_id = %s", (last_change["change_id"],))
@@ -958,9 +973,9 @@ def cancel_last_action(student_id: int) -> str | None:
                     "WHERE student_id = %s AND assigned_date = %s",
                     (last_change["old_mission_id"], student_id, today),
                 )
-                cancel_type = "adjustment"
+                cancelled_type = "adjustment"
         conn.commit()
-    return cancel_type
+    return cancelled_type
 
 
 def get_last_action_type(student_id: int) -> str | None:

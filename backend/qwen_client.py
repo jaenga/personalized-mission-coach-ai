@@ -17,6 +17,10 @@ load_dotenv()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 FUNCTION_MODEL = os.getenv("FUNCTION_MODEL", "qwen3-function:latest")
 
+_FUNCTION_NAME_ALIASES = {
+    "cancel_mission": "cancel_mission_action",
+}
+
 AVAILABLE_FUNCTIONS: list[dict] = [
     {
         "name": "submit_mission_result",
@@ -154,10 +158,22 @@ AVAILABLE_FUNCTIONS: list[dict] = [
     {
         "name": "cancel_mission_action",
         "description": (
-            "가장 최근 행동을 취소할 때 호출합니다.\n"
-            "예: 방금 제출 취소 / 바꾼 거 없던 걸로"
+            "미션 제출이나 미션 변경을 취소할 때 호출합니다.\n"
+            "- cancel_type='submit': 성공/실패/제출/기록 취소\n"
+            "- cancel_type='adjustment': 미션 변경 취소\n"
+            "- cancel_type='latest': 최근 작업 취소, 되돌려줘처럼 대상이 모호한 경우\n"
+            "예: 성공 취소 / 방금 제출 취소 / 바꾼 거 없던 걸로 / 최근 작업 되돌려줘"
         ),
-        "parameters": {"type": "object", "properties": {}},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cancel_type": {
+                    "type": "string",
+                    "enum": ["submit", "adjustment", "latest"],
+                    "description": "취소 대상",
+                },
+            },
+        },
     },
 ]
 
@@ -184,6 +200,9 @@ _SYSTEM_PROMPT = """당신은 어린이 건강 습관 코치 앱의 AI입니다.
 - 어제 기록 → query_type="daily_summary", target_date="yesterday"
 - 그저께 기록 → query_type="daily_summary", target_date="day_before_yesterday"
 - 구체적인 대체 행동/장소/시간을 언급하면 → check_mission_equivalency
+- 성공/실패/제출/기록 취소 → cancel_mission_action(cancel_type="submit")
+- 미션 변경 취소/바꾼 거 취소 → cancel_mission_action(cancel_type="adjustment")
+- 최근 작업 취소/되돌려줘 → cancel_mission_action(cancel_type="latest")
 - 미션 완료/실패를 보고하면 → submit_mission_result"""
 
 
@@ -232,8 +251,24 @@ async def call_function(user_message: str) -> tuple[list[tuple[str, dict]], int]
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000)
     calls = _parse_tool_calls(raw)
+    calls = _canonicalize_function_calls(calls)
     calls = _coerce_function_calls(user_message, calls)
     return calls, elapsed_ms
+
+
+def _canonicalize_function_calls(
+    calls: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    normalized = []
+    for fn, args in calls:
+        canonical_fn = _FUNCTION_NAME_ALIASES.get(fn, fn)
+        canonical_args = dict(args or {})
+        if canonical_fn == "cancel_mission_action":
+            cancel_type = canonical_args.get("cancel_type")
+            if cancel_type not in {"submit", "adjustment", "latest"}:
+                canonical_args["cancel_type"] = "latest"
+        normalized.append((canonical_fn, canonical_args))
+    return normalized
 
 
 def _coerce_function_calls(
@@ -248,7 +283,29 @@ def _coerce_function_calls(
         calls = [submit_report_call]
         return calls
     calls = _coerce_history_call(user_message, calls)
-    return [_coerce_mission_info_call(user_message, call) for call in calls]
+    return [_coerce_function_call(user_message, call) for call in calls]
+
+
+def _coerce_function_call(
+    user_message: str,
+    call: tuple[str, dict],
+) -> tuple[str, dict]:
+    fn, args = _coerce_mission_info_call(user_message, call)
+    if fn != "cancel_mission_action":
+        return fn, args
+
+    args = dict(args or {})
+    args["cancel_type"] = _detect_cancel_type(user_message)
+    return fn, args
+
+
+def _detect_cancel_type(user_message: str) -> str:
+    text = (user_message or "").replace(" ", "")
+    if re.search(r"(?:성공|실패|제출|기록|결과)[\s\S]{0,12}(?:취소|되돌|철회)", text):
+        return "submit"
+    if re.search(r"(?:미션변경|변경|바꾼거|원래미션)[\s\S]{0,12}(?:취소|되돌|철회)", text):
+        return "adjustment"
+    return "latest"
 
 
 def _coerce_mission_info_call(

@@ -76,6 +76,7 @@ class CancelStatus(Enum):
 @dataclass
 class CancelResult:
     status: CancelStatus
+    cancel_type: str | None = None
     error: str | None = None
     db_changed: bool = False
     action: ExecutorActionType | None = None
@@ -208,13 +209,17 @@ def execute_adjustment(student_id: int, fn_args: dict) -> AdjustmentResult:
         return result
 
 
-def execute_cancel(student_id: int) -> CancelResult:
+def execute_cancel(student_id: int, fn_args: dict | None = None) -> CancelResult:
     """직전 행동 취소."""
+    requested_cancel_type = (fn_args or {}).get("cancel_type", "latest")
+    if requested_cancel_type not in {"submit", "adjustment", "latest"}:
+        requested_cancel_type = "latest"
     try:
-        cancel_type = cancel_last_action(student_id)
+        cancel_type = cancel_last_action(student_id, requested_cancel_type)
         if cancel_type == "submit":
             result = CancelResult(
                 status=CancelStatus.CANCELLED_SUBMIT,
+                cancel_type=cancel_type,
                 db_changed=True,
                 action=ExecutorActionType.ACTION_CANCELLED,
             )
@@ -223,16 +228,17 @@ def execute_cancel(student_id: int) -> CancelResult:
         elif cancel_type == "adjustment":
             result = CancelResult(
                 status=CancelStatus.CANCELLED_ADJUSTMENT,
+                cancel_type=cancel_type,
                 db_changed=True,
                 action=ExecutorActionType.ACTION_CANCELLED,
             )
             print(f"[DB.cancel] type=adjustment / {_status_label(result)}")
             return result
         else:
-            result = CancelResult(status=CancelStatus.NOTHING_TO_CANCEL)
+            result = CancelResult(status=CancelStatus.NOTHING_TO_CANCEL, cancel_type=requested_cancel_type)
             print(f"[DB.cancel] type=none / {_status_label(result)}")
             return result
     except Exception as e:
-        result = CancelResult(status=CancelStatus.DB_ERROR, error=str(e))
+        result = CancelResult(status=CancelStatus.DB_ERROR, cancel_type=requested_cancel_type, error=str(e))
         print(f"[DB.cancel] {_status_label(result)}")
         return result
