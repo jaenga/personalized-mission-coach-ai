@@ -11,6 +11,9 @@ from database import (
     get_pending_action,
     increment_pending_retry,
     resolve_pending,
+    save_pending_action,
+    save_mission_change_log,
+    upsert_user_memory,
 )
 from executor import AdjustmentStatus, ExecResults, SubmitStatus, execute_adjustment, execute_submit
 from ollama_client import generate_json_message
@@ -247,6 +250,158 @@ def _adjustment_hint(exec_results: ExecResults) -> str:
     return "아이가 기존 미션을 거절했지만 미션 변경 중 문제가 있었어. 잠시 후 다시 시도해달라고 짧게 말해줘."
 
 
+_TOO_EASY_RE = re.compile(r"쉬워|쉽다|너무\s*쉬|쉬운|시시해|시시함")
+_TOO_HARD_RE = re.compile(r"어려워|어렵|힘들어|힘들다|못하겠|어려움")
+_CANT_DO_RE = re.compile(r"못\s*해|못함|안\s*돼|안돼|할\s*수\s*없|할수없|오늘\s*못|상황이")
+
+_CHANGE_REASON_CLASSIFY_SYSTEM_PROMPT = """아이가 미션을 바꾸고 싶은 이유를 말했어.
+아래 5가지 중 가장 가까운 이유 1개를 골라줘.
+
+too_easy: 미션이 너무 쉬움
+too_hard: 미션이 너무 어렵거나 힘듦
+dislike: 미션이 싫거나 재미없음
+cant_do: 오늘은 상황상 할 수 없음
+just_change: 그냥 다른 걸 하고 싶음
+
+출력은 JSON만:
+{"reason":"too_easy|too_hard|dislike|cant_do|just_change"}
+"""
+
+_CHANGE_REASON_TIMEOUT_SEC = float(os.getenv("CHANGE_REASON_CLASSIFY_TIMEOUT_SEC", "10"))
+
+
+def _classify_change_reason_by_keyword(user_message: str) -> str | None:
+    if _TOO_HARD_RE.search(user_message or ""):
+        return "too_hard"
+    if _TOO_EASY_RE.search(user_message or ""):
+        return "too_easy"
+    if _CANT_DO_RE.search(user_message or ""):
+        return "cant_do"
+    if has_dislike_signal(user_message):
+        return "dislike"
+    return None
+
+
+async def _classify_change_reason(user_message: str) -> str:
+    reason = _classify_change_reason_by_keyword(user_message)
+    if reason:
+        return reason
+    try:
+        raw = await generate_json_message(
+            _CHANGE_REASON_CLASSIFY_SYSTEM_PROMPT,
+            f"아이 발화: {user_message}",
+            timeout=_CHANGE_REASON_TIMEOUT_SEC,
+        )
+        data = _loads_json_object(raw)
+        result = data.get("reason", "")
+        if result in {"too_easy", "too_hard", "dislike", "cant_do", "just_change"}:
+            return result
+    except Exception as e:
+        print(f"[ChangeReason] classify failed: {type(e).__name__}: {e!r}")
+    return "just_change"
+
+
+_CHANGE_REASON_HINTS = {
+    "too_easy": "아이가 미션이 너무 쉽다고 해서 조금 더 어려운 미션으로 바꿔줬어. 짧게 알려줘.",
+    "too_hard": "아이가 미션이 너무 어렵다고 해서 더 쉬운 미션으로 바꿔줬어. 짧게 공감하고 새 미션을 알려줘.",
+    "cant_do": "아이가 오늘은 상황상 미션을 할 수 없다고 해서 다른 미션으로 바꿔줬어. 짧게 알려줘.",
+    "just_change": "아이가 다른 미션을 원해서 바꿔줬어. 새 미션을 짧게 알려줘.",
+}
+
+_MISSION_DISLIKE_PENDING_HINT = (
+    "아이가 오늘 미션을 싫어하거나 재미없어한다고 말했어. "
+    "아직 미션은 바꾸지 않았어. 그래도 오늘 딱 한 번만 해볼지 짧게 물어봐."
+)
+
+
+async def _handle_mission_change_reason(
+    student_id: int,
+    pending_id: int,
+    payload: dict,
+    retry_count: int,
+    user_message: str,
+) -> PendingOutcome:
+    mission_id = payload.get("mission_id")
+    activity_key = payload.get("activity_key")
+    exec_results = ExecResults()
+
+    reason = _classify_change_reason_by_keyword(user_message)
+
+    if reason is None:
+        if retry_count >= 2:
+            reason = "just_change"
+        else:
+            updated = await run_in_threadpool(increment_pending_retry, pending_id)
+            retry_after = updated.get("retry_count") if updated else retry_count + 1
+            print(f"[ChangeReason] unrecognized retry={retry_after}")
+            return PendingOutcome(
+                action_type="mission_change_reason",
+                decision="ambiguous",
+                status=f"retry_{retry_after}",
+                message_hint="아이가 왜 바꾸고 싶은지 아직 잘 모르겠어. 너무 쉬운지, 어려운지, 싫은지, 다른 걸 하고 싶은지 다시 한 번 짧게 물어봐.",
+                pending_id=pending_id,
+                exec_results=exec_results,
+            )
+
+    if reason is None:
+        reason = await _classify_change_reason(user_message)
+
+    print(f"[ChangeReason] reason={reason}")
+
+    if reason == "dislike":
+        await run_in_threadpool(resolve_pending, pending_id, "accepted")
+        dislike_payload = {
+            "mission_id": mission_id,
+            "mission_name": payload.get("mission_name", ""),
+            "mission_rule": payload.get("mission_rule", ""),
+            "reason_type": "dislike",
+            "original_user_message": user_message,
+        }
+        await run_in_threadpool(save_pending_action, student_id, "mission_dislike_confirm", dislike_payload)
+        if mission_id:
+            try:
+                await run_in_threadpool(save_mission_change_log, student_id, mission_id, "dislike")
+            except Exception as e:
+                print(f"[ChangeReason] log failed: {e!r}")
+        return PendingOutcome(
+            action_type="mission_change_reason",
+            decision="dislike",
+            status="chained_dislike",
+            message_hint=_MISSION_DISLIKE_PENDING_HINT,
+            pending_id=pending_id,
+            exec_results=exec_results,
+        )
+
+    adjustment_type_map = {"too_easy": "harder", "too_hard": "easier"}
+    adjustment_type = adjustment_type_map.get(reason, "change")
+    exec_results.adjustment = await run_in_threadpool(
+        execute_adjustment, student_id, {"adjustment_type": adjustment_type}
+    )
+
+    if reason == "too_hard" and activity_key:
+        try:
+            await run_in_threadpool(upsert_user_memory, student_id, activity_key, "difficulty")
+        except Exception as e:
+            print(f"[ChangeReason] memory upsert failed: {e!r}")
+
+    if mission_id:
+        try:
+            await run_in_threadpool(save_mission_change_log, student_id, mission_id, reason)
+        except Exception as e:
+            print(f"[ChangeReason] log failed: {e!r}")
+
+    await run_in_threadpool(resolve_pending, pending_id, "accepted")
+    hint = _CHANGE_REASON_HINTS.get(reason) or _adjustment_hint(exec_results)
+    return PendingOutcome(
+        action_type="mission_change_reason",
+        decision=reason,
+        status="accepted",
+        message_hint=hint,
+        pending_id=pending_id,
+        exec_results=exec_results,
+    )
+
+
 async def _execute_dislike_fallback_change(student_id: int) -> ExecResults:
     exec_results = ExecResults()
     exec_results.adjustment = await run_in_threadpool(
@@ -269,6 +424,13 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
     action_type = pending["action_type"]
     payload = pending.get("payload") or {}
     retry_count = pending.get("retry_count") or 0
+
+    if action_type == "mission_change_reason":
+        print(f"[Pending] action={action_type} retry={retry_count}")
+        return await _handle_mission_change_reason(
+            student_id, pending_id, payload, retry_count, user_message
+        )
+
     decision = await classify_pending_reply(user_message, action_type)
     exec_results = ExecResults()
     print(f"[Pending] action={action_type} decision={decision} retry={retry_count}")

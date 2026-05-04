@@ -779,6 +779,28 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "debug": _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message),
             }
 
+    if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
+        if not _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
+            payload = {
+                "mission_id": mission_row.get("mission_id"),
+                "mission_name": mission_row.get("mission_name"),
+                "mission_rule": mission_row.get("mission_rule"),
+                "activity_key": mission_row.get("activity_key"),
+            }
+            await run_in_threadpool(save_pending_action, student_id, "mission_change_reason", payload)
+            hint = "아이가 미션을 바꾸고 싶다고 했어. 왜 바꾸고 싶은지 짧게 물어봐. 너무 쉬워서, 어려워서, 싫어서, 못 하는 상황이라서, 그냥 다른 게 하고 싶어서 중 고를 수 있다고 알려줘."
+            ai_message, call1_ms = await _generate_hint_response(hint)
+            print(f"[MissionChange] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+            return {
+                "response": ai_message,
+                "mission_completed": False,
+                "detected_function": "mission_change_reason",
+                "sources": [],
+                "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message),
+            }
+
     intent = "A"
     fn_calls: list[tuple[str, dict]] = []
     detected_function = None
@@ -1100,6 +1122,25 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 debug_payload = _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - dislike_started) * 1000)
                 yield _sse({"type": "done", "debug": debug_payload})
+                return
+
+        if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
+            if not _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
+                payload = {
+                    "mission_id": mission_row.get("mission_id"),
+                    "mission_name": mission_row.get("mission_name"),
+                    "mission_rule": mission_row.get("mission_rule"),
+                    "activity_key": mission_row.get("activity_key"),
+                }
+                await run_in_threadpool(save_pending_action, student_id, "mission_change_reason", payload)
+                hint = "아이가 미션을 바꾸고 싶다고 했어. 왜 바꾸고 싶은지 짧게 물어봐. 너무 쉬워서, 어려워서, 싫어서, 못 하는 상황이라서, 그냥 다른 게 하고 싶어서 중 고를 수 있다고 알려줘."
+                ai_message, call1_ms = await _generate_hint_response(hint)
+                print(f"[MissionChange] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+                async for event in _fake_stream_template_response(ai_message):
+                    yield event
+                yield _sse({"type": "done", "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message)})
                 return
 
         intent = "A"
