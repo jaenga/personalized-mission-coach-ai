@@ -12,6 +12,7 @@ NormReason = Literal[
     "numeric",
     "numeric_no_count",
     "numeric_ambiguous",
+    "difficulty",
     "qualifier",
     "past_ambiguous",
 ]
@@ -27,13 +28,20 @@ class NormResult:
 _CANCEL_TARGET_RE = re.compile(
     r"(?:미션\s*)?(?:성공|실패)(?:\s*(?:제출|기록|한\s*거|한거))?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
     r"|(?:방금|최근|아까)?\s*(?:미션\s*결과\s*)?(?:제출|기록)(?:한\s*거|한거|된\s*거|된거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
+    r"|(?:응|그래|좋아|네|ㅇㅇ)?\s*(?:취소|되돌|되돌려|철회)\s*(?:해줘|해|할래)?"
     r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
 )
+_ADJUSTMENT_CANCEL_RE = re.compile(
+    r"(?:미션\s*)?(?:변경|바꾼\s*거|바꾼거|바꾼\s*미션|원래\s*미션)"
+    r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
+)
+_CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
 _B_COMMAND_RE = re.compile(
     r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
 )
-_EASIER_RE = re.compile(r"쉬운 걸로|너무 어려워|쉽게|어려워서")
-_HARDER_RE = re.compile(r"어려운 걸로|너무 쉬워|쉬워서")
+_EASIER_RE = re.compile(r"쉬운 걸로|쉽게\s*(?:바꿔|해줘|변경)|쉬운\s*미션")
+_TOO_DIFFICULT_RE = re.compile(r"너무 어려워|어려워서|힘들어|못하겠")
+_HARDER_RE = re.compile(r"어려운 걸로|너무 쉬워|너무 쉬움|쉬워서|쉬움")
 _CHANGE_RE = re.compile(r"바꿔|변경|다른 미션|다른 걸로")
 _QUESTION_RE = re.compile(
     r"(?:성공|실패|완료|fail|success)[\s\S]{0,16}"
@@ -42,7 +50,7 @@ _QUESTION_RE = re.compile(
     r"인지|어때요\??|어때\??)"
 )
 _NEGATION_VERB_RE = re.compile(
-    r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안먹|못먹|안마|못마"
+    r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안타|못타"
 )
 _EXPLICIT_FAIL_RE = re.compile(r"실패|못했|안했")
 _EMOTIONAL_RE = re.compile(r"하기 싫|못하겠|안해|못해|포기")
@@ -149,10 +157,16 @@ def normalize_b_input(
     def fail():
         return ok(f"오늘 미션 '{mission_name}' 실패했어요")
 
+    if _CANCEL_NEGATION_RE.search(message):
+        return clarify("")
+    if _ADJUSTMENT_CANCEL_RE.search(message):
+        return ok("미션 변경 취소해줘")
     if _CANCEL_TARGET_RE.search(message):
-        return ok("최근 미션 결과 제출을 취소해줘")
+        return ok("미션 제출 취소해줘")
     if _EASIER_RE.search(message):
         return ok("더 쉬운 미션으로 바꿔줘")
+    if _TOO_DIFFICULT_RE.search(message):
+        return clarify("difficulty")
     if _HARDER_RE.search(message):
         return ok("더 어려운 미션으로 바꿔줘")
     if _CHANGE_RE.search(message):

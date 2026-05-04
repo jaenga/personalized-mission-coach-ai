@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -64,6 +65,49 @@ _ACTION_CANCELLED_ACKS = [
     "최근 작업을 되돌려뒀어! ↩️",
     "요청한 대로 취소했어! ↩️",
 ]
+_SUBMIT_CANCELLED_ACKS = [
+    "방금 제출 기록을 취소했어! ↩️",
+    "성공/실패 기록을 취소해뒀어! ↩️",
+    "미션 제출을 취소했어! ↩️",
+]
+_ADJUSTMENT_CANCELLED_ACKS = [
+    "최근 미션 변경을 취소했어! ↩️",
+    "바꾼 미션을 원래대로 되돌렸어! ↩️",
+    "미션 변경을 취소해뒀어! ↩️",
+]
+
+
+def _friendly_rule_text(rule: str | None) -> str:
+    text = (rule or "").strip()
+    if not text:
+        return ""
+
+    method_match = re.search(r"\[수행 방법\]\s*(.*?)(?:\s*\[[^\]]+\]|$)", text, re.DOTALL)
+    if method_match:
+        text = method_match.group(1).strip()
+    else:
+        text = re.sub(r"\[[^\]]+\]", " ", text)
+        text = " ".join(text.split())
+        text = re.split(r"(?<=[.!?])\s+", text)[0]
+
+    text = " ".join(text.split())
+    replacements = [
+        ("하세요.", "하면 돼."),
+        ("하세요", "하면 돼"),
+        ("완주하세요.", "완주하면 돼."),
+        ("완주하세요", "완주하면 돼"),
+        ("반복하세요.", "반복하면 돼."),
+        ("반복하세요", "반복하면 돼"),
+        ("유지하세요.", "유지하면 돼."),
+        ("유지하세요", "유지하면 돼"),
+        ("이에요.", "이야."),
+        ("이에요", "이야"),
+        ("예요.", "야."),
+        ("예요", "야"),
+    ]
+    for src, dst in replacements:
+        text = text.replace(src, dst)
+    return text
 
 
 class ResponseMode(str, Enum):
@@ -111,7 +155,14 @@ def build_action_ack(exec_results: ExecResults | None) -> ActionAck | None:
                 result.adjustment_type or "change",
                 _MISSION_CHANGED_ACKS["change"],
             )
-            return ActionAck(random.choice(acks), ResponseMode.PREFIX_WITH_GEMMA)
+            details = []
+            if result.new_mission_name:
+                details.append(f'새 미션은 "{result.new_mission_name}"야.')
+            friendly_rule = _friendly_rule_text(result.new_mission_rule)
+            if friendly_rule:
+                details.append(f"방법은 {friendly_rule}")
+            message = " ".join([random.choice(acks), *details]).strip()
+            return ActionAck(message, ResponseMode.SERVER_ONLY)
 
         if result.status == AdjustmentStatus.ALREADY_SUBMITTED:
             return ActionAck(_ADJUSTMENT_ALREADY_SUBMITTED_MSG, ResponseMode.SERVER_ONLY)
@@ -129,9 +180,17 @@ def build_action_ack(exec_results: ExecResults | None) -> ActionAck | None:
         result = exec_results.cancel
 
         if result.db_changed and result.action is ExecutorActionType.ACTION_CANCELLED:
+            if result.status == CancelStatus.CANCELLED_SUBMIT:
+                return ActionAck(random.choice(_SUBMIT_CANCELLED_ACKS), ResponseMode.SERVER_ONLY)
+            if result.status == CancelStatus.CANCELLED_ADJUSTMENT:
+                return ActionAck(random.choice(_ADJUSTMENT_CANCELLED_ACKS), ResponseMode.SERVER_ONLY)
             return ActionAck(random.choice(_ACTION_CANCELLED_ACKS), ResponseMode.SERVER_ONLY)
 
         if result.status == CancelStatus.NOTHING_TO_CANCEL:
+            if result.cancel_type == "submit":
+                return ActionAck("취소할 제출 기록이 없어! 다시 확인해볼래?", ResponseMode.SERVER_ONLY)
+            if result.cancel_type == "adjustment":
+                return ActionAck("취소할 미션 변경이 없어! 다시 확인해볼래?", ResponseMode.SERVER_ONLY)
             return ActionAck("지금은 취소할 내용이 없어! 다시 한 번 확인해볼래?", ResponseMode.SERVER_ONLY)
 
         if result.status == CancelStatus.DB_ERROR:
