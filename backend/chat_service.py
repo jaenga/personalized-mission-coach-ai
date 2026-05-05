@@ -20,13 +20,14 @@ from database import (
     has_checkin_today,
     mark_synced,
     resolve_pending_mission_suggestion,
+    resolve_mission_ui_action,
     save_mission_change_log,
     save_mission_adjustment,
     save_message,
     save_pending_action,
     save_pending_mission_suggestion,
 )
-from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
+from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_adjustment, execute_submit
 from memory_service import extract_and_save_memory
 from mission_ui_action_service import (
     MISSION_CHANGE_REASON_BUTTONS,
@@ -706,6 +707,23 @@ def _prepend_db_action_ack(ai_message: str, exec_results: ExecResults | None) ->
     return ai_message
 
 
+# 조건형 키워드 → adjustment_type 매핑
+_CONDITION_ADJUSTMENT_MAP: list[tuple[list[str], str]] = [
+    (["쉬운", "쉽게", "간단한", "가벼운"], "easier"),
+    (["어려운", "어렵게", "힘든", "도전적인"], "harder"),
+    (["아무거나", "다른", "다른거", "다른걸로", "아무"], "change"),
+]
+
+
+def _detect_condition_adjustment(text: str) -> str | None:
+    """사용자 입력에서 조건형 키워드를 감지해 adjustment_type을 반환한다."""
+    compact = text.replace(" ", "")
+    for keywords, adjustment_type in _CONDITION_ADJUSTMENT_MAP:
+        if any(kw in compact for kw in keywords):
+            return adjustment_type
+    return None
+
+
 def _rebuild_ui_action_payload(active_ui: dict) -> dict:
     """DB row를 받아 action_type에 맞는 버튼 목록을 재조합해 ui_action payload를 반환한다."""
     action_type = active_ui.get("action_type", "")
@@ -717,6 +735,97 @@ def _rebuild_ui_action_payload(active_ui: dict) -> dict:
     if action_type == "awaiting_replacement_mission":
         return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
     return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
+
+
+async def _handle_replacement_mission_input(
+    student_id: int,
+    session_id: str,
+    user_message: str,
+    active_ui: dict,
+) -> dict:
+    """awaiting_replacement_mission 상태에서 사용자 입력을 미션 매칭 로직으로 처리한다.
+    memory extraction은 호출하지 않는다 (일반 대화가 아님).
+    """
+    action_id = active_ui.get("action_id")
+
+    # 1. 조건형 키워드 감지 ("쉬운 걸로", "아무거나" 등)
+    adjustment_type = _detect_condition_adjustment(user_message)
+    if adjustment_type:
+        result = await run_in_threadpool(execute_adjustment, student_id, {"adjustment_type": adjustment_type})
+        if result.status is AdjustmentStatus.CHANGED:
+            await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+            return {
+                "response": f'좋아! 오늘 미션을 "{result.new_mission_name}"로 바꿨어. 같이 해보자! 💪',
+                "mission_completed": False,
+                "detected_function": "request_mission_adjustment",
+                "sources": [],
+                "ui_action": None,
+                "debug": {"intent": "REPLACEMENT_MISSION", "method": "condition", "adjustment_type": adjustment_type},
+            }
+        if result.status is AdjustmentStatus.ALREADY_SUBMITTED:
+            await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+            return {
+                "response": "오늘 미션 결과를 이미 저장했어서 지금은 바꿀 수 없어. 바꾸고 싶으면 먼저 기록을 취소해줘!",
+                "mission_completed": False,
+                "detected_function": None,
+                "sources": [],
+                "ui_action": None,
+                "debug": {"intent": "REPLACEMENT_MISSION", "method": "condition", "adjustment_status": result.status.value},
+            }
+        # NO_ALTERNATIVE 등 → 재질문으로 이어짐
+
+    # 2. 특정 미션명 정확 매칭
+    candidate = extract_mission_candidate_text(user_message) or user_message.strip()
+    if not _is_meaningless_mission_candidate(candidate):
+        exact = await run_in_threadpool(find_mission_by_user_text, candidate)
+        if exact:
+            current = await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
+            if current:
+                if await run_in_threadpool(has_checkin_today, student_id):
+                    await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+                    return {
+                        "response": "오늘 미션 결과를 이미 저장했어서 지금은 바꿀 수 없어. 바꾸고 싶으면 먼저 기록을 취소해줘!",
+                        "mission_completed": False,
+                        "detected_function": None,
+                        "sources": [],
+                        "ui_action": None,
+                        "debug": {"intent": "REPLACEMENT_MISSION", "method": "exact_match", "blocked": "already_submitted"},
+                    }
+                await run_in_threadpool(save_mission_adjustment, student_id, current["mission_id"], exact["mission_id"])
+                await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+                return {
+                    "response": f'좋아! 오늘 미션을 "{exact["mission_name"]}"로 바꿨어. 같이 해보자! 💪',
+                    "mission_completed": False,
+                    "detected_function": "request_mission_adjustment",
+                    "sources": [],
+                    "ui_action": None,
+                    "debug": {"intent": "REPLACEMENT_MISSION", "method": "exact_match", "mission": exact["mission_name"]},
+                }
+
+        # 3. 유사 매칭
+        similar = await run_in_threadpool(find_similar_mission_by_user_text, candidate)
+        if similar:
+            await run_in_threadpool(save_pending_mission_suggestion, student_id, similar["mission_id"], user_message)
+            await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+            return {
+                "response": f'비슷한 미션으로 "{similar["mission_name"]}"가 있어! 이 미션으로 바꿔볼까?',
+                "mission_completed": False,
+                "detected_function": None,
+                "sources": [],
+                "ui_action": None,
+                "debug": {"intent": "REPLACEMENT_MISSION", "method": "similar_match", "mission": similar["mission_name"]},
+            }
+
+    # 4. 매칭 실패 → action 유지, 재질문
+    print(f"[Replacement] no match for={_short(user_message)!r} action_id={action_id}")
+    return {
+        "response": "아직 맞는 미션을 찾지 못했어. 다른 이름이나 조건으로 말해줘!",
+        "mission_completed": False,
+        "detected_function": None,
+        "sources": [],
+        "ui_action": _rebuild_ui_action_payload(active_ui),
+        "debug": {"intent": "REPLACEMENT_MISSION", "method": "no_match"},
+    }
 
 
 async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
@@ -815,8 +924,10 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 }
 
             if action_type == "awaiting_replacement_mission":
-                # 대체 미션 입력 대기 → Phase 2에서 구현 (현재는 pass-through)
-                pass
+                result = await _handle_replacement_mission_input(student_id, body.session_id, body.message, active_ui)
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
+                return result
 
     if not is_greet and student_id and mission_row:
         if await classify_mission_dislike(body.message, mission_title):
@@ -1194,8 +1305,13 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     return
 
                 if action_type == "awaiting_replacement_mission":
-                    # 대체 미션 입력 대기 → Phase 2에서 구현 (현재는 pass-through)
-                    pass
+                    result = await _handle_replacement_mission_input(student_id, body.session_id, body.message, active_ui)
+                    await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
+                    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
+                    async for event in _fake_stream_template_response(result["response"]):
+                        yield event
+                    yield _sse({"type": "done", "ui_action": result["ui_action"], "debug": result["debug"]})
+                    return
 
         if not is_greet and student_id and mission_row:
             dislike_started = time.perf_counter()
