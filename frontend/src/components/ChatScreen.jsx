@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import tomatoChat from "../assets/tomato/chat/chat.png";
 
 /* ─────────────────────────────────────────────────────────
-   FAQ — + 버튼 누르면 떠오르는 자주 묻는 질문 시트
+   FAQ — + 버튼 누르면 떠오르는 자주 묻는 질문 시트(수정가능)
    ───────────────────────────────────────────────────────── */
 const FAQ_ITEMS = [
   { id: "who",     label: "토미가 누구야?" },
@@ -144,7 +144,7 @@ function UserMessage({ text }) {
 }
 
 /* ─────────────────────────────────────────────────────────
-   ChatScreen
+   ChatScreen(백엔드랑 연동 시 삭제)
    ───────────────────────────────────────────────────────── */
 const INITIAL_MESSAGES = [
   { id: 1, role: "assistant", text: "민준아! 오늘 물 5잔 마셨니? 👍" },

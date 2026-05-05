@@ -270,7 +270,10 @@ export default function Settings({
                 <img src={fireImg} alt="" style={{ width: 13, height: 13 }} />
                 {streakDays}일 연속
               </span>
-              <span
+              <button
+                type="button"
+                onClick={() => { window.location.hash = "#game"; }}
+                aria-label={`하트 ${heartCount}개 — 토미랑 달리기 게임으로`}
                 className="flex items-center gap-1 font-sejong"
                 style={{
                   background: "rgba(252, 228, 225, 0.7)",
@@ -279,11 +282,13 @@ export default function Settings({
                   height: 22,
                   fontSize: 11,
                   letterSpacing: "-0.43px",
+                  border: "none",
+                  cursor: "pointer",
                 }}
               >
                 <img src={heartImg} alt="" style={{ width: 11, height: 11 }} />
                 {heartCount}
-              </span>
+              </button>
             </div>
           </div>
         </div>

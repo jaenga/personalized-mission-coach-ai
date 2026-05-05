@@ -1186,6 +1186,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             },
             "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
         }
+        if exec_results.submit:
+            debug_payload["submit_result"] = {
+                "status": exec_results.submit.status.value,
+                "result_type": exec_results.submit.result_type,
+                "db_changed": exec_results.submit.db_changed,
+            }
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
         llm_save = _filter_ai_response(

@@ -8,30 +8,28 @@ import { LevelRing, BottomNav } from "./Home.jsx";
 
 /* ─────────────────────────────────────────────────────────
    레벨 임계값 — 다음 레벨까지 필요한 경험치
-   누적: lvl1=5, lvl2=17, lvl3=37, lvl4=70
+   누적: lvl1=5, lvl2=17, lvl3=37, lvl4=70 lvl5=120 (레벨5 임시로 넣어둠)
    ───────────────────────────────────────────────────────── */
 const LEVEL_THRESHOLDS = { 1: 5, 2: 12, 3: 20, 4: 33, 5: 50 };
-
-function applyExp(level, currentXp, gain) {
-  let lv = level;
-  let xp = currentXp + gain;
-  while (LEVEL_THRESHOLDS[lv] && xp >= LEVEL_THRESHOLDS[lv]) {
-    xp -= LEVEL_THRESHOLDS[lv];
-    lv += 1;
-  }
-  return { level: lv, xp, max: LEVEL_THRESHOLDS[lv] || 100 };
-}
 
 /* ─────────────────────────────────────────────────────────
    리워드 추첨 — 하루 첫 뽑기는 하트 확정, 이후 40/40/20
    ───────────────────────────────────────────────────────── */
-const EXP_REWARD = 1;
+function randomExpReward() {
+  // 3~5 랜덤
+  return 3 + Math.floor(Math.random() * 3);
+}
+function randomHeartReward() {
+  // 1~2 랜덤
+  return 1 + Math.floor(Math.random() * 2);
+}
+
 function rollReward(isFirstOfDay) {
-  if (isFirstOfDay) return { type: "heart", heart: 1, exp: 0 };
+  if (isFirstOfDay) return { type: "heart", heart: randomHeartReward(), exp: 0 };
   const r = Math.random();
-  if (r < 0.4) return { type: "heart", heart: 1, exp: 0 };
-  if (r < 0.8) return { type: "exp", heart: 0, exp: EXP_REWARD };
-  return { type: "both", heart: 1, exp: EXP_REWARD };
+  if (r < 0.4) return { type: "heart", heart: randomHeartReward(), exp: 0 };
+  if (r < 0.8) return { type: "exp",   heart: 0,                   exp: randomExpReward() };
+  return         { type: "both",  heart: randomHeartReward(),   exp: randomExpReward() };
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -129,7 +127,10 @@ function TopBadges({ ticketCount, heartCount }) {
         <img src={ticketImg} alt="" style={{ width: 12, height: 12 }} />
         {ticketCount}
       </span>
-      <span
+      <button
+        type="button"
+        onClick={() => { window.location.hash = "#game"; }}
+        aria-label={`하트 ${heartCount}개 — 토미랑 달리기 게임으로`}
         className="flex items-center gap-1 font-sejong"
         style={{
           background: "rgba(252, 228, 225, 0.7)",
@@ -137,11 +138,13 @@ function TopBadges({ ticketCount, heartCount }) {
           paddingInline: 8,
           height: 24,
           fontSize: 12,
+          border: "none",
+          cursor: "pointer",
         }}
       >
         <img src={heartImg} alt="" style={{ width: 12, height: 12 }} />
         {heartCount}
-      </span>
+      </button>
     </div>
   );
 }
@@ -203,22 +206,17 @@ function RewardCard({ reward }) {
    DrawScreen — 메인 컴포넌트
    ───────────────────────────────────────────────────────── */
 export default function DrawScreen({
-  initialLevel = 3,
-  initialCurrentXp = 12,
-  initialMaxXp = LEVEL_THRESHOLDS[3],
-  initialTickets = 3,
-  initialHearts = 4,
-  initialFirstOfDay = true,
+  level = 3,
+  currentXp = 12,
+  maxXp = LEVEL_THRESHOLDS[3],
+  ticketCount = 3,
+  heartCount = 4,
+  firstOfDay = true,
+  onSpendTicket,
+  onReward,
   onNavigate,
   onBack,
 }) {
-  const [level, setLevel] = useState(initialLevel);
-  const [currentXp, setCurrentXp] = useState(initialCurrentXp);
-  const [maxXp, setMaxXp] = useState(initialMaxXp);
-  const [tickets, setTickets] = useState(initialTickets);
-  const [hearts, setHearts] = useState(initialHearts);
-  const [firstOfDay, setFirstOfDay] = useState(initialFirstOfDay);
-
   // phase: idle | drawing | result
   const [phase, setPhase] = useState("idle");
   const [reward, setReward] = useState(null);
@@ -228,27 +226,16 @@ export default function DrawScreen({
 
   useEffect(() => () => clearTimeout(drawTimerRef.current), []);
 
-  const canDraw = tickets > 0 && phase === "idle";
+  const canDraw = ticketCount > 0 && phase === "idle";
 
   function handleDraw() {
     if (!canDraw) return;
     setPhase("drawing");
-    setTickets((t) => t - 1);
+    onSpendTicket?.();
     drawTimerRef.current = setTimeout(() => {
       const r = rollReward(firstOfDay);
       setReward(r);
-      // 보상 적용
-      if (r.heart > 0) setHearts((h) => h + r.heart);
-      if (r.exp > 0) {
-        const next = applyExp(level, currentXp, r.exp);
-        // ring 애니메이션을 보여주기 위해 약간 딜레이
-        setTimeout(() => {
-          setLevel(next.level);
-          setCurrentXp(next.xp);
-          setMaxXp(next.max);
-        }, 400);
-      }
-      setFirstOfDay(false);
+      setTimeout(() => onReward?.(r), 400);
       setPhase("result");
     }, 1700);
   }
@@ -285,9 +272,9 @@ export default function DrawScreen({
           className="transition-transform active:scale-95"
           style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
         >
-          <LevelRing level={level} currentXp={currentXp} maxXp={maxXp} size={44} />
+          <LevelRing level={level} currentXp={currentXp} maxXp={maxXp} size={38} />
         </button>
-        <TopBadges ticketCount={tickets} heartCount={hearts} />
+        <TopBadges ticketCount={ticketCount} heartCount={heartCount} />
       </div>
 
       {/* EXP 상세 팝오버 */}
@@ -494,7 +481,7 @@ export default function DrawScreen({
             >
               확인
             </button>
-            {tickets > 0 ? (
+            {ticketCount > 0 ? (
               <button
                 type="button"
                 onClick={() => {
@@ -517,7 +504,7 @@ export default function DrawScreen({
               >
                 한 번 더 뽑기
                 <img src={ticketImg} alt="" style={{ width: 14, height: 14 }} />
-                {tickets}
+                {ticketCount}
               </button>
             ) : (
               <div

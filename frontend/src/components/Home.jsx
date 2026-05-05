@@ -23,7 +23,7 @@ function formatTodayKor(date) {
 }
 
 /* ─────────────────────────────────────────────────────────
-   LevelRing — props 기반 원형 경험치 (SVG stroke-dasharray)
+   LevelRing — 레벨과 경험치 표시
    ───────────────────────────────────────────────────────── */
 export function LevelRing({ level = 3, currentXp = 60, maxXp = 100, size = 56 }) {
   const stroke = 4;
@@ -50,7 +50,7 @@ export function LevelRing({ level = 3, currentXp = 60, maxXp = 100, size = 56 })
       </svg>
       <span
         className="absolute inset-0 flex items-center justify-center font-noto"
-        style={{ color: "#E35D49", fontSize: 13, fontWeight: 700, letterSpacing: "-0.43px" }}
+        style={{ color: "#E35D49", fontSize: 11, fontWeight: 700, letterSpacing: "-0.43px" }}
       >
         Lv.{level}
       </span>
@@ -59,7 +59,7 @@ export function LevelRing({ level = 3, currentXp = 60, maxXp = 100, size = 56 })
 }
 
 /* ─────────────────────────────────────────────────────────
-   소형 스파클 (main2 옆 은은한 반짝임)
+   소형 스파클 
    ───────────────────────────────────────────────────────── */
 const SPARKLE_DOTS = [
   { x: 12,  y: 30,  size: 10, delay: 0,    color: "#A7DAA7" },
@@ -445,7 +445,7 @@ export default function Home({
             className="transition-transform active:scale-95"
             style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
           >
-            <LevelRing level={level} currentXp={currentXp} maxXp={maxXp} size={44} />
+            <LevelRing level={level} currentXp={currentXp} maxXp={maxXp} size={38} />
           </button>
           <div className="flex gap-1.5">
             <button
@@ -466,7 +466,10 @@ export default function Home({
               <img src={ticket} alt="" style={{ width: 12, height: 12 }} />
               {ticketCount}
             </button>
-            <span
+            <button
+              type="button"
+              onClick={() => { window.location.hash = "#game"; }}
+              aria-label={`하트 ${heartCount}개 — 토미랑 달리기 게임으로`}
               className="flex items-center gap-1 font-sejong"
               style={{
                 background: "rgba(252, 228, 225, 0.7)",
@@ -474,11 +477,13 @@ export default function Home({
                 paddingInline: 8,
                 height: 24,
                 fontSize: 12,
+                border: "none",
+                cursor: "pointer",
               }}
             >
               <img src={heart} alt="" style={{ width: 12, height: 12 }} />
               {heartCount}
-            </span>
+            </button>
           </div>
 
           {/* 레벨 링 누르면 펼쳐지는 EXP 상세 팝오버 */}
@@ -546,7 +551,7 @@ export default function Home({
                 lineHeight: "22px",
               }}
             >
-              오늘도 힘내보자~
+              오늘도 힘내보자~!
             </p>
           </div>
           <div

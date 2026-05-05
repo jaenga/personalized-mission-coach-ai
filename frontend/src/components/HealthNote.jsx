@@ -372,9 +372,16 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
   );
 }
 
-export default function HealthNote({ onSubmit, onSkip, onBack, loading }) {
-  const [allergens, setAllergens] = useState([]);
-  const [cautionFoods, setCautionFoods] = useState([]);
+export default function HealthNote({
+  onSubmit,
+  onSkip,
+  onBack,
+  loading,
+  initialAllergens = [],
+  initialCautionFoods = [],
+}) {
+  const [allergens, setAllergens] = useState(initialAllergens);
+  const [cautionFoods, setCautionFoods] = useState(initialCautionFoods);
 
   const toggle = (list, setList) => (item) => {
     setList((prev) => (prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]));
