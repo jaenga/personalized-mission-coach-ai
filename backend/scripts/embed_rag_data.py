@@ -62,7 +62,7 @@ def update_faqs(model: SentenceTransformer) -> int:
                         embedding_model = %s
                     WHERE faq_id = %s
                     """,
-                    (to_pgvector(vec.tolist()), faq_id),
+                    (to_pgvector(vec.tolist()), MODEL_NAME, faq_id),
                 )
         conn.commit()
     return len(rows)
