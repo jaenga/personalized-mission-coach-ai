@@ -296,16 +296,37 @@ def save_message(session_id: str, role: str, content: str, detected_function: st
     return row_id
 
 
-def fetch_messages(session_id: str) -> list[dict]:
+def fetch_messages(session_id: str, limit: int | None = None) -> list[dict]:
     profile = fetch_profile(session_id)
     if not profile:
         return []
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT speaker, message_text, created_at FROM chat_messages WHERE session_id = %s ORDER BY message_id",
-                (profile["db_session_id"],),
-            )
+            if limit and limit > 0:
+                cur.execute(
+                    """
+                    SELECT speaker, message_text, created_at
+                    FROM (
+                        SELECT message_id, speaker, message_text, created_at
+                        FROM chat_messages
+                        WHERE session_id = %s
+                        ORDER BY message_id DESC
+                        LIMIT %s
+                    ) recent
+                    ORDER BY message_id
+                    """,
+                    (profile["db_session_id"], limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT speaker, message_text, created_at
+                    FROM chat_messages
+                    WHERE session_id = %s
+                    ORDER BY message_id
+                    """,
+                    (profile["db_session_id"],),
+                )
             rows = cur.fetchall()
     return [
         {

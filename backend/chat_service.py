@@ -48,6 +48,7 @@ from sheets import cancel_mission_result, update_mission_result
 
 _FAKE_STREAM_CHARS = 4
 _FAKE_STREAM_DELAY_SEC = 0.1
+_CHAT_CONTEXT_MESSAGE_LIMIT = 10
 _CLARIFY_TEMPLATE_REASONS = {
     "numeric",
     "numeric_no_count",
@@ -945,7 +946,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
         messages = [{"role": "user", "content": gemma_user_message}]
     else:
-        history = await run_in_threadpool(fetch_messages, body.session_id)
+        history = await run_in_threadpool(fetch_messages, body.session_id, _CHAT_CONTEXT_MESSAGE_LIMIT)
         if not is_greet:
             history.append({"role": "user", "content": gemma_user_message})
         messages = history if history else [
@@ -1301,7 +1302,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
             messages = [{"role": "user", "content": gemma_user_message}]
         else:
-            fetched_history = await run_in_threadpool(fetch_messages, body.session_id)
+            fetched_history = await run_in_threadpool(fetch_messages, body.session_id, _CHAT_CONTEXT_MESSAGE_LIMIT)
             history = [{"role": m["role"], "content": m["content"]} for m in fetched_history]
             if not is_greet:
                 history.append({"role": "user", "content": gemma_user_message})
