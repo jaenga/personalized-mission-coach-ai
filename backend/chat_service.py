@@ -37,7 +37,7 @@ from mission_ui_action_service import (
 )
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
 from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
-from qwen_client import detect_history_call, detect_submit_report_call
+from qwen_client import detect_history_call, detect_mission_info_call, detect_submit_report_call
 from pipeline import (
     classify_multi,
     is_equivalency_submit,
@@ -1008,6 +1008,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
         submit_report_call = None if fn_calls else detect_submit_report_call(body.message)
         history_call = None if submit_report_call or fn_calls else detect_history_call(body.message)
+        mission_info_call = None if submit_report_call or history_call or fn_calls else detect_mission_info_call(body.message)
         if submit_report_call:
             intent = "B"
             fn_calls = [submit_report_call]
@@ -1020,6 +1021,12 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             detected_function = history_call[0]
             fn_args = history_call[1]
             print("[Route] history query forced to get_user_history")
+        elif mission_info_call:
+            intent = "B"
+            fn_calls = [mission_info_call]
+            detected_function = mission_info_call[0]
+            fn_args = mission_info_call[1]
+            print("[Route] mission info query forced to get_mission_info")
 
         if intent == "B" and not fn_calls:
             norm = normalize_b_input(body.message, mission_title, mission_id)
@@ -1386,6 +1393,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
             submit_report_call = None if fn_calls else detect_submit_report_call(body.message)
             history_call = None if submit_report_call or fn_calls else detect_history_call(body.message)
+            mission_info_call = None if submit_report_call or history_call or fn_calls else detect_mission_info_call(body.message)
             if submit_report_call:
                 intent = "B"
                 fn_calls = [submit_report_call]
@@ -1398,6 +1406,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 detected_function = history_call[0]
                 fn_args = history_call[1]
                 print("[Route] history query forced to get_user_history")
+            elif mission_info_call:
+                intent = "B"
+                fn_calls = [mission_info_call]
+                detected_function = mission_info_call[0]
+                fn_args = mission_info_call[1]
+                print("[Route] mission info query forced to get_mission_info")
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
