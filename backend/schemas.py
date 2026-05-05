@@ -21,3 +21,15 @@ class ChatRequest(BaseModel):
 class MissionUiActionResolveRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     value: str = Field(..., min_length=1)
+
+
+class UiActionButton(BaseModel):
+    value: str
+    label: str
+
+
+class UiActionPayload(BaseModel):
+    action_id: str
+    type: str
+    lock_chat: bool
+    buttons: list[UiActionButton]

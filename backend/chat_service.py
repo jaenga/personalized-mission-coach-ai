@@ -711,6 +711,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "mission_completed": False,
             "detected_function": None,
             "sources": [],
+            "ui_action": None,
             "debug": {"intent": "IDENTITY_GUARD", "timing": {}},
         }
 
@@ -723,6 +724,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "mission_completed": False,
             "detected_function": None,
             "sources": [],
+            "ui_action": None,
             "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}},
         }
 
@@ -766,6 +768,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "mission_completed": mission_status is not None,
                 "detected_function": pending_outcome.action_type,
                 "sources": [],
+                "ui_action": None,
                 "debug": _pending_debug(pending_outcome, call1_ms, ai_message),
             }
 
@@ -790,6 +793,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "mission_completed": False,
                 "detected_function": "mission_dislike_confirm",
                 "sources": [],
+                "ui_action": None,
                 "debug": _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message),
             }
 
@@ -812,6 +816,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "mission_completed": False,
                 "detected_function": "mission_change_reason",
                 "sources": [],
+                "ui_action": None,
                 "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message),
             }
 
@@ -836,6 +841,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "mission_completed": False,
                 "detected_function": None,
                 "sources": [],
+                "ui_action": None,
                 "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}},
             }
         intent, intent_ms = await step_classify(body.message, mission_title)
@@ -896,6 +902,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "mission_completed": False,
             "detected_function": None,
             "sources": [],
+            "ui_action": None,
             "debug": {
                 "intent": intent,
                 "clarify_reason": clarify_reason,
@@ -1036,6 +1043,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         "mission_completed": mission_status is not None,
         "detected_function": detected_function,
         "sources": sources,
+        "ui_action": None,
         "debug": {
             "intent": intent,
             "clarify_reason": clarify_reason,
@@ -1063,7 +1071,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", identity_message)
             async for event in _fake_stream_template_response(identity_message):
                 yield event
-            yield _sse({"type": "done", "debug": {"intent": "IDENTITY_GUARD", "timing": {}}})
+            yield _sse({"type": "done", "ui_action": None, "debug": {"intent": "IDENTITY_GUARD", "timing": {}}})
             return
 
         if not is_greet and _OFFTOPIC_RE.search(body.message):
@@ -1072,7 +1080,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", _OFFTOPIC_RESPONSE)
             async for event in _fake_stream_template_response(_OFFTOPIC_RESPONSE):
                 yield event
-            yield _sse({"type": "done", "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}}})
+            yield _sse({"type": "done", "ui_action": None, "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}}})
             return
 
         current_mission_title = mission_title
@@ -1116,7 +1124,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
                 debug_payload = _pending_debug(pending_outcome, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
-                yield _sse({"type": "done", "debug": debug_payload})
+                yield _sse({"type": "done", "ui_action": None, "debug": debug_payload})
                 return
 
         if not is_greet and student_id and mission_row:
@@ -1140,7 +1148,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     yield event
                 debug_payload = _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - dislike_started) * 1000)
-                yield _sse({"type": "done", "debug": debug_payload})
+                yield _sse({"type": "done", "ui_action": None, "debug": debug_payload})
                 return
 
         if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
@@ -1159,7 +1167,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
                 async for event in _fake_stream_template_response(ai_message):
                     yield event
-                yield _sse({"type": "done", "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message)})
+                yield _sse({"type": "done", "ui_action": None, "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message)})
                 return
 
         intent = "A"
@@ -1182,7 +1190,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", cancel_negation_message)
                 async for event in _fake_stream_template_response(cancel_negation_message):
                     yield event
-                yield _sse({"type": "done", "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}}})
+                yield _sse({"type": "done", "ui_action": None, "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}}})
                 return
             intent, intent_ms = await step_classify(body.message, current_mission_title)
             if intent == "B" and "취소" in body.message:
@@ -1250,6 +1258,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             total_ms = round((time.perf_counter() - t_total) * 1000)
             yield _sse({
                 "type": "done",
+                "ui_action": None,
                 "debug": {
                     "intent": intent,
                     "clarify_reason": clarify_reason,
@@ -1459,7 +1468,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
-        yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"
+        yield f"data: {_json.dumps({'type': 'done', 'ui_action': None, 'debug': debug_payload}, ensure_ascii=False)}\n\n"
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type
