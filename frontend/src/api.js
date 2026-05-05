@@ -65,7 +65,7 @@ export async function sendMessageStream(message, sessionId, mission = null, { on
         } else if (data.type === "token") {
           onToken?.(data.content);
         } else if (data.type === "done") {
-          onDone?.(data.debug);
+          onDone?.(data.debug, data.ui_action ?? null);
         }
       } catch {}
     }
@@ -129,6 +129,22 @@ export async function saveProfile(sessionId, studentId, studentName) {
     body: JSON.stringify({ session_id: sessionId, student_id: studentId, student_name: studentName }),
   });
   if (!res.ok) throw new Error("프로필 저장 실패");
+  return res.json();
+}
+
+/** 미션 UI 액션 버튼 resolve. */
+export async function resolveMissionUiAction(actionId, sessionId, value) {
+  const res = await fetch(`/mission-ui-actions/${actionId}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, value }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const error = new Error(err.detail?.reason ?? "버튼 처리 실패");
+    error.status = res.status;
+    throw error;
+  }
   return res.json();
 }
 

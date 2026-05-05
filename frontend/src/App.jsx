@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
+import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, resolveMissionUiAction } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
 
@@ -302,12 +302,19 @@ export default function App() {
               )
             );
           },
-          onDone: (debug) => {
+          onDone: (debug, uiAction) => {
             if (debug) {
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: { ...prev[debugId], ...debug },
               }));
+            }
+            if (uiAction) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.debugId === debugId ? { ...m, ui_action: uiAction } : m
+                )
+              );
             }
             if (profile?.student_id) {
               fetchMissionByStudent(profile.student_id)
@@ -331,6 +338,58 @@ export default function App() {
         )
       );
       setPipeline([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 버튼 대기 중이면 입력창 잠금
+  const lockChat = messages.some(
+    (m) => m.ui_action?.lock_chat && m.ui_action?.buttons?.length > 0
+  );
+
+  async function handleMissionUiAction(actionId, value) {
+    // 버튼 즉시 비활성화 (해당 메시지의 ui_action을 resolving 상태로 표시)
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.ui_action?.action_id === actionId ? { ...m, ui_action: { ...m.ui_action, resolving: true } } : m
+      )
+    );
+    setLoading(true);
+
+    try {
+      const res = await resolveMissionUiAction(actionId, sessionId, value);
+      // 버튼 제거
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.ui_action?.action_id === actionId ? { ...m, ui_action: null } : m
+        )
+      );
+      // 새 응답 메시지 추가
+      const newDebugId = crypto.randomUUID();
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: res.response, debugId: newDebugId, ui_action: res.ui_action ?? null },
+      ]);
+      setDebugMap((prev) => ({ ...prev, [newDebugId]: res.debug ?? {} }));
+      setSelectedDebugId(newDebugId);
+
+      if (profile?.student_id) {
+        fetchMissionByStudent(profile.student_id).then(setMission).catch(() => {});
+      }
+    } catch (err) {
+      // 만료(410) → 버튼 제거 + 안내
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.ui_action?.action_id === actionId ? { ...m, ui_action: null } : m
+        )
+      );
+      if (err.status === 410) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "선택지가 만료됐어. 다시 말해줄래?", ui_action: null },
+        ]);
+      }
     } finally {
       setLoading(false);
     }
@@ -444,6 +503,8 @@ export default function App() {
             messages={messages}
             onSend={handleSend}
             loading={loading}
+            lockChat={lockChat}
+            onMissionUiAction={handleMissionUiAction}
             selectedDebugId={selectedDebugId}
             onSelectMessage={setSelectedDebugId}
           />

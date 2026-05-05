@@ -13,7 +13,40 @@ from database import (
     save_mission_ui_action,
 )
 from executor import ExecResults, execute_adjustment
+from ollama_client import generate_chat_message
 from response_builder import build_action_ack
+
+_DISLIKE_RESPONSE_PROMPT = """너는 토미라는 토마토 캐릭터야.
+아이와 친구처럼 반말로 말해.
+2문장 이내로 짧게 말해.
+
+[상황]
+{hint}
+
+자연스럽게 한마디 해줘.
+"""
+
+
+def _dislike_confirm_hint(mission_name: str, mission_rule: str) -> str:
+    return (
+        f"아이가 미션 '{mission_name}'이 재미없다고 했어. "
+        f"미션 규칙: {mission_rule} "
+        "이 미션의 좋은 점이나 재밌는 점을 1문장으로 먼저 말해주고, "
+        "그래도 오늘 딱 한 번만 도전해볼지 짧게 물어봐. 강요하지 말고 친구처럼 부드럽게."
+    )
+
+
+async def _generate_dislike_response(mission_name: str, mission_rule: str) -> str:
+    hint = _dislike_confirm_hint(mission_name, mission_rule)
+    try:
+        message, _ = await generate_chat_message(
+            _DISLIKE_RESPONSE_PROMPT.format(hint=hint),
+            [{"role": "user", "content": "이 상황에 맞게 짧게 답해줘."}],
+        )
+        return message
+    except Exception as e:
+        print(f"[UiAction] dislike response generation failed: {type(e).__name__}: {e}")
+        return "그래도 오늘 딱 한 번만 해볼래? 아니면 다른 미션으로 바꿔줄까?"
 
 
 MISSION_CHANGE_REASON_BUTTONS = [
@@ -246,8 +279,12 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
         if value == "dislike":
             await _log_change_reason(student_id, action, "dislike")
             ui_action = await create_mission_dislike_confirm_action(student_id, session_id, payload)
+            response = await _generate_dislike_response(
+                payload.get("mission_name", "오늘 미션"),
+                payload.get("mission_rule", ""),
+            )
             return {
-                "response": "그래도 오늘 딱 한 번만 해볼래? 아니면 다른 미션으로 바꿔줄까?",
+                "response": response,
                 "mission_completed": False,
                 "ui_action": ui_action,
                 "debug": {
