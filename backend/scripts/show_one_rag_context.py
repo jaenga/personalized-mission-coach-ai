@@ -11,7 +11,7 @@ load_dotenv(BACKEND_DIR / ".env")
 from rag import search_rag, CHUNK_LIMIT, FAQ_LIMIT
 
 
-question = "나는 왜 친구보다 키가 늦게 크는 걸까요?"
+question = "밥 먹고 바로 운동해도 돼요?"
 
 result = search_rag(question)
 

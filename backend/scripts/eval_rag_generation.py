@@ -4,8 +4,8 @@ RAG + Gemma4 최종 답변 생성 평가 스크립트.
 목적:
 1. 평가 질문세트 CSV를 읽는다.
 2. 전체 108개 질문 중, 분야별 대표 질문만 샘플링한다.
-   - 기본값: 18개 분야 × 분야당 2개 = 총 18개
-   - 각 분야의 1번째 질문을 대표 질문으로 사용
+   - 기본값: 39개 분야 × 분야당 2개 = 총 78개
+   - 각 분야의 2번째, 3번째 질문을 대표 질문으로 사용
 3. 각 질문에 대해 search_rag()로 chunk/FAQ를 검색한다.
 4. 검색된 RAG context를 system prompt에 넣는다.
 5. Gemma4로 최종 답변을 생성한다.
@@ -18,7 +18,7 @@ backend 폴더
 python scripts/eval_rag_generation.py
 
 결과 파일:
-backend/data/eval/rag_generation_eval_result_two.csv
+backend/data/eval/rag_generation_eval_result_after_reembed.csv
 """
 
 from __future__ import annotations
@@ -57,15 +57,15 @@ from ollama_client import generate_chat_message, OLLAMA_MODEL
 # ---------------------------------------------------------------------
 
 EVAL_CSV_PATH = os.path.join("data", "eval", "rag_eval_question_set.csv")
-OUTPUT_CSV_PATH = os.path.join("data", "eval", "rag_generation_eval_result_two.csv")
+OUTPUT_CSV_PATH = os.path.join("data", "eval", "rag_generation_eval_result_after_reembed.csv")
 
 # 생성 평가는 오래 걸리므로 전체 108개를 다 돌리지 않고 표본만 돌림.
 # None이면 제한 없음.
 MAX_QUESTIONS = None
 
 # 분야별로 몇 개 질문을 생성 평가할지
-# 1이면 18개 분야 × 1개 = 총 18개
-# 2이면 18개 분야 × 2개 = 총 36개
+# 1이면 39개 분야 × 1개 = 총 39개
+# 2이면 39개 분야 × 2개 = 총 78개
 QUESTIONS_PER_DOC = 2
 
 # 각 분야에서 몇 번째 질문부터 뽑을지
@@ -76,7 +76,7 @@ QUESTIONS_PER_DOC = 2
 # 추천값: 2
 # 이유: 1번째 질문은 너무 기본 질문일 가능성이 높아서,
 #      3번째 질문을 대표 질문으로 사용
-QUESTION_OFFSET_IN_DOC = 0
+QUESTION_OFFSET_IN_DOC = 1
 
 # 특정 키워드가 포함된 질문만 돌리고 싶을 때 사용
 # 예: TARGET_KEYWORDS = ["키", "카페인", "다이어트"]
