@@ -8,6 +8,7 @@ from app_services import (
     get_today_mission,
     get_user_profile,
     register_demo_student,
+    resolve_mission_ui_action,
     save_user_profile,
     startup_tasks,
     verify_student,
@@ -16,7 +17,7 @@ from chat_service import process_chat, process_chat_stream
 from intent_router import close_intent_router_client
 from ollama_client import close_ollama_client
 from qwen_client import close_qwen_client
-from schemas import ChatRequest, ProfileRequest, VerifyRequest
+from schemas import ChatRequest, MissionUiActionResolveRequest, ProfileRequest, VerifyRequest
 
 
 app = FastAPI(title="AI 생활습관 코치 MVP")
@@ -84,6 +85,11 @@ def get_chat(session_id: str):
 @app.delete("/chat/{session_id}")
 def delete_chat(session_id: str):
     return delete_chat_messages(session_id)
+
+
+@app.post("/mission-ui-actions/{action_id}/resolve")
+async def post_mission_ui_action_resolve(action_id: str, body: MissionUiActionResolveRequest):
+    return await resolve_mission_ui_action(action_id, body)
 
 
 @app.post("/admin/generate-daily")

@@ -17,10 +17,11 @@ from database import (
     save_profile,
 )
 from demo_mission_messages import attach_mission_message
+from mission_ui_action_service import resolve_mission_ui_action_request
 from rag import preload_model
 from qwen_client import preload_qwen
 from sheets import generate_daily_status
-from schemas import ProfileRequest, VerifyRequest
+from schemas import MissionUiActionResolveRequest, ProfileRequest, VerifyRequest
 
 
 def startup_tasks() -> None:
@@ -109,6 +110,10 @@ def get_chat_messages(session_id: str):
 def delete_chat_messages(session_id: str):
     count = delete_messages(session_id)
     return {"ok": True, "deleted": count}
+
+
+async def resolve_mission_ui_action(action_id: str, body: MissionUiActionResolveRequest):
+    return await resolve_mission_ui_action_request(action_id, body.session_id, body.value)
 
 
 def generate_daily():
