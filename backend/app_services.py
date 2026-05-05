@@ -17,7 +17,7 @@ from database import (
     save_profile,
 )
 from demo_mission_messages import attach_mission_message
-from mission_ui_action_service import get_active_ui_action, resolve_mission_ui_action_request
+from mission_ui_action_service import get_active_ui_action, rebuild_ui_action_payload, resolve_mission_ui_action_request
 from starlette.concurrency import run_in_threadpool
 from rag import preload_model
 from qwen_client import preload_qwen
@@ -121,8 +121,7 @@ async def get_active_mission_ui_action(session_id: str):
     active = await get_active_ui_action(student_id, session_id)
     if not active:
         return {"ui_action": None}
-    from chat_service import _rebuild_ui_action_payload
-    return {"ui_action": _rebuild_ui_action_payload(active)}
+    return {"ui_action": rebuild_ui_action_payload(active)}
 
 
 async def resolve_mission_ui_action(action_id: str, body: MissionUiActionResolveRequest):

@@ -30,11 +30,10 @@ from database import (
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_adjustment, execute_submit
 from memory_service import extract_and_save_memory
 from mission_ui_action_service import (
-    MISSION_CHANGE_REASON_BUTTONS,
-    MISSION_DISLIKE_CONFIRM_BUTTONS,
     create_mission_change_reason_action,
     create_mission_dislike_confirm_action,
     get_active_ui_action,
+    rebuild_ui_action_payload,
 )
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
 from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
@@ -724,18 +723,6 @@ def _detect_condition_adjustment(text: str) -> str | None:
     return None
 
 
-def _rebuild_ui_action_payload(active_ui: dict) -> dict:
-    """DB row를 받아 action_type에 맞는 버튼 목록을 재조합해 ui_action payload를 반환한다."""
-    action_type = active_ui.get("action_type", "")
-    action_id = active_ui.get("action_id", "")
-    if action_type == "mission_change_reason":
-        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_CHANGE_REASON_BUTTONS}
-    if action_type == "mission_dislike_confirm":
-        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_DISLIKE_CONFIRM_BUTTONS}
-    if action_type == "awaiting_replacement_mission":
-        return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
-    return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
-
 
 async def _handle_replacement_mission_input(
     student_id: int,
@@ -823,7 +810,7 @@ async def _handle_replacement_mission_input(
         "mission_completed": False,
         "detected_function": None,
         "sources": [],
-        "ui_action": _rebuild_ui_action_payload(active_ui),
+        "ui_action": rebuild_ui_action_payload(active_ui),
         "debug": {"intent": "REPLACEMENT_MISSION", "method": "no_match"},
     }
 
@@ -908,7 +895,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         active_ui = await get_active_ui_action(student_id, body.session_id)
         if active_ui:
             action_type = active_ui.get("action_type")
-            ui_action_payload = _rebuild_ui_action_payload(active_ui)
+            ui_action_payload = rebuild_ui_action_payload(active_ui)
 
             if action_type in ("mission_change_reason", "mission_dislike_confirm"):
                 # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
@@ -1293,7 +1280,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             active_ui = await get_active_ui_action(student_id, body.session_id)
             if active_ui:
                 action_type = active_ui.get("action_type")
-                ui_action_payload = _rebuild_ui_action_payload(active_ui)
+                ui_action_payload = rebuild_ui_action_payload(active_ui)
 
                 if action_type in ("mission_change_reason", "mission_dislike_confirm"):
                     # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달

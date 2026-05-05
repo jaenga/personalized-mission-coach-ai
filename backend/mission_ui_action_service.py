@@ -62,6 +62,17 @@ MISSION_DISLIKE_CONFIRM_BUTTONS = [
     {"value": "change", "label": "다른 미션으로 바꿀래"},
 ]
 
+def rebuild_ui_action_payload(active_ui: dict) -> dict:
+    """DB row를 받아 action_type에 맞는 버튼 목록을 재조합해 ui_action payload를 반환한다."""
+    action_type = active_ui.get("action_type", "")
+    action_id = active_ui.get("action_id", "")
+    if action_type == "mission_change_reason":
+        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_CHANGE_REASON_BUTTONS}
+    if action_type == "mission_dislike_confirm":
+        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_DISLIKE_CONFIRM_BUTTONS}
+    return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
+
+
 UI_ACTION_ALLOWED_VALUES = {
     "mission_change_reason": {button["value"] for button in MISSION_CHANGE_REASON_BUTTONS},
     "mission_dislike_confirm": {button["value"] for button in MISSION_DISLIKE_CONFIRM_BUTTONS},
