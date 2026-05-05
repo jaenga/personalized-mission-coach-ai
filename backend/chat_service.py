@@ -969,7 +969,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                     "activity_key": mission_row.get("activity_key"),
                 }
                 ui_action = await create_mission_change_reason_action(student_id, body.session_id, payload)
-                ai_message = "왜 바꾸고 싶어? 아래에서 골라줘!"
+                ai_message = "미션을 왜 바꾸고 싶은지 나에게 알려줄 수 있을까?"
                 print(f"[MissionChange] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')}")
                 await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
@@ -1352,7 +1352,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                         "activity_key": mission_row.get("activity_key"),
                     }
                     ui_action = await create_mission_change_reason_action(student_id, body.session_id, payload)
-                    ai_message = "왜 바꾸고 싶어? 아래에서 골라줘!"
+                    ai_message = "미션을 왜 바꾸고 싶은지 나에게 알려줄 수 있을까?"
                     print(f"[MissionChange] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')}")
                     await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
                     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)

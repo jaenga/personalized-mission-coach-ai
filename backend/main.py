@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app_services import (
     delete_chat_messages,
     generate_daily,
+    get_active_mission_ui_action,
     get_chat_messages,
     get_today_mission,
     get_user_profile,
@@ -85,6 +86,11 @@ def get_chat(session_id: str):
 @app.delete("/chat/{session_id}")
 def delete_chat(session_id: str):
     return delete_chat_messages(session_id)
+
+
+@app.get("/mission-ui-actions/active")
+async def get_active_ui_action(session_id: str):
+    return await get_active_mission_ui_action(session_id)
 
 
 @app.post("/mission-ui-actions/{action_id}/resolve")

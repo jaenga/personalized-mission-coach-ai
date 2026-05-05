@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, resolveMissionUiAction } from "./api.js";
+import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
 
@@ -105,18 +105,27 @@ export default function App() {
 
     let cancelled = false;
     fetchChatHistory(sessionId)
-      .then((history) => {
+      .then(async (history) => {
         if (cancelled) return;
         if (history.length === 0) {
           setMessages([]);
           greetingRequestedRef.current = false;
         } else {
           greetingRequestedRef.current = true;
-          setMessages(
-            history.map((msg, i) =>
-              msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
-            )
+          const mapped = history.map((msg, i) =>
+            msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
           );
+          // 새로고침 후 버튼 복구: active ui_action이 있으면 마지막 assistant 메시지에 붙인다
+          try {
+            const activeUiAction = await fetchActiveUiAction(sessionId);
+            if (activeUiAction) {
+              const lastAssistantIdx = [...mapped].map((m, i) => ({ m, i })).filter(({ m }) => m.role === "assistant").at(-1)?.i;
+              if (lastAssistantIdx !== undefined) {
+                mapped[lastAssistantIdx] = { ...mapped[lastAssistantIdx], ui_action: activeUiAction };
+              }
+            }
+          } catch {}
+          setMessages(mapped);
         }
         setHistoryLoaded(true);
       })

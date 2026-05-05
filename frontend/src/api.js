@@ -132,6 +132,14 @@ export async function saveProfile(sessionId, studentId, studentName) {
   return res.json();
 }
 
+/** 현재 세션의 active UI action 조회 (새로고침 후 버튼 복구용). */
+export async function fetchActiveUiAction(sessionId) {
+  const res = await fetch(`/mission-ui-actions/active?session_id=${sessionId}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.ui_action ?? null;
+}
+
 /** 미션 UI 액션 버튼 resolve. */
 export async function resolveMissionUiAction(actionId, sessionId, value) {
   const res = await fetch(`/mission-ui-actions/${actionId}/resolve`, {
