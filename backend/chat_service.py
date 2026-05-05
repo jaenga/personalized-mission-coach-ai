@@ -33,6 +33,7 @@ from mission_ui_action_service import (
     MISSION_DISLIKE_CONFIRM_BUTTONS,
     create_mission_change_reason_action,
     create_mission_dislike_confirm_action,
+    get_active_ui_action,
 )
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
 from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
@@ -705,6 +706,19 @@ def _prepend_db_action_ack(ai_message: str, exec_results: ExecResults | None) ->
     return ai_message
 
 
+def _rebuild_ui_action_payload(active_ui: dict) -> dict:
+    """DB row를 받아 action_type에 맞는 버튼 목록을 재조합해 ui_action payload를 반환한다."""
+    action_type = active_ui.get("action_type", "")
+    action_id = active_ui.get("action_id", "")
+    if action_type == "mission_change_reason":
+        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_CHANGE_REASON_BUTTONS}
+    if action_type == "mission_dislike_confirm":
+        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_DISLIKE_CONFIRM_BUTTONS}
+    if action_type == "awaiting_replacement_mission":
+        return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
+    return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
+
+
 async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
@@ -780,6 +794,29 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "ui_action": None,
                 "debug": _pending_debug(pending_outcome, call1_ms, ai_message),
             }
+
+    if not is_greet and student_id:
+        active_ui = await get_active_ui_action(student_id, body.session_id)
+        if active_ui:
+            action_type = active_ui.get("action_type")
+            ui_action_payload = _rebuild_ui_action_payload(active_ui)
+
+            if action_type in ("mission_change_reason", "mission_dislike_confirm"):
+                # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
+                print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
+                block_message = "아래 선택지 중 하나를 골라줘!"
+                return {
+                    "response": block_message,
+                    "mission_completed": False,
+                    "detected_function": None,
+                    "sources": [],
+                    "ui_action": ui_action_payload,
+                    "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type},
+                }
+
+            if action_type == "awaiting_replacement_mission":
+                # 대체 미션 입력 대기 → Phase 2에서 구현 (현재는 pass-through)
+                pass
 
     if not is_greet and student_id and mission_row:
         if await classify_mission_dislike(body.message, mission_title):
@@ -1140,6 +1177,25 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
                 yield _sse({"type": "done", "ui_action": None, "debug": debug_payload})
                 return
+
+        if not is_greet and student_id:
+            active_ui = await get_active_ui_action(student_id, body.session_id)
+            if active_ui:
+                action_type = active_ui.get("action_type")
+                ui_action_payload = _rebuild_ui_action_payload(active_ui)
+
+                if action_type in ("mission_change_reason", "mission_dislike_confirm"):
+                    # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
+                    print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
+                    block_message = "아래 선택지 중 하나를 골라줘!"
+                    async for event in _fake_stream_template_response(block_message):
+                        yield event
+                    yield _sse({"type": "done", "ui_action": ui_action_payload, "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type}})
+                    return
+
+                if action_type == "awaiting_replacement_mission":
+                    # 대체 미션 입력 대기 → Phase 2에서 구현 (현재는 pass-through)
+                    pass
 
         if not is_greet and student_id and mission_row:
             dislike_started = time.perf_counter()
