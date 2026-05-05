@@ -115,6 +115,7 @@ def init_db():
                     action_type TEXT NOT NULL CHECK (
                         action_type IN (
                             'submit_confirmation',
+                            'natural_language_confirmation',
                             'mission_change_reason',
                             'mission_dislike_confirm'
                         )
@@ -126,6 +127,38 @@ def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     resolved_at TIMESTAMPTZ
                 )
+            """)
+            cur.execute("""
+                DO $$
+                DECLARE
+                    action_type_constraint_name TEXT;
+                BEGIN
+                    SELECT conname
+                      INTO action_type_constraint_name
+                      FROM pg_constraint
+                     WHERE conrelid = 'pending_actions'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%action_type%'
+                     LIMIT 1;
+
+                    IF action_type_constraint_name IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE pending_actions DROP CONSTRAINT %I',
+                            action_type_constraint_name
+                        );
+                    END IF;
+
+                    ALTER TABLE pending_actions
+                    ADD CONSTRAINT pending_actions_action_type_check
+                    CHECK (
+                        action_type IN (
+                            'submit_confirmation',
+                            'natural_language_confirmation',
+                            'mission_change_reason',
+                            'mission_dislike_confirm'
+                        )
+                    );
+                END $$;
             """)
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_actions_one_pending_per_student
@@ -1228,6 +1261,7 @@ def get_relevant_user_memories(student_id: int) -> list[dict]:
 
 VALID_PENDING_ACTION_TYPES = {
     "submit_confirmation",
+    "natural_language_confirmation",
     "mission_change_reason",
     "mission_dislike_confirm",
 }

@@ -374,27 +374,35 @@ def _hint_debug(intent: str, hint: str, llm_ms: int, ai_message: str) -> dict:
     }
 
 
-def _save_submit_confirmation_pending(
+def _save_natural_language_confirmation_pending(
     student_id: int | None,
     user_message: str,
     clarify_reason: str,
 ) -> None:
-    """성공 여부 확인 질문을 보낸 턴이면 다음 턴 답변을 제출 함수와 연결한다."""
+    """자연어 확인 질문을 보낸 턴이면 다음 턴 답변을 저장된 함수 실행과 연결한다."""
     if not student_id or clarify_reason != "past_ambiguous":
         return
     try:
         pending = save_pending_action(
             student_id,
-            "submit_confirmation",
+            "natural_language_confirmation",
             {
-                "fn_args": {"result_type": "success"},
+                "confirmation_type": "submit_mission_result",
+                "on_yes": {
+                    "fn": "submit_mission_result",
+                    "args": {"result_type": "success"},
+                },
+                "on_no": {
+                    "fn": "submit_mission_result",
+                    "args": {"result_type": "failure"},
+                },
                 "original_user_message": user_message,
                 "clarify_reason": clarify_reason,
             },
         )
-        print(f"[Pending] submit_confirmation created id={pending.get('id')} reason={clarify_reason}")
+        print(f"[Pending] natural_language_confirmation created id={pending.get('id')} reason={clarify_reason}")
     except Exception as e:
-        print(f"[Pending] submit_confirmation create failed: {type(e).__name__}: {e}")
+        print(f"[Pending] natural_language_confirmation create failed: {type(e).__name__}: {e}")
 
 
 def _strip_leading_ack(text: str, ack_message: str) -> str:
@@ -747,6 +755,11 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 checkin_id = pending_outcome.exec_results.submit.checkin_id
                 sync_user_message = pending_outcome.sync_user_message or body.message
                 background_tasks.add_task(_sync_sheet_bg, body.session_id, sync_user_message, ai_message, mission_status, checkin_id)
+            if (
+                pending_outcome.exec_results.cancel
+                and pending_outcome.exec_results.cancel.status is CancelStatus.CANCELLED_SUBMIT
+            ):
+                background_tasks.add_task(_cancel_sheet_bg, student_id, _kst_today())
 
             return {
                 "response": ai_message,
@@ -988,7 +1001,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_only or ai_message)
     if not is_greet:
-        await run_in_threadpool(_save_submit_confirmation_pending, student_id, body.message, clarify_reason)
+        await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
     if not is_greet:
         background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
@@ -1095,6 +1108,11 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     checkin_id = pending_outcome.exec_results.submit.checkin_id
                     sync_user_message = pending_outcome.sync_user_message or body.message
                     background_tasks.add_task(_sync_sheet_bg, body.session_id, sync_user_message, ai_message, mission_status, checkin_id)
+                if (
+                    pending_outcome.exec_results.cancel
+                    and pending_outcome.exec_results.cancel.status is CancelStatus.CANCELLED_SUBMIT
+                ):
+                    background_tasks.add_task(_cancel_sheet_bg, student_id, _kst_today())
 
                 debug_payload = _pending_debug(pending_outcome, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
@@ -1438,7 +1456,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         )
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
         if not is_greet:
-            await run_in_threadpool(_save_submit_confirmation_pending, student_id, body.message, clarify_reason)
+            await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
         yield f"data: {_json.dumps({'type': 'done', 'debug': debug_payload}, ensure_ascii=False)}\n\n"

@@ -15,11 +15,23 @@ from database import (
     save_mission_change_log,
     upsert_user_memory,
 )
-from executor import AdjustmentStatus, ExecResults, SubmitStatus, execute_adjustment, execute_submit
+from executor import (
+    AdjustmentStatus,
+    ExecResults,
+    SubmitStatus,
+    execute_adjustment,
+    execute_cancel,
+    execute_submit,
+)
 from ollama_client import generate_json_message
 
 
 DISLIKE_CLASSIFY_TIMEOUT_SEC = float(os.getenv("DISLIKE_CLASSIFY_TIMEOUT_SEC", "15"))
+CONFIRMATION_ACTION_FNS = {
+    "submit_mission_result",
+    "cancel_mission_action",
+    "request_mission_adjustment",
+}
 
 POSITIVE_EXACT = {
     "응",
@@ -58,6 +70,18 @@ MISSION_DISLIKE_NEGATIVE_RE = re.compile(r"다른\s*거|다른\s*걸|딴\s*거|�
 
 PENDING_CLASSIFY_SYSTEM_PROMPT = """이전 질문에 대한 아이의 답변이야.
 긍정이면 yes, 부정이면 no, 애매하면 ambiguous로 분류해.
+
+긍정 예시:
+- 응, 좋아, 그래
+- 그렇게 해줘
+- 진행해줘
+- 취소해줘 (이전 질문이 취소 여부를 확인한 경우)
+- 기록해줘 (이전 질문이 기록 여부를 확인한 경우)
+
+부정 예시:
+- 아니, 하지 마, 괜찮아
+- 취소하지 마
+- 기록하지 마
 
 출력은 JSON만:
 {"result":"yes|no|ambiguous"}
@@ -200,6 +224,78 @@ def _submit_args_from_payload(payload: dict) -> dict:
         if isinstance(value, dict):
             return value
     return payload
+
+
+def _confirmation_branch(payload: dict, decision: str) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    key = "on_yes" if decision == "yes" else "on_no"
+    branch = payload.get(key)
+    if isinstance(branch, dict):
+        return branch
+
+    # Backward compatibility for pending rows created as submit_confirmation.
+    if decision == "yes":
+        return {
+            "fn": "submit_mission_result",
+            "args": _submit_args_from_payload(payload),
+        }
+    return {
+        "fn": "submit_mission_result",
+        "args": {**_submit_args_from_payload(payload), "result_type": "failure"},
+    }
+
+
+async def _execute_confirmation_branch(
+    student_id: int,
+    branch: dict,
+) -> ExecResults:
+    exec_results = ExecResults()
+    fn = branch.get("fn")
+    args = branch.get("args") if isinstance(branch.get("args"), dict) else {}
+    if fn not in CONFIRMATION_ACTION_FNS:
+        print(f"[Pending] confirmation skipped unknown fn={fn!r}")
+        return exec_results
+
+    if fn == "submit_mission_result":
+        exec_results.submit = await run_in_threadpool(execute_submit, student_id, args)
+    elif fn == "cancel_mission_action":
+        exec_results.cancel = await run_in_threadpool(execute_cancel, student_id, args)
+    elif fn == "request_mission_adjustment":
+        exec_results.adjustment = await run_in_threadpool(execute_adjustment, student_id, args)
+    return exec_results
+
+
+def _confirmation_hint(branch: dict, decision: str, exec_results: ExecResults) -> str:
+    fn = branch.get("fn")
+    explicit_hint = branch.get("message_hint")
+    if isinstance(explicit_hint, str) and explicit_hint.strip():
+        return explicit_hint
+
+    if fn == "submit_mission_result":
+        if exec_results.submit:
+            if decision == "yes":
+                return _submit_hint(exec_results.submit.status.value, exec_results.submit.result_type)
+            return _submit_failure_hint(exec_results.submit.status.value)
+        return "아이의 확인 답변에 따라 기록하려 했지만 문제가 있었어. 잠시 후 다시 시도해달라고 짧게 말해줘."
+
+    if fn == "request_mission_adjustment":
+        return _adjustment_hint(exec_results)
+
+    if fn == "cancel_mission_action":
+        if exec_results.cancel:
+            status = exec_results.cancel.status.value
+            if status == "cancelled_submit":
+                return "아이가 확인 질문에 긍정으로 답해서 방금 미션 기록을 취소했어. 짧게 알려줘."
+            if status == "cancelled_adjustment":
+                return "아이가 확인 질문에 긍정으로 답해서 방금 미션 변경을 취소했어. 짧게 알려줘."
+            if status == "nothing_to_cancel":
+                return "취소할 최근 미션 행동이 없었어. 그 사실만 짧게 알려줘."
+        return "취소 처리 중 문제가 있었어. 잠시 후 다시 시도해달라고 짧게 말해줘."
+
+    if decision == "yes":
+        return "아이가 이전 확인 질문에 긍정으로 답했어. 짧게 알겠다고 말해줘."
+    return "아이가 이전 확인 질문에 부정으로 답했어. 짧게 알겠다고 말해줘."
 
 
 def _sync_user_message_from_payload(payload: dict, fallback: str) -> str:
@@ -436,16 +532,15 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
     print(f"[Pending] action={action_type} decision={decision} retry={retry_count}")
 
     if decision == "yes":
-        if action_type == "submit_confirmation":
-            submit_args = _submit_args_from_payload(payload)
-            exec_results.submit = await run_in_threadpool(execute_submit, student_id, submit_args)
+        if action_type in {"submit_confirmation", "natural_language_confirmation"}:
+            branch = _confirmation_branch(payload, decision)
+            exec_results = await _execute_confirmation_branch(student_id, branch)
             await run_in_threadpool(resolve_pending, pending_id, "accepted")
-            result_status = exec_results.submit.status.value
             return PendingOutcome(
                 action_type=action_type,
                 decision=decision,
                 status="accepted",
-                message_hint=_submit_hint(result_status, exec_results.submit.result_type),
+                message_hint=_confirmation_hint(branch, decision, exec_results),
                 pending_id=pending_id,
                 exec_results=exec_results,
                 sync_user_message=_sync_user_message_from_payload(payload, user_message),
@@ -474,10 +569,10 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
 
     if decision == "no":
         await run_in_threadpool(resolve_pending, pending_id, "rejected")
-        if action_type == "submit_confirmation":
-            submit_args = {**_submit_args_from_payload(payload), "result_type": "failure"}
-            exec_results.submit = await run_in_threadpool(execute_submit, student_id, submit_args)
-            hint = _submit_failure_hint(exec_results.submit.status.value)
+        if action_type in {"submit_confirmation", "natural_language_confirmation"}:
+            branch = _confirmation_branch(payload, decision)
+            exec_results = await _execute_confirmation_branch(student_id, branch)
+            hint = _confirmation_hint(branch, decision, exec_results)
         elif action_type == "mission_dislike_confirm":
             exec_results = await _execute_dislike_fallback_change(student_id)
             hint = _adjustment_hint(exec_results)
@@ -511,8 +606,8 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
 
     updated = await run_in_threadpool(increment_pending_retry, pending_id)
     retry_after_update = updated.get("retry_count") if updated else next_retry
-    if action_type == "submit_confirmation":
-        hint = "아이가 미션 성공 여부 확인에 애매하게 답했어. 성공한 건지 못 한 건지 다시 한 번 짧게 물어봐."
+    if action_type in {"submit_confirmation", "natural_language_confirmation"}:
+        hint = "아이가 이전 확인 질문에 애매하게 답했어. 진행할지 말지 다시 한 번 짧게 물어봐."
     elif action_type == "mission_dislike_confirm":
         hint = "아이가 기존 미션을 오늘 한 번 해볼지 애매하게 답했어. 해볼지 다른 걸로 바꿀지 다시 한 번 짧게 물어봐."
     else:
