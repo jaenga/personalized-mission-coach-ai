@@ -2,6 +2,7 @@ import json
 import os
 import psycopg2
 import psycopg2.extras
+import uuid
 from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -182,6 +183,31 @@ def init_db():
                     ),
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mission_ui_actions (
+                    action_id TEXT PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    session_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL CHECK (
+                        action_type IN (
+                            'mission_change_reason',
+                            'mission_dislike_confirm',
+                            'awaiting_replacement_mission'
+                        )
+                    ),
+                    payload JSONB NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'pending_input', 'resolved', 'cancelled', 'expired')),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    resolved_at TIMESTAMPTZ,
+                    expires_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mission_ui_actions_active
+                ON mission_ui_actions (student_id, session_id, status, created_at DESC)
+                WHERE status IN ('pending', 'pending_input')
             """)
         conn.commit()
 
@@ -1395,6 +1421,137 @@ def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) 
                 VALUES (%s, %s, %s, %s)
                 RETURNING *
             """, (student_id, mission_id, mission.get("activity_key"), reason_type))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+# ── 버튼/명시적 UI 액션 ───────────────────────────────────────────────────────
+
+VALID_MISSION_UI_ACTION_TYPES = {
+    "mission_change_reason",
+    "mission_dislike_confirm",
+    "awaiting_replacement_mission",
+}
+
+VALID_MISSION_UI_ACTION_STATUSES = {
+    "pending",
+    "pending_input",
+    "resolved",
+    "cancelled",
+    "expired",
+}
+
+ACTIVE_MISSION_UI_ACTION_STATUSES = {"pending", "pending_input"}
+
+
+def save_mission_ui_action(
+    student_id: int,
+    session_id: str,
+    action_type: str,
+    payload: dict,
+    status: str = "pending",
+    ttl_minutes: int = 15,
+) -> dict:
+    """버튼/명시적 UI 액션을 1회성 action_id로 저장한다."""
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not session_id:
+        raise ValueError("session_id is required")
+    if action_type not in VALID_MISSION_UI_ACTION_TYPES:
+        raise ValueError(f"Invalid action_type: {action_type}")
+    if status not in ACTIVE_MISSION_UI_ACTION_STATUSES:
+        raise ValueError(f"Invalid active status: {status}")
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dict")
+
+    action_id = str(uuid.uuid4())
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET status = 'cancelled',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+            """, (student_id, session_id))
+            cur.execute("""
+                INSERT INTO mission_ui_actions (
+                    action_id,
+                    student_id,
+                    session_id,
+                    action_type,
+                    payload,
+                    status,
+                    expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, NOW() + (%s || ' minutes')::interval)
+                RETURNING *
+            """, (action_id, student_id, session_id, action_type, payload_json, status, ttl_minutes))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def get_pending_mission_ui_action(student_id: int, session_id: str) -> dict | None:
+    """현재 세션에서 대기 중인 UI 액션 1개를 조회한다. 만료된 액션은 expired 처리한다."""
+    if not student_id or not session_id:
+        return None
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET status = 'expired',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                  AND expires_at IS NOT NULL
+                  AND expires_at < NOW()
+            """, (student_id, session_id))
+            cur.execute("""
+                SELECT action_id, student_id, session_id, action_type, payload,
+                       status, created_at, resolved_at, expires_at
+                FROM mission_ui_actions
+                WHERE student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (student_id, session_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def resolve_mission_ui_action(
+    action_id: str,
+    student_id: int,
+    session_id: str,
+    status: str = "resolved",
+) -> dict | None:
+    """대기 중인 UI 액션을 1회만 종료한다."""
+    if status not in {"resolved", "cancelled", "expired"}:
+        raise ValueError(f"Invalid resolve status: {status}")
+    if not action_id or not student_id or not session_id:
+        return None
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET status = CASE
+                        WHEN expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired'
+                        ELSE %s
+                    END,
+                    resolved_at = NOW()
+                WHERE action_id = %s
+                  AND student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                RETURNING *
+            """, (status, action_id, student_id, session_id))
             row = cur.fetchone()
         conn.commit()
     return dict(row) if row else None

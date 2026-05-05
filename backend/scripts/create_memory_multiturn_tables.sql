@@ -82,3 +82,26 @@ CREATE TABLE IF NOT EXISTS mission_change_logs (
     ),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS mission_ui_actions (
+    action_id TEXT PRIMARY KEY,
+    student_id INTEGER NOT NULL REFERENCES students(student_id),
+    session_id TEXT NOT NULL,
+    action_type TEXT NOT NULL CHECK (
+        action_type IN (
+            'mission_change_reason',
+            'mission_dislike_confirm',
+            'awaiting_replacement_mission'
+        )
+    ),
+    payload JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'pending_input', 'resolved', 'cancelled', 'expired')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_mission_ui_actions_active
+ON mission_ui_actions (student_id, session_id, status, created_at DESC)
+WHERE status IN ('pending', 'pending_input');
