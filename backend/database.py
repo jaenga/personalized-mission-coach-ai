@@ -1292,6 +1292,11 @@ VALID_PENDING_ACTION_TYPES = {
     "mission_dislike_confirm",
 }
 
+CREATABLE_PENDING_ACTION_TYPES = {
+    "submit_confirmation",
+    "natural_language_confirmation",
+}
+
 VALID_RESOLVE_STATUSES = {
     "accepted",
     "rejected",
@@ -1309,7 +1314,7 @@ VALID_MISSION_CHANGE_REASON_TYPES = {
 
 def save_pending_action(student_id: int, action_type: str, payload: dict) -> dict:
     """기존 pending을 취소하고 새 pending action을 저장한다."""
-    if action_type not in VALID_PENDING_ACTION_TYPES:
+    if action_type not in CREATABLE_PENDING_ACTION_TYPES:
         raise ValueError(f"Invalid action_type: {action_type}")
     if not student_id:
         raise ValueError("student_id is required")

@@ -859,7 +859,32 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             mission_title = mission_row.get("mission_name") or mission_title
 
     if not is_greet and student_id:
-        pending_outcome = await handle_pending_action(student_id, body.message)
+        active_ui = await get_active_ui_action(student_id, body.session_id)
+        if active_ui:
+            action_type = active_ui.get("action_type")
+            ui_action_payload = rebuild_ui_action_payload(active_ui)
+
+            if action_type in ("mission_change_reason", "mission_dislike_confirm"):
+                # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
+                print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
+                block_message = "아래 선택지 중 하나를 골라줘!"
+                return {
+                    "response": block_message,
+                    "mission_completed": False,
+                    "detected_function": None,
+                    "sources": [],
+                    "ui_action": ui_action_payload,
+                    "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type},
+                }
+
+            if action_type == "awaiting_replacement_mission":
+                result = await _handle_replacement_mission_input(student_id, body.session_id, body.message, active_ui)
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
+                return result
+
+    if not is_greet and student_id:
+        pending_outcome = await handle_pending_action(student_id, body.message, body.session_id)
         if pending_outcome:
             ai_message, call1_ms = await _generate_pending_response(pending_outcome)
             print(
@@ -887,34 +912,9 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "mission_completed": mission_status is not None,
                 "detected_function": pending_outcome.action_type,
                 "sources": [],
-                "ui_action": None,
+                "ui_action": pending_outcome.ui_action,
                 "debug": _pending_debug(pending_outcome, call1_ms, ai_message),
             }
-
-    if not is_greet and student_id:
-        active_ui = await get_active_ui_action(student_id, body.session_id)
-        if active_ui:
-            action_type = active_ui.get("action_type")
-            ui_action_payload = rebuild_ui_action_payload(active_ui)
-
-            if action_type in ("mission_change_reason", "mission_dislike_confirm"):
-                # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
-                print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
-                block_message = "아래 선택지 중 하나를 골라줘!"
-                return {
-                    "response": block_message,
-                    "mission_completed": False,
-                    "detected_function": None,
-                    "sources": [],
-                    "ui_action": ui_action_payload,
-                    "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type},
-                }
-
-            if action_type == "awaiting_replacement_mission":
-                result = await _handle_replacement_mission_input(student_id, body.session_id, body.message, active_ui)
-                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
-                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
-                return result
 
     if not is_greet and student_id and mission_row:
         if await classify_mission_dislike(body.message, mission_title):
@@ -1252,8 +1252,32 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 current_mission_title = mission_row.get("mission_name") or current_mission_title
 
         if not is_greet and student_id:
+            active_ui = await get_active_ui_action(student_id, body.session_id)
+            if active_ui:
+                action_type = active_ui.get("action_type")
+                ui_action_payload = rebuild_ui_action_payload(active_ui)
+
+                if action_type in ("mission_change_reason", "mission_dislike_confirm"):
+                    # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
+                    print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
+                    block_message = "아래 선택지 중 하나를 골라줘!"
+                    async for event in _fake_stream_template_response(block_message):
+                        yield event
+                    yield _sse({"type": "done", "ui_action": ui_action_payload, "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type}})
+                    return
+
+                if action_type == "awaiting_replacement_mission":
+                    result = await _handle_replacement_mission_input(student_id, body.session_id, body.message, active_ui)
+                    await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
+                    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
+                    async for event in _fake_stream_template_response(result["response"]):
+                        yield event
+                    yield _sse({"type": "done", "ui_action": result["ui_action"], "debug": result["debug"]})
+                    return
+
+        if not is_greet and student_id:
             pending_started = time.perf_counter()
-            pending_outcome = await handle_pending_action(student_id, body.message)
+            pending_outcome = await handle_pending_action(student_id, body.message, body.session_id)
             if pending_outcome:
                 ai_message, call1_ms = await _generate_pending_response(pending_outcome)
                 print(
@@ -1280,32 +1304,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
                 debug_payload = _pending_debug(pending_outcome, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
-                yield _sse({"type": "done", "ui_action": None, "debug": debug_payload})
+                yield _sse({"type": "done", "ui_action": pending_outcome.ui_action, "debug": debug_payload})
                 return
-
-        if not is_greet and student_id:
-            active_ui = await get_active_ui_action(student_id, body.session_id)
-            if active_ui:
-                action_type = active_ui.get("action_type")
-                ui_action_payload = rebuild_ui_action_payload(active_ui)
-
-                if action_type in ("mission_change_reason", "mission_dislike_confirm"):
-                    # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
-                    print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
-                    block_message = "아래 선택지 중 하나를 골라줘!"
-                    async for event in _fake_stream_template_response(block_message):
-                        yield event
-                    yield _sse({"type": "done", "ui_action": ui_action_payload, "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type}})
-                    return
-
-                if action_type == "awaiting_replacement_mission":
-                    result = await _handle_replacement_mission_input(student_id, body.session_id, body.message, active_ui)
-                    await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
-                    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
-                    async for event in _fake_stream_template_response(result["response"]):
-                        yield event
-                    yield _sse({"type": "done", "ui_action": result["ui_action"], "debug": result["debug"]})
-                    return
 
         if not is_greet and student_id and mission_row:
             dislike_started = time.perf_counter()

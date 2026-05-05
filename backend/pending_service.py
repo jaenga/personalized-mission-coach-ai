@@ -11,7 +11,6 @@ from database import (
     get_pending_action,
     increment_pending_retry,
     resolve_pending,
-    save_pending_action,
     save_mission_change_log,
     upsert_user_memory,
 )
@@ -23,6 +22,7 @@ from executor import (
     execute_cancel,
     execute_submit,
 )
+from mission_ui_action_service import create_mission_dislike_confirm_action
 from ollama_client import generate_json_message
 
 
@@ -67,6 +67,14 @@ NEGATIVE_EXACT = {
 }
 
 MISSION_DISLIKE_NEGATIVE_RE = re.compile(r"다른\s*거|다른\s*걸|딴\s*거|딴\s*걸|바꿔|변경")
+CONFIRMATION_POSITIVE_RE = re.compile(
+    r"(그렇게|그걸로|진행|처리|기록)\s*해줘|"
+    r"(응|ㅇㅇ|네|그래|좋아).{0,12}(진행|처리|기록|취소)\s*해줘"
+)
+CONFIRMATION_NEGATIVE_RE = re.compile(
+    r"(하지\s*마|하지마|안\s*할래|안할래|괜찮아|"
+    r"취소\s*하지\s*마|취소하지마|기록\s*하지\s*마|기록하지마)"
+)
 
 PENDING_CLASSIFY_SYSTEM_PROMPT = """이전 질문에 대한 아이의 답변이야.
 긍정이면 yes, 부정이면 no, 애매하면 ambiguous로 분류해.
@@ -126,6 +134,7 @@ class PendingOutcome:
     exec_results: ExecResults
     sync_user_message: str | None = None
     skip_memory: bool = True
+    ui_action: dict | None = None
 
 
 def _compact(text: str) -> str:
@@ -149,6 +158,11 @@ def _loads_json_object(raw: str) -> dict:
 
 async def classify_pending_reply(user_message: str, action_type: str | None = None) -> str:
     text = _compact(user_message)
+    if action_type in {"submit_confirmation", "natural_language_confirmation"}:
+        if CONFIRMATION_NEGATIVE_RE.search(user_message or ""):
+            return "no"
+        if CONFIRMATION_POSITIVE_RE.search(user_message or ""):
+            return "yes"
     if text in POSITIVE_EXACT:
         return "yes"
     if text in NEGATIVE_EXACT:
@@ -412,6 +426,7 @@ _MISSION_DISLIKE_PENDING_HINT = (
 
 async def _handle_mission_change_reason(
     student_id: int,
+    session_id: str,
     pending_id: int,
     payload: dict,
     retry_count: int,
@@ -453,7 +468,7 @@ async def _handle_mission_change_reason(
             "reason_type": "dislike",
             "original_user_message": user_message,
         }
-        await run_in_threadpool(save_pending_action, student_id, "mission_dislike_confirm", dislike_payload)
+        ui_action = await create_mission_dislike_confirm_action(student_id, session_id, dislike_payload)
         if mission_id:
             try:
                 await run_in_threadpool(save_mission_change_log, student_id, mission_id, "dislike")
@@ -466,6 +481,7 @@ async def _handle_mission_change_reason(
             message_hint=_MISSION_DISLIKE_PENDING_HINT,
             pending_id=pending_id,
             exec_results=exec_results,
+            ui_action=ui_action,
         )
 
     adjustment_type_map = {"too_easy": "harder", "too_hard": "easier"}
@@ -508,7 +524,7 @@ async def _execute_dislike_fallback_change(student_id: int) -> ExecResults:
     return exec_results
 
 
-async def handle_pending_action(student_id: int | None, user_message: str) -> PendingOutcome | None:
+async def handle_pending_action(student_id: int | None, user_message: str, session_id: str = "") -> PendingOutcome | None:
     if not student_id:
         return None
 
@@ -524,7 +540,7 @@ async def handle_pending_action(student_id: int | None, user_message: str) -> Pe
     if action_type == "mission_change_reason":
         print(f"[Pending] action={action_type} retry={retry_count}")
         return await _handle_mission_change_reason(
-            student_id, pending_id, payload, retry_count, user_message
+            student_id, session_id, pending_id, payload, retry_count, user_message
         )
 
     decision = await classify_pending_reply(user_message, action_type)
