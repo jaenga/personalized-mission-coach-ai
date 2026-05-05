@@ -28,6 +28,12 @@ from database import (
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_submit
 from memory_service import extract_and_save_memory
+from mission_ui_action_service import (
+    MISSION_CHANGE_REASON_BUTTONS,
+    MISSION_DISLIKE_CONFIRM_BUTTONS,
+    create_mission_change_reason_action,
+    create_mission_dislike_confirm_action,
+)
 from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
 from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
 from qwen_client import detect_history_call, detect_submit_report_call
@@ -319,10 +325,13 @@ _PENDING_RESPONSE_PROMPT = """너는 토미라는 토마토 캐릭터야.
 자연스럽게 한마디 해줘.
 """
 
-_MISSION_DISLIKE_PENDING_HINT = (
-    "아이가 오늘 미션을 싫어하거나 재미없어한다고 말했어. "
-    "아직 미션은 바꾸지 않았어. 그래도 오늘 딱 한 번만 해볼지 짧게 물어봐."
-)
+def _mission_dislike_hint(mission_name: str, mission_rule: str) -> str:
+    return (
+        f"아이가 오늘 미션 '{mission_name}'이 재미없다고 했어. "
+        f"미션 규칙: {mission_rule} "
+        "이 미션의 좋은 점이나 재밌는 점을 1문장으로 먼저 말해주고, "
+        "그래도 오늘 딱 한 번만 도전해볼지 짧게 물어봐. 강요하지 말고 친구처럼 부드럽게."
+    )
 
 
 async def _generate_pending_response(outcome: PendingOutcome) -> tuple[str, int]:
@@ -782,9 +791,13 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "original_user_message": body.message,
             }
             await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "dislike")
-            await run_in_threadpool(save_pending_action, student_id, "mission_dislike_confirm", payload)
-            ai_message, call1_ms = await _generate_hint_response(_MISSION_DISLIKE_PENDING_HINT)
-            print(f"[Dislike] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
+            ui_action = await create_mission_dislike_confirm_action(student_id, body.session_id, payload)
+            hint = _mission_dislike_hint(
+                mission_row.get("mission_name", "오늘 미션"),
+                mission_row.get("mission_rule", ""),
+            )
+            ai_message, call1_ms = await _generate_hint_response(hint)
+            print(f"[Dislike] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')} response={_short(ai_message)!r}")
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_dislike_confirm")
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
@@ -793,32 +806,33 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "mission_completed": False,
                 "detected_function": "mission_dislike_confirm",
                 "sources": [],
-                "ui_action": None,
-                "debug": _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message),
+                "ui_action": ui_action,
+                "debug": {"intent": "MISSION_DISLIKE_GUARD", "ui_action_id": ui_action.get("action_id")},
             }
 
     if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
         if not _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
-            payload = {
-                "mission_id": mission_row.get("mission_id"),
-                "mission_name": mission_row.get("mission_name"),
-                "mission_rule": mission_row.get("mission_rule"),
-                "activity_key": mission_row.get("activity_key"),
-            }
-            await run_in_threadpool(save_pending_action, student_id, "mission_change_reason", payload)
-            hint = "아이가 미션을 바꾸고 싶다고 했어. 왜 바꾸고 싶은지 짧게 물어봐. 너무 쉬워서, 어려워서, 싫어서, 못 하는 상황이라서, 그냥 다른 게 하고 싶어서 중 고를 수 있다고 알려줘."
-            ai_message, call1_ms = await _generate_hint_response(hint)
-            print(f"[MissionChange] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
-            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
-            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
-            return {
-                "response": ai_message,
-                "mission_completed": False,
-                "detected_function": "mission_change_reason",
-                "sources": [],
-                "ui_action": None,
-                "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message),
-            }
+            candidate_text = extract_mission_candidate_text(body.message)
+            if not candidate_text:
+                payload = {
+                    "mission_id": mission_row.get("mission_id"),
+                    "mission_name": mission_row.get("mission_name"),
+                    "mission_rule": mission_row.get("mission_rule"),
+                    "activity_key": mission_row.get("activity_key"),
+                }
+                ui_action = await create_mission_change_reason_action(student_id, body.session_id, payload)
+                ai_message = "왜 바꾸고 싶어? 아래에서 골라줘!"
+                print(f"[MissionChange] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')}")
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+                return {
+                    "response": ai_message,
+                    "mission_completed": False,
+                    "detected_function": "mission_change_reason",
+                    "sources": [],
+                    "ui_action": ui_action,
+                    "debug": {"intent": "MISSION_CHANGE_REASON_GUARD", "ui_action_id": ui_action.get("action_id")},
+                }
 
     intent = "A"
     fn_calls: list[tuple[str, dict]] = []
@@ -1138,37 +1152,43 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     "original_user_message": body.message,
                 }
                 await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "dislike")
-                await run_in_threadpool(save_pending_action, student_id, "mission_dislike_confirm", payload)
-                ai_message, call1_ms = await _generate_hint_response(_MISSION_DISLIKE_PENDING_HINT)
-                print(f"[Dislike] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
+                ui_action = await create_mission_dislike_confirm_action(student_id, body.session_id, payload)
+                hint = _mission_dislike_hint(
+                    mission_row.get("mission_name", "오늘 미션"),
+                    mission_row.get("mission_rule", ""),
+                )
+                ai_message, call1_ms = await _generate_hint_response(hint)
+                print(f"[Dislike] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')} response={_short(ai_message)!r}")
                 await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_dislike_confirm")
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
                 background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
                 async for event in _fake_stream_template_response(ai_message):
                     yield event
-                debug_payload = _hint_debug("MISSION_DISLIKE_GUARD", _MISSION_DISLIKE_PENDING_HINT, call1_ms, ai_message)
-                debug_payload["timing"]["total_ms"] = round((time.perf_counter() - dislike_started) * 1000)
-                yield _sse({"type": "done", "ui_action": None, "debug": debug_payload})
+                total_ms = round((time.perf_counter() - dislike_started) * 1000)
+                yield _sse({"type": "done", "ui_action": ui_action, "debug": {"intent": "MISSION_DISLIKE_GUARD", "ui_action_id": ui_action.get("action_id"), "timing": {"total_ms": total_ms}}})
                 return
 
         if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
             if not _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
-                payload = {
-                    "mission_id": mission_row.get("mission_id"),
-                    "mission_name": mission_row.get("mission_name"),
-                    "mission_rule": mission_row.get("mission_rule"),
-                    "activity_key": mission_row.get("activity_key"),
-                }
-                await run_in_threadpool(save_pending_action, student_id, "mission_change_reason", payload)
-                hint = "아이가 미션을 바꾸고 싶다고 했어. 왜 바꾸고 싶은지 짧게 물어봐. 너무 쉬워서, 어려워서, 싫어서, 못 하는 상황이라서, 그냥 다른 게 하고 싶어서 중 고를 수 있다고 알려줘."
-                ai_message, call1_ms = await _generate_hint_response(hint)
-                print(f"[MissionChange] pending created mission_id={mission_row.get('mission_id')} response={_short(ai_message)!r}")
-                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
-                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
-                async for event in _fake_stream_template_response(ai_message):
-                    yield event
-                yield _sse({"type": "done", "ui_action": None, "debug": _hint_debug("MISSION_CHANGE_REASON_GUARD", hint, call1_ms, ai_message)})
-                return
+                candidate_text = extract_mission_candidate_text(body.message)
+                if not candidate_text:
+                    change_started = time.perf_counter()
+                    payload = {
+                        "mission_id": mission_row.get("mission_id"),
+                        "mission_name": mission_row.get("mission_name"),
+                        "mission_rule": mission_row.get("mission_rule"),
+                        "activity_key": mission_row.get("activity_key"),
+                    }
+                    ui_action = await create_mission_change_reason_action(student_id, body.session_id, payload)
+                    ai_message = "왜 바꾸고 싶어? 아래에서 골라줘!"
+                    print(f"[MissionChange] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')}")
+                    await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
+                    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+                    async for event in _fake_stream_template_response(ai_message):
+                        yield event
+                    total_ms = round((time.perf_counter() - change_started) * 1000)
+                    yield _sse({"type": "done", "ui_action": ui_action, "debug": {"intent": "MISSION_CHANGE_REASON_GUARD", "ui_action_id": ui_action.get("action_id"), "timing": {"total_ms": total_ms}}})
+                    return
 
         intent = "A"
         fn_calls: list[tuple[str, dict]] = []
