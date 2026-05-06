@@ -18,6 +18,14 @@ function vocativeParticle(name) {
   return jong === 0 ? "야" : "아";
 }
 
+function getGreetingName(name) {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length > 1) return parts[parts.length - 1];
+  return trimmed.length >= 3 ? trimmed.slice(1) : trimmed;
+}
+
 function formatTodayKor(date) {
   return `${date.getMonth() + 1}월 ${date.getDate()}일`;
 }
@@ -189,10 +197,11 @@ function MonthCalendar({ year, month, successSet, today, onPrev, onNext }) {
                   width: 28,
                   height: 28,
                   borderRadius: "50%",
-                  background: isToday ? "#E35D49" : "transparent",
-                  color: isToday ? "#FFFFFF" : "#000",
+                  background: isToday ? "#FFE9D2" : "transparent",
+                  color: isToday ? "#E35D49" : "#000",
                   fontSize: 12,
                   position: "relative",
+                  boxShadow: "none",
                 }}
               >
                 {success ? (
@@ -238,6 +247,7 @@ function WeekStrip({ today, successSet }) {
                 height: 32,
                 borderRadius: "50%",
                 background: isToday ? "#FFE9D2" : "transparent",
+                boxShadow: "none",
               }}
             >
               {success ? (
@@ -387,11 +397,11 @@ export default function Home({
   level = 3,
   currentXp = 12,
   maxXp = 20,
-  streakDays = 3,
+  streakDays = 0,
   ticketCount = 2,
   heartCount = 4,
   todayMission = { title: "15분 책 읽기", done: false },
-  successDates = ["2026-05-01", "2026-05-02"],
+  successDates = [],
   onNavigate,
 }) {
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -399,7 +409,8 @@ export default function Home({
   const [expOpen, setExpOpen] = useState(false);
   const today = useMemo(() => new Date(), []);
   const [viewYM, setViewYM] = useState(() => ({ year: today.getFullYear(), month: today.getMonth() }));
-  const particle = vocativeParticle(studentName);
+  const greetingName = getGreetingName(studentName);
+  const particle = vocativeParticle(greetingName);
 
   const monthSuccessCount = useMemo(() => {
     const prefix = `${viewYM.year}-${String(viewYM.month + 1).padStart(2, "0")}-`;
@@ -540,7 +551,7 @@ export default function Home({
                 lineHeight: "32px",
               }}
             >
-              안녕, {studentName}{particle}!
+              안녕, {greetingName}{particle}!
             </h1>
             <p
               className="font-sejong mt-1"
@@ -551,12 +562,13 @@ export default function Home({
                 lineHeight: "22px",
               }}
             >
-              오늘도 힘내보자~!
+              오늘도 힘내보자~
             </p>
           </div>
           <div
             className="flex flex-col items-center justify-center"
             style={{
+              display: streakDays > 0 ? "flex" : "none",
               width: 76,
               height: 65,
               borderRadius: 25,
@@ -620,10 +632,10 @@ export default function Home({
           className="mx-auto mt-5"
           style={{
             width: 315,
-            borderRadius: 30,
-            background: "rgba(255, 255, 255, 0.5)",
-            border: "1px solid rgba(227, 93, 73, 0.4)",
-            padding: "16px 20px",
+            borderRadius: 28,
+            background: "rgba(255, 255, 255, 0.62)",
+            border: "1.2px solid rgba(227, 93, 73, 0.45)",
+            padding: "17px 20px 18px",
           }}
         >
           <div className="flex items-baseline justify-between">
@@ -640,14 +652,26 @@ export default function Home({
               {formatTodayKor(today)}
             </span>
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <img src={flag} alt="" style={{ width: 24, height: 24, objectFit: "contain" }} />
+          <div
+            className="mt-3 flex items-start"
+            style={{ gap: 10 }}
+          >
+            <img
+              src={flag}
+              alt=""
+              style={{ width: 25, height: 25, objectFit: "contain", flexShrink: 0, marginTop: 2 }}
+            />
             <span
               style={{
                 fontFamily: '"IM_Hyemin", "SejongGeulggot", sans-serif',
-                fontSize: 20,
+                flex: 1,
+                minWidth: 0,
+                fontSize: 19,
                 fontWeight: 700,
                 letterSpacing: "-0.43px",
+                lineHeight: "27px",
+                wordBreak: "keep-all",
+                overflowWrap: "normal",
               }}
             >
               {todayMission.title}

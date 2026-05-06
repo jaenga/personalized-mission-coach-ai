@@ -1,4 +1,5 @@
 import os
+import random
 import psycopg2
 import psycopg2.extras
 from datetime import date, datetime, timezone, timedelta
@@ -89,6 +90,185 @@ def init_db():
                     status TEXT DEFAULT 'pending',
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     resolved_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS student_app_state (
+                    student_id INTEGER PRIMARY KEY REFERENCES students(student_id),
+                    level INTEGER NOT NULL DEFAULT 1,
+                    current_xp INTEGER NOT NULL DEFAULT 0,
+                    ticket_count INTEGER NOT NULL DEFAULT 0,
+                    heart_count INTEGER NOT NULL DEFAULT 1,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS xp_history (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    xp_amount INTEGER NOT NULL,
+                    source_type TEXT NOT NULL,
+                    mission_id INTEGER,
+                    draw_id INTEGER,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                ALTER TABLE xp_history
+                    ADD COLUMN IF NOT EXISTS source_type TEXT,
+                    ADD COLUMN IF NOT EXISTS mission_id INTEGER,
+                    ADD COLUMN IF NOT EXISTS draw_id INTEGER
+            """)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                          FROM information_schema.columns
+                         WHERE table_schema = 'public'
+                           AND table_name = 'xp_history'
+                           AND column_name = 'reason'
+                    ) THEN
+                        EXECUTE 'UPDATE xp_history SET source_type = reason WHERE source_type IS NULL';
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                          FROM information_schema.columns
+                         WHERE table_schema = 'public'
+                           AND table_name = 'xp_history'
+                           AND column_name = 'source_id'
+                    ) THEN
+                        EXECUTE $SQL$
+                            UPDATE xp_history
+                               SET mission_id = source_id
+                             WHERE mission_id IS NULL
+                               AND source_type = 'mission_success'
+                        $SQL$;
+                        EXECUTE $SQL$
+                            UPDATE xp_history
+                               SET draw_id = source_id
+                             WHERE draw_id IS NULL
+                               AND source_type = 'draw_reward'
+                        $SQL$;
+                    END IF;
+                END $$;
+            """)
+            cur.execute("""
+                UPDATE xp_history
+                   SET source_type = 'mission_success'
+                 WHERE source_type IS NULL
+            """)
+            cur.execute("""
+                ALTER TABLE xp_history
+                    ALTER COLUMN source_type SET NOT NULL,
+                    DROP COLUMN IF EXISTS reason,
+                    DROP COLUMN IF EXISTS source_id
+            """)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                          FROM pg_constraint
+                         WHERE conname = 'xp_history_source_check'
+                    ) THEN
+                        ALTER TABLE xp_history
+                            ADD CONSTRAINT xp_history_source_check CHECK (
+                                (
+                                    source_type = 'mission_success'
+                                    AND mission_id IS NOT NULL
+                                    AND draw_id IS NULL
+                                )
+                                OR
+                                (
+                                    source_type = 'draw_reward'
+                                    AND draw_id IS NOT NULL
+                                    AND mission_id IS NULL
+                                )
+                            ) NOT VALID;
+                    END IF;
+                END $$;
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_xp_history_student_created
+                    ON xp_history (student_id, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS draw_runs (
+                    draw_id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    reward_type TEXT NOT NULL,
+                    heart_gain INTEGER NOT NULL DEFAULT 0,
+                    xp_gain INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_draw_runs_student_created
+                    ON draw_runs (student_id, created_at DESC)
+            """)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                          FROM pg_constraint
+                         WHERE conname = 'xp_history_mission_id_fkey'
+                    ) THEN
+                        ALTER TABLE xp_history
+                            ADD CONSTRAINT xp_history_mission_id_fkey
+                            FOREIGN KEY (mission_id) REFERENCES missions(mission_id) NOT VALID;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1
+                          FROM pg_constraint
+                         WHERE conname = 'xp_history_draw_id_fkey'
+                    ) THEN
+                        ALTER TABLE xp_history
+                            ADD CONSTRAINT xp_history_draw_id_fkey
+                            FOREIGN KEY (draw_id) REFERENCES draw_runs(draw_id) NOT VALID;
+                    END IF;
+                END $$;
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS attendance_log (
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    attendance_date DATE NOT NULL,
+                    ticket_awarded INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (student_id, attendance_date)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS game_runs (
+                    run_id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    game_type TEXT NOT NULL,
+                    score INTEGER NOT NULL,
+                    duration_sec INTEGER NOT NULL DEFAULT 0,
+                    played_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_game_runs_student_played
+                    ON game_runs (student_id, played_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_game_runs_played
+                    ON game_runs (played_at DESC)
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS lesson_progress (
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    lesson_id TEXT NOT NULL,
+                    current_step INTEGER NOT NULL DEFAULT 0,
+                    edu_done BOOLEAN NOT NULL DEFAULT FALSE,
+                    quiz_done BOOLEAN NOT NULL DEFAULT FALSE,
+                    quiz_score INTEGER,
+                    completed_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (student_id, lesson_id)
                 )
             """)
         conn.commit()
@@ -643,6 +823,632 @@ def has_checkin_today(student_id: int) -> bool:
 
 # ── 학생 정보 조회 (students 테이블) ──────────────────────────────────────────
 
+def get_success_summary(student_id: int) -> dict:
+    today = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (checkin_date)
+                       checkin_date::text AS checkin_date,
+                       mission_result
+                FROM checkin_log
+                WHERE student_id = %s
+                  AND function_called = 'submit_mission_result'
+                ORDER BY checkin_date DESC, created_at DESC
+            """, (student_id,))
+            rows = [dict(r) for r in cur.fetchall()]
+
+    success_dates = {
+        r["checkin_date"]
+        for r in rows
+        if r.get("mission_result") in ("success", "completed")
+    }
+
+    today_date = datetime.strptime(today, "%Y-%m-%d").date()
+    cursor = today_date if today in success_dates else today_date - timedelta(days=1)
+    streak = 0
+
+    while cursor.strftime("%Y-%m-%d") in success_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+
+    return {
+        "success_dates": sorted(success_dates),
+        "success_count": len(success_dates),
+        "streak_days": streak,
+    }
+
+
+def get_app_state(student_id: int) -> dict:
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO student_app_state (student_id)
+                VALUES (%s)
+                ON CONFLICT (student_id) DO NOTHING
+            """, (student_id,))
+            cur.execute("""
+                SELECT student_id, level, current_xp, ticket_count, heart_count
+                FROM student_app_state
+                WHERE student_id = %s
+            """, (student_id,))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+# ── 레벨/XP 계산 ──────────────────────────────────────────────────────────────
+# 누적 XP 임계값: key = 그 레벨에 도달하기 위해 필요한 누적 XP
+# 프론트 LEVEL_THRESHOLDS와 정확히 일치해야 함.
+_LEVEL_THRESHOLDS = {2: 5, 3: 17, 4: 37, 5: 70, 6: 150}
+_MAX_LEVEL = 5
+_MAX_HEARTS = 5
+_DIFFICULTY_XP_FALLBACK = {"easy": 5, "medium": 10, "hard": 12}
+_MISSION_TICKET_REWARD = 1
+
+
+def adjust_heart_count(student_id: int, delta: int) -> dict:
+    """
+    Atomically adjust a student's hearts and return the latest app_state.
+    Negative deltas require enough hearts; positive deltas are capped.
+    """
+    if delta == 0:
+        return get_app_state(student_id)
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO student_app_state (student_id)
+                VALUES (%s)
+                ON CONFLICT (student_id) DO NOTHING
+            """, (student_id,))
+            cur.execute("""
+                SELECT level, current_xp, ticket_count, heart_count
+                FROM student_app_state
+                WHERE student_id = %s
+                FOR UPDATE
+            """, (student_id,))
+            current = cur.fetchone()
+            if not current:
+                raise ValueError("missing_app_state")
+
+            next_heart = current["heart_count"] + delta
+            if next_heart < 0:
+                raise ValueError("no_heart")
+            next_heart = min(_MAX_HEARTS, next_heart)
+
+            cur.execute("""
+                UPDATE student_app_state
+                SET heart_count = %s,
+                    updated_at = NOW()
+                WHERE student_id = %s
+                RETURNING student_id, level, current_xp, ticket_count, heart_count
+            """, (next_heart, student_id))
+            updated = cur.fetchone()
+        conn.commit()
+    return dict(updated)
+
+
+def _recompute_level(current_xp: int) -> int:
+    lv = 1
+    while lv < _MAX_LEVEL and current_xp >= _LEVEL_THRESHOLDS.get(lv + 1, 10**9):
+        lv += 1
+    return lv
+
+
+def award_mission_xp(student_id: int, mission_id: int) -> dict:
+    """
+    미션 성공 보상 지급. 단일 트랜잭션:
+      1) 미션의 reward_xp 조회 (없으면 difficulty 기반 fallback)
+      2) student_app_state UPSERT — current_xp += gain, level 재계산, ticket_count += 1
+      3) xp_history INSERT — source_type='mission_success', mission_id=mission_id
+
+    Returns dict:
+      { xp_gain, ticket_gain, level_before, level_after, leveled_up, app_state }
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT reward_xp, difficulty FROM missions WHERE mission_id = %s",
+                (mission_id,),
+            )
+            mission_row = cur.fetchone()
+            if not mission_row:
+                raise ValueError(f"mission {mission_id} not found")
+
+            xp_gain = mission_row.get("reward_xp")
+            if not xp_gain or xp_gain <= 0:
+                difficulty = (mission_row.get("difficulty") or "easy").lower()
+                xp_gain = _DIFFICULTY_XP_FALLBACK.get(difficulty, _DIFFICULTY_XP_FALLBACK["easy"])
+
+            cur.execute("""
+                INSERT INTO student_app_state (student_id)
+                VALUES (%s)
+                ON CONFLICT (student_id) DO NOTHING
+            """, (student_id,))
+            cur.execute("""
+                SELECT level, current_xp, ticket_count, heart_count
+                FROM student_app_state
+                WHERE student_id = %s
+                FOR UPDATE
+            """, (student_id,))
+            current = cur.fetchone()
+
+            level_before = current["level"]
+            new_xp = current["current_xp"] + xp_gain
+            new_level = _recompute_level(new_xp)
+            new_ticket = current["ticket_count"] + _MISSION_TICKET_REWARD
+
+            cur.execute("""
+                UPDATE student_app_state
+                   SET level = %s,
+                       current_xp = %s,
+                       ticket_count = %s,
+                       updated_at = NOW()
+                 WHERE student_id = %s
+                RETURNING student_id, level, current_xp, ticket_count, heart_count
+            """, (new_level, new_xp, new_ticket, student_id))
+            updated = cur.fetchone()
+
+            cur.execute("""
+                INSERT INTO xp_history (student_id, xp_amount, source_type, mission_id)
+                VALUES (%s, %s, 'mission_success', %s)
+            """, (student_id, xp_gain, mission_id))
+
+        conn.commit()
+
+    return {
+        "xp_gain": xp_gain,
+        "ticket_gain": _MISSION_TICKET_REWARD,
+        "level_before": level_before,
+        "level_after": updated["level"],
+        "leveled_up": updated["level"] > level_before,
+        "app_state": dict(updated),
+    }
+
+
+def _roll_draw_reward(is_first_of_day: bool) -> dict:
+    """가챠 보상 분포 (프론트 rollReward와 동일):
+       - 첫 뽑기: 하트 1-2 확정
+       - 이후: 40% 하트(1-2), 40% XP(3-5), 20% 하트+XP
+    """
+    if is_first_of_day:
+        return {"type": "heart", "heart": random.randint(1, 2), "exp": 0}
+    r = random.random()
+    if r < 0.4:
+        return {"type": "heart", "heart": random.randint(1, 2), "exp": 0}
+    if r < 0.8:
+        return {"type": "exp", "heart": 0, "exp": random.randint(3, 5)}
+    return {"type": "both", "heart": random.randint(1, 2), "exp": random.randint(3, 5)}
+
+
+def claim_draw_reward(student_id: int) -> dict:
+    """
+    가챠 한 판 처리. 단일 트랜잭션:
+      1) student_app_state FOR UPDATE — 티켓 ≥1 검증
+      2) 오늘(KST) draw_runs 조회 → first_of_day 판정
+      3) 보상 굴림 (서버 전속)
+      4) app_state 업데이트 — ticket -1, heart += gain (cap), xp += gain (level 재계산)
+      5) draw_runs INSERT → draw_id
+      6) xp_gain > 0 이면 xp_history INSERT (source_type='draw_reward', draw_id=draw_id)
+
+    Raises ValueError("no_ticket") if ticket_count == 0.
+
+    Returns dict:
+      { reward, app_state, leveled_up, level_after, xp_gain, heart_gain, ticket_gain, first_of_day }
+    """
+    today_kst = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO student_app_state (student_id)
+                VALUES (%s)
+                ON CONFLICT (student_id) DO NOTHING
+            """, (student_id,))
+            cur.execute("""
+                SELECT level, current_xp, ticket_count, heart_count
+                FROM student_app_state
+                WHERE student_id = %s
+                FOR UPDATE
+            """, (student_id,))
+            current = cur.fetchone()
+            if current["ticket_count"] <= 0:
+                raise ValueError("no_ticket")
+
+            cur.execute("""
+                SELECT COUNT(*) AS n
+                FROM draw_runs
+                WHERE student_id = %s
+                  AND (created_at AT TIME ZONE 'Asia/Seoul')::date = %s::date
+            """, (student_id, today_kst))
+            today_count = cur.fetchone()["n"]
+            first_of_day = today_count == 0
+
+            reward = _roll_draw_reward(first_of_day)
+            heart_gain = reward["heart"]
+            xp_gain = reward["exp"]
+
+            level_before = current["level"]
+            new_xp = current["current_xp"] + xp_gain
+            new_level = _recompute_level(new_xp)
+            new_ticket = current["ticket_count"] - 1
+            new_heart = min(_MAX_HEARTS, current["heart_count"] + heart_gain)
+
+            cur.execute("""
+                UPDATE student_app_state
+                   SET level = %s,
+                       current_xp = %s,
+                       ticket_count = %s,
+                       heart_count = %s,
+                       updated_at = NOW()
+                 WHERE student_id = %s
+                RETURNING student_id, level, current_xp, ticket_count, heart_count
+            """, (new_level, new_xp, new_ticket, new_heart, student_id))
+            updated = cur.fetchone()
+
+            cur.execute("""
+                INSERT INTO draw_runs (student_id, reward_type, heart_gain, xp_gain)
+                VALUES (%s, %s, %s, %s)
+                RETURNING draw_id
+            """, (student_id, reward["type"], heart_gain, xp_gain))
+            draw_id = cur.fetchone()["draw_id"]
+
+            if xp_gain > 0:
+                cur.execute("""
+                    INSERT INTO xp_history (student_id, xp_amount, source_type, draw_id)
+                    VALUES (%s, %s, 'draw_reward', %s)
+                """, (student_id, xp_gain, draw_id))
+
+        conn.commit()
+
+    return {
+        "reward": reward,
+        "app_state": dict(updated),
+        "leveled_up": updated["level"] > level_before,
+        "level_after": updated["level"],
+        "xp_gain": xp_gain,
+        "heart_gain": heart_gain,
+        "ticket_gain": -1,
+        "first_of_day": first_of_day,
+    }
+
+
+_ATTENDANCE_TICKET_REWARD = 1
+
+
+def claim_attendance(student_id: int) -> dict:
+    """
+    오늘(KST) 첫 출석이면 ticket +1. 두 번째 이후는 no-op.
+
+    attendance_log의 (student_id, attendance_date) PRIMARY KEY로 하루 1회 보장.
+
+    Returns dict:
+      { first_check_in: bool, ticket_awarded: int, app_state: {...} }
+    """
+    today_kst = _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO student_app_state (student_id)
+                VALUES (%s)
+                ON CONFLICT (student_id) DO NOTHING
+            """, (student_id,))
+
+            cur.execute("""
+                INSERT INTO attendance_log (student_id, attendance_date, ticket_awarded)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (student_id, attendance_date) DO NOTHING
+                RETURNING student_id
+            """, (student_id, today_kst, _ATTENDANCE_TICKET_REWARD))
+            inserted = cur.fetchone()
+            first_check_in = inserted is not None
+
+            if first_check_in:
+                cur.execute("""
+                    UPDATE student_app_state
+                       SET ticket_count = ticket_count + %s,
+                           updated_at = NOW()
+                     WHERE student_id = %s
+                    RETURNING student_id, level, current_xp, ticket_count, heart_count
+                """, (_ATTENDANCE_TICKET_REWARD, student_id))
+            else:
+                cur.execute("""
+                    SELECT student_id, level, current_xp, ticket_count, heart_count
+                    FROM student_app_state
+                    WHERE student_id = %s
+                """, (student_id,))
+            current = cur.fetchone()
+
+        conn.commit()
+
+    return {
+        "first_check_in": first_check_in,
+        "ticket_awarded": _ATTENDANCE_TICKET_REWARD if first_check_in else 0,
+        "app_state": dict(current),
+    }
+
+
+# ── 경험치 랭킹 ──────────────────────────────────────────────────────────────
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _period_start_utc(period: str) -> datetime | None:
+    """
+    'week' = 이번 주 월요일 00:00 KST
+    'month' = 이번 달 1일 00:00 KST
+    'all' = None (필터 없음)
+    UTC로 변환해서 반환.
+    """
+    if period == "all":
+        return None
+    now_kst = datetime.now(_KST)
+    if period == "month":
+        start_kst = now_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:  # default = week
+        days_since_monday = now_kst.weekday()  # Mon=0
+        start_kst = (now_kst - timedelta(days=days_since_monday)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    return start_kst.astimezone(timezone.utc)
+
+
+def get_xp_ranking(period: str = "week", limit: int = 100) -> list[dict]:
+    """
+    기간 내 xp_history 합계 기준 랭킹.
+    student_app_state의 모든 학생을 LEFT JOIN해서, 기간에 XP 못 받은 학생도 0으로 포함.
+    동률은 level DESC, current_xp DESC로 깸.
+    Returns: [{rank, student_id, student_name, level, period_xp}, ...]
+    """
+    period_start = _period_start_utc(period)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT
+                    sas.student_id,
+                    s.student_name,
+                    sas.level,
+                    sas.current_xp,
+                    COALESCE(SUM(xh.xp_amount), 0)::int AS period_xp
+                FROM student_app_state sas
+                JOIN students s ON s.student_id = sas.student_id
+                LEFT JOIN xp_history xh
+                       ON xh.student_id = sas.student_id
+                      AND xh.created_at >= %s
+                WHERE s.is_active = TRUE
+                GROUP BY sas.student_id, s.student_name, sas.level, sas.current_xp
+                ORDER BY period_xp DESC, sas.level DESC, sas.current_xp DESC, sas.student_id ASC
+                LIMIT %s
+            """, (period_start, limit))
+            rows = cur.fetchall()
+
+    return [
+        {
+            "rank": i + 1,
+            "student_id": row["student_id"],
+            "student_name": row["student_name"],
+            "level": row["level"],
+            "period_xp": row["period_xp"],
+        }
+        for i, row in enumerate(rows)
+    ]
+
+
+# ── 게임 기록 / 랭킹 ─────────────────────────────────────────────────────────
+
+def record_game_run(
+    student_id: int,
+    game_type: str,
+    score: int,
+    duration_sec: int = 0,
+) -> dict:
+    """게임 한 판 기록. Returns inserted row."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO game_runs (student_id, game_type, score, duration_sec)
+                VALUES (%s, %s, %s, %s)
+                RETURNING run_id, student_id, game_type, score, duration_sec, played_at
+            """, (student_id, game_type, score, duration_sec))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def get_game_ranking(
+    period: str = "week",
+    limit: int = 100,
+    game_type: str | None = None,
+) -> list[dict]:
+    """
+    기간 내 game_runs MAX(score) 기준 랭킹.
+    student_app_state의 모든 학생을 LEFT JOIN — 미플레이도 best_score=0, plays=0으로 포함.
+    동률은 plays DESC, level DESC, student_id ASC로 깸.
+    Returns: [{rank, student_id, student_name, level, best_score, plays}, ...]
+    """
+    period_start = _period_start_utc(period)
+    where_clauses = []
+    params: list = []
+    if period_start is not None:
+        where_clauses.append("gr.played_at >= %s")
+        params.append(period_start)
+    if game_type:
+        where_clauses.append("gr.game_type = %s")
+        params.append(game_type)
+    join_filter = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT
+                    sas.student_id,
+                    s.student_name,
+                    sas.level,
+                    COALESCE(MAX(gr.score), 0)::int AS best_score,
+                    COUNT(gr.run_id)::int AS plays
+                FROM student_app_state sas
+                JOIN students s ON s.student_id = sas.student_id
+                LEFT JOIN game_runs gr
+                       ON gr.student_id = sas.student_id
+                       {join_filter}
+                WHERE s.is_active = TRUE
+                GROUP BY sas.student_id, s.student_name, sas.level
+                ORDER BY best_score DESC, plays DESC, sas.level DESC, sas.student_id ASC
+                LIMIT %s
+            """, (*params, limit))
+            rows = cur.fetchall()
+
+    return [
+        {
+            "rank": i + 1,
+            "student_id": row["student_id"],
+            "student_name": row["student_name"],
+            "level": row["level"],
+            "best_score": row["best_score"],
+            "plays": row["plays"],
+        }
+        for i, row in enumerate(rows)
+    ]
+
+
+# ── 학습 진행도 ───────────────────────────────────────────────────────────────
+
+_QUIZ_TICKET_REWARD = 1
+
+
+def get_lesson_progress(student_id: int) -> list[dict]:
+    """학생의 모든 lesson 진행도. 없으면 빈 리스트."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT student_id, lesson_id, current_step, edu_done, quiz_done,
+                       quiz_score, completed_at, updated_at
+                FROM lesson_progress
+                WHERE student_id = %s
+                ORDER BY updated_at DESC
+            """, (student_id,))
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_lesson_progress(
+    student_id: int,
+    lesson_id: str,
+    current_step: int | None = None,
+    edu_done: bool | None = None,
+    quiz_done: bool | None = None,
+) -> dict:
+    """
+    부분 업데이트. None은 기존 값 유지. (student_id, lesson_id)에 row 없으면 새로 만듦.
+    quiz_done이 처음 True가 될 때 completed_at 자동 세팅.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO lesson_progress (student_id, lesson_id)
+                VALUES (%s, %s)
+                ON CONFLICT (student_id, lesson_id) DO NOTHING
+            """, (student_id, lesson_id))
+            cur.execute("""
+                SELECT current_step, edu_done, quiz_done
+                FROM lesson_progress
+                WHERE student_id = %s AND lesson_id = %s
+                FOR UPDATE
+            """, (student_id, lesson_id))
+            curr = cur.fetchone()
+
+            new_step = current_step if current_step is not None else curr["current_step"]
+            new_edu = edu_done if edu_done is not None else curr["edu_done"]
+            new_quiz = quiz_done if quiz_done is not None else curr["quiz_done"]
+            quiz_just_completed = new_quiz and not curr["quiz_done"]
+
+            cur.execute("""
+                UPDATE lesson_progress
+                   SET current_step = %s,
+                       edu_done = %s,
+                       quiz_done = %s,
+                       completed_at = CASE WHEN %s THEN NOW() ELSE completed_at END,
+                       updated_at = NOW()
+                 WHERE student_id = %s AND lesson_id = %s
+                RETURNING student_id, lesson_id, current_step, edu_done, quiz_done,
+                          quiz_score, completed_at, updated_at
+            """, (new_step, new_edu, new_quiz, quiz_just_completed, student_id, lesson_id))
+            updated = cur.fetchone()
+        conn.commit()
+    return dict(updated)
+
+
+def complete_lesson_quiz(
+    student_id: int,
+    lesson_id: str,
+    quiz_score: int | None = None,
+) -> dict:
+    """
+    퀴즈 완료 처리. 첫 완료면 ticket +1 지급 (idempotent — 두 번째부터는 상태만 갱신).
+
+    Returns:
+      { progress, app_state, first_completion: bool, ticket_awarded: int }
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO lesson_progress (student_id, lesson_id)
+                VALUES (%s, %s)
+                ON CONFLICT (student_id, lesson_id) DO NOTHING
+            """, (student_id, lesson_id))
+            cur.execute("""
+                SELECT quiz_done
+                FROM lesson_progress
+                WHERE student_id = %s AND lesson_id = %s
+                FOR UPDATE
+            """, (student_id, lesson_id))
+            curr = cur.fetchone()
+            first_completion = not curr["quiz_done"]
+
+            cur.execute("""
+                UPDATE lesson_progress
+                   SET quiz_done = TRUE,
+                       quiz_score = COALESCE(%s, quiz_score),
+                       completed_at = CASE WHEN %s THEN NOW() ELSE completed_at END,
+                       updated_at = NOW()
+                 WHERE student_id = %s AND lesson_id = %s
+                RETURNING student_id, lesson_id, current_step, edu_done, quiz_done,
+                          quiz_score, completed_at, updated_at
+            """, (quiz_score, first_completion, student_id, lesson_id))
+            progress = cur.fetchone()
+
+            cur.execute("""
+                INSERT INTO student_app_state (student_id)
+                VALUES (%s)
+                ON CONFLICT (student_id) DO NOTHING
+            """, (student_id,))
+
+            if first_completion:
+                cur.execute("""
+                    UPDATE student_app_state
+                       SET ticket_count = ticket_count + %s,
+                           updated_at = NOW()
+                     WHERE student_id = %s
+                    RETURNING student_id, level, current_xp, ticket_count, heart_count
+                """, (_QUIZ_TICKET_REWARD, student_id))
+            else:
+                cur.execute("""
+                    SELECT student_id, level, current_xp, ticket_count, heart_count
+                    FROM student_app_state
+                    WHERE student_id = %s
+                """, (student_id,))
+            app_state = cur.fetchone()
+
+        conn.commit()
+
+    return {
+        "progress": dict(progress),
+        "app_state": dict(app_state),
+        "first_completion": first_completion,
+        "ticket_awarded": _QUIZ_TICKET_REWARD if first_completion else 0,
+    }
+
+
 def get_student_info_db(student_id: int) -> dict | None:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -683,6 +1489,17 @@ def save_mission_result(
             )
             row = cur.fetchone()
             row_id = row[0] if row else None
+            if row_id is not None:
+                cur.execute(
+                    """
+                    UPDATE student_daily_missions
+                    SET status = %s, updated_at = NOW()
+                    WHERE student_id = %s
+                      AND mission_id = %s
+                      AND assigned_date = %s::date
+                    """,
+                    (status, student_id, mission_id, today),
+                )
         conn.commit()
     return row_id
 

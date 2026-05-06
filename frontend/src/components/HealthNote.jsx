@@ -435,24 +435,24 @@ export default function HealthNote({
           style={{
             height: 137,
             borderRadius: 30,
-            padding: "20px 22px",
+            padding: "18px 20px",
             border: "1.5px solid #F2C5BA",
           }}
         >
-          <div className="flex items-end justify-between h-full gap-2">
+          <div className="flex items-center justify-between h-full gap-3">
             <div className="flex-1 min-w-0 self-center">
               <h2
                 className="font-noto text-gray-900"
                 style={{
-                  fontSize: 17,
+                  fontSize: 16,
                   fontWeight: 500,
                   letterSpacing: "-0.43px",
-                  lineHeight: "20px",
-                  marginBottom: 8,
+                  lineHeight: "21px",
+                  marginBottom: 7,
+                  wordBreak: "keep-all",
                 }}
               >
-                알레르기와<br />
-                줄이고 싶은 음식을 관리해요
+                알레르기와 줄이고 싶은 음식을 관리해요
               </h2>
               <p
                 className="font-sejong text-gray-500"
@@ -462,13 +462,13 @@ export default function HealthNote({
                 미션을 할 수 있도록 골라주세요
               </p>
             </div>
-            <div className="relative flex-shrink-0" style={{ width: 115, height: 115, marginBottom: -8 }}>
+            <div className="relative flex-shrink-0" style={{ width: 98, height: 104, marginBottom: -4 }}>
               <img
                 src={badge}
                 alt=""
                 aria-hidden="true"
                 className="absolute z-10"
-                style={{ top: -2, left: -10, width: 50, height: 50 }}
+                style={{ top: -2, left: -8, width: 44, height: 44 }}
               />
               <img
                 src={tomatoHealth}

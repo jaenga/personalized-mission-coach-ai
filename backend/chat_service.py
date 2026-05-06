@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from database import (
     _kst_today,
+    award_mission_xp,
     fetch_messages,
     fetch_profile,
     find_mission_by_user_text,
@@ -595,6 +596,48 @@ def _prepend_db_action_ack(ai_message: str, exec_results: ExecResults | None) ->
     return ai_message
 
 
+def _award_mission_xp_if_success(
+    exec_results: ExecResults | None,
+    student_id: int | None,
+    mission_id: int | None,
+) -> dict | None:
+    """submit이 SAVED + result_type=success면 XP 지급 + xp_history 기록!
+
+    Returns award dict (xp_gain, ticket_gain, level_before/after, leveled_up, app_state)
+    또는 조건 미충족/실패 시 None
+    """
+    if not student_id or not mission_id:
+        return None
+    submit = getattr(exec_results, "submit", None)
+    if not submit:
+        return None
+    status = getattr(submit.status, "value", submit.status)
+    if status != "saved" or submit.result_type != "success":
+        return None
+    try:
+        award = award_mission_xp(student_id, mission_id)
+        print(f"[XP] +{award['xp_gain']} xp, +{award['ticket_gain']} ticket"
+              f" (lv {award['level_before']} -> {award['level_after']})")
+        return award
+    except Exception as e:
+        print(f"[XP] award failed: {e}")
+        return None
+
+
+def _attach_xp_award_to_debug(debug: dict, award: dict | None) -> None:
+    """award_mission_xp 결과를 debug payload에 병합."""
+    if not award:
+        return
+    debug["app_state"] = award["app_state"]
+    debug["reward"] = {
+        "type": "mission_success",
+        "xp": award["xp_gain"],
+        "tickets": award["ticket_gain"],
+        "leveled_up": award["leveled_up"],
+        "level_after": award["level_after"],
+    }
+
+
 async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     mission_title = body.mission or "오늘의 미션"
     is_greet = body.message == "__GREET__"
@@ -845,22 +888,32 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         for c in rag_result["chunks"]
     ]
 
+    debug = {
+        "intent": intent,
+        "clarify_reason": clarify_reason,
+        "fn_args": fn_args,
+        "violations": violations,
+        "system_prompt": system_prompt,
+        "history_turns": len(messages),
+        "model": OLLAMA_MODEL,
+        "timing": {"intent_ms": intent_ms, "qwen_ms": qwen_ms, "llm_ms": call1_ms},
+        "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
+    }
+    if exec_results and exec_results.submit:
+        debug["submit_result"] = {
+            "status": exec_results.submit.status.value,
+            "result_type": exec_results.submit.result_type,
+            "db_changed": exec_results.submit.db_changed,
+        }
+    xp_award = _award_mission_xp_if_success(exec_results, student_id, mission_id)
+    _attach_xp_award_to_debug(debug, xp_award)
+
     return {
         "response": ai_message,
         "mission_completed": mission_status is not None,
         "detected_function": detected_function,
         "sources": sources,
-        "debug": {
-            "intent": intent,
-            "clarify_reason": clarify_reason,
-            "fn_args": fn_args,
-            "violations": violations,
-            "system_prompt": system_prompt,
-            "history_turns": len(messages),
-            "model": OLLAMA_MODEL,
-            "timing": {"intent_ms": intent_ms, "qwen_ms": qwen_ms, "llm_ms": call1_ms},
-            "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
-        },
+        "debug": debug,
     }
 
 
@@ -1192,6 +1245,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 "result_type": exec_results.submit.result_type,
                 "db_changed": exec_results.submit.db_changed,
             }
+        xp_award = _award_mission_xp_if_success(exec_results, student_id, mission_id)
+        _attach_xp_award_to_debug(debug_payload, xp_award)
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
         llm_save = _filter_ai_response(

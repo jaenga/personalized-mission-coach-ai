@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, saveProfile, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
-import ChatWindow from "./components/ChatWindow.jsx";
-import DebugPanel from "./components/DebugPanel.jsx";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import InfoInput from "./components/InfoInput.jsx";
@@ -17,6 +15,37 @@ import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
 import GameRanking from "./components/GameRanking.jsx";
 
+// ── 화면 상수 ──────────────────────────────────────────────────────────────
+const SCREENS = {
+  LOGIN: "login",
+  SIGNUP: "signup",
+  SIGNUP_CONFIRM: "signup_confirm",
+  SIGNUP_FAREWELL: "signup_farewell",
+  ONBOARD_INFO: "onboard_info",
+  ONBOARD_HEALTH: "onboard_health",
+  ONBOARD_WELCOME: "onboard_welcome",
+  HOME: "home",
+  CHAT: "chat",
+  DRAW: "draw",
+  SETTINGS: "settings",
+  SETTINGS_HEALTH_EDIT: "settings_health_edit",
+  RANKING: "ranking",
+  LEARN: "learn",
+  GAME: "game",
+  GAME_RANKING: "game_ranking",
+};
+
+// 컴포넌트 onNavigate(key) → SCREENS 매핑
+const NAV_KEY_TO_SCREEN = {
+  home: SCREENS.HOME,
+  coach: SCREENS.CHAT,
+  learn: SCREENS.LEARN,
+  draw: SCREENS.DRAW,
+  settings: SCREENS.SETTINGS,
+  rank: SCREENS.RANKING,
+};
+
+// ── 세션/프로필 헬퍼 ───────────────────────────────────────────────────────
 function createSessionId() {
   const id = crypto.randomUUID();
   localStorage.setItem("chat_session_id", id);
@@ -35,11 +64,10 @@ function getStoredProfile() {
   }
 }
 
-const LEVEL_THRESHOLDS = { 1: 5, 2: 12, 3: 20, 4: 33, 5: 50 };
-const MAX_HEARTS = 5;
-const MISSION_EXP_BY_DIFFICULTY = { easy: 5, medium: 10, hard: 12 };
-const ATTENDANCE_KEY = "daily_attendance_ticket_date";
-const USER_STATS_KEY = "user_stats";
+// ── 레벨/스탯 상수 ─────────────────────────────────────────────────────────
+// 누적 XP 임계값: key = 그 레벨에 도달하기 위해 필요한 누적 XP. 백엔드 _LEVEL_THRESHOLDS와 일치해야 함.
+// 프론트에선 maxXp(progress 바 표시) 계산용으로만 사용 — XP/level 자체는 백엔드 응답을 그대로 반영.
+const LEVEL_THRESHOLDS = { 2: 5, 3: 17, 4: 37, 5: 70, 6: 150 };
 const HEALTH_NOTE_KEY = "health_note";
 
 function getStoredHealthNote() {
@@ -58,81 +86,75 @@ function saveHealthNote(note) {
 // 신규 가입자 기본값 — Lv1, 0 EXP, 뽑기권 0, 하트 1
 const FRESH_STATS = { level: 1, currentXp: 0, ticketCount: 0, heartCount: 1 };
 
-function getStoredStats() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(USER_STATS_KEY) || "null");
-    if (saved && typeof saved.level === "number") return saved;
-  } catch {
-    // ignore
-  }
-  return FRESH_STATS;
-}
-
-function applyExp(level, currentXp, gain) {
-  let lv = level;
-  let xp = currentXp + gain;
-  while (LEVEL_THRESHOLDS[lv] && xp >= LEVEL_THRESHOLDS[lv]) {
-    xp -= LEVEL_THRESHOLDS[lv];
-    lv += 1;
-  }
-  return { level: lv, xp, maxXp: LEVEL_THRESHOLDS[lv] || 100 };
-}
-
-// 레벨 + 레벨 내 XP → 누적 XP (랭킹의 levelFromXp 5/17/37/70 기준에 맞춤)
-function cumulativeXp(level, currentXp) {
-  let total = 0;
-  for (let i = 1; i < level; i++) total += LEVEL_THRESHOLDS[i] || 0;
-  return total + currentXp;
-}
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export default function App() {
+  // ── 화면 상태 ────────────────────────────────────────────────────────────
+  const [screen, setScreen] = useState(() =>
+    getStoredProfile() ? SCREENS.HOME : SCREENS.LOGIN
+  );
+  const [screenHistory, setScreenHistory] = useState([]);
+
+  // 화면 이동 헬퍼
+  function goTo(next) {
+    if (next === screen) return;
+    setScreenHistory((h) => [...h, screen]);
+    setScreen(next);
+  }
+  function goBack(fallback = SCREENS.HOME) {
+    setScreenHistory((h) => {
+      if (h.length === 0) {
+        setScreen(fallback);
+        return [];
+      }
+      setScreen(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  }
+  function resetTo(next) {
+    setScreen(next);
+    setScreenHistory([]);
+  }
+  function navHandler(currentScreen) {
+    return (key) => {
+      const target = NAV_KEY_TO_SCREEN[key];
+      if (target) {
+        if (target === currentScreen) return;
+        goTo(target);
+      }
+    };
+  }
+
+  // ── 인터럽트/오버레이 상태 (어느 화면에서든 뜸) ─────────────────────────
+  const [leveledUpTo, setLeveledUpTo] = useState(null);
+  const [pendingSignup, setPendingSignup] = useState(null);
+  const [signupFarewell, setSignupFarewell] = useState(false);
+
+  // ── 핵심 데이터 상태 ─────────────────────────────────────────────────────
   const [routeHash, setRouteHash] = useState(() =>
     typeof window !== "undefined" ? window.location.hash : ""
   );
+  const [profile, setProfile] = useState(getStoredProfile);
   const [mission, setMission] = useState(null);
+  const [stats, setStats] = useState({ streak_days: 0, success_dates: [] });
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pipeline, setPipeline] = useState([]); // 실시간 파이프라인 단계
   const [debugMap, setDebugMap] = useState({});
   const [selectedDebugId, setSelectedDebugId] = useState(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
-  const [profile, setProfile] = useState(getStoredProfile);
 
-  // 로그인 화면용 상태
-  const [showWelcome, setShowWelcome] = useState(true);
+  // 로그인/온보딩 폼 상태
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
-  const [needsInfoInput, setNeedsInfoInput] = useState(false);
-  const [needsHealthNote, setNeedsHealthNote] = useState(false);
-  const [needsWelcomeCelebrate, setNeedsWelcomeCelebrate] = useState(false);
-  const [showHome, setShowHome] = useState(false);
-  const [showNewChat, setShowNewChat] = useState(false);
-  const [showDraw, setShowDraw] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showRanking, setShowRanking] = useState(false);
-  const [showLearn, setShowLearn] = useState(false);
-  const [editHealthNote, setEditHealthNote] = useState(false);
   const [extraInfo, setExtraInfo] = useState(null);
   const [healthNote, setHealthNote] = useState(() => getStoredHealthNote());
-  const [level, setLevel] = useState(() => getStoredStats().level);
-  const [currentXp, setCurrentXp] = useState(() => getStoredStats().currentXp);
-  const [maxXp, setMaxXp] = useState(() => LEVEL_THRESHOLDS[getStoredStats().level] || 100);
-  const [ticketCount, setTicketCount] = useState(() => getStoredStats().ticketCount);
-  const [heartCount, setHeartCount] = useState(() => getStoredStats().heartCount);
-  const [leveledUpTo, setLeveledUpTo] = useState(null); // 레벨업 시 표시할 새 레벨
 
-  // 통계 변경 시 localStorage에 저장
-  useEffect(() => {
-    localStorage.setItem(
-      USER_STATS_KEY,
-      JSON.stringify({ level, currentXp, ticketCount, heartCount })
-    );
-  }, [level, currentXp, ticketCount, heartCount]);
-  const [firstDrawOfDay, setFirstDrawOfDay] = useState(true);
+  // 레벨/리워드
+  const [level, setLevel] = useState(FRESH_STATS.level);
+  const [currentXp, setCurrentXp] = useState(FRESH_STATS.currentXp);
+  const [maxXp, setMaxXp] = useState(LEVEL_THRESHOLDS[FRESH_STATS.level + 1] ?? 100);
+  const [ticketCount, setTicketCount] = useState(FRESH_STATS.ticketCount);
+  const [heartCount, setHeartCount] = useState(FRESH_STATS.heartCount);
+  const [appStateLoaded, setAppStateLoaded] = useState(false);
 
   useEffect(() => {
     function handleHashChange() {
@@ -142,56 +164,87 @@ export default function App() {
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
-  function addExp(gain) {
-    if (!gain) return;
-    const next = applyExp(level, currentXp, gain);
-    setLevel(next.level);
-    setCurrentXp(next.xp);
-    setMaxXp(next.maxXp);
-    if (next.level > level) {
-      setLeveledUpTo(next.level); // 레벨업 → 축하 화면 표시
-    }
+  // ── 스탯 변경 헬퍼 ───────────────────────────────────────────────────────
+  // 미션 성공/가챠 보상에 따른 XP/하트 증가는 백엔드가 단독으로 결정함.
+  // 프론트는 응답으로 받은 app_state를 setApp State에 반영만 함.
+
+  function applyAppStateFromBackend(s, leveledUp = false) {
+    if (!s) return;
+    setLevel(s.level);
+    setCurrentXp(s.current_xp);
+    setMaxXp(LEVEL_THRESHOLDS[s.level + 1] ?? 100);
+    setTicketCount(s.ticket_count);
+    setHeartCount(s.heart_count);
+    if (leveledUp) setLeveledUpTo(s.level);
   }
 
-  function addTickets(amount) {
-    setTicketCount((count) => Math.max(0, count + amount));
-  }
-
-  function addHearts(amount) {
-    setHeartCount((count) => Math.max(0, Math.min(MAX_HEARTS, count + amount)));
-  }
-
-  function spendHeart(amount = 1) {
-    if (heartCount < amount) return false;
-    setHeartCount((count) => Math.max(0, count - amount));
+  async function spendHeart(amount = 1) {
+    if (!profile?.student_id || heartCount < amount) return false;
+    const result = await adjustHeart(profile.student_id, -amount);
+    applyAppStateFromBackend(result.app_state);
     return true;
   }
 
-  function refundHeart(amount = 1) {
-    setHeartCount((count) => Math.min(MAX_HEARTS, count + amount));
+  async function refundHeart(amount = 1) {
+    if (!profile?.student_id) return;
+    const result = await adjustHeart(profile.student_id, amount);
+    applyAppStateFromBackend(result.app_state);
   }
 
-  function awardAttendanceIfNeeded() {
-    const today = todayKey();
-    if (localStorage.getItem(ATTENDANCE_KEY) === today) return;
-    localStorage.setItem(ATTENDANCE_KEY, today);
-    addTickets(1);
+  // 가챠 한 판 — 백엔드가 보상 결정 + 상태 갱신, 응답을 그대로 반영하고 결과 반환.
+  async function handleDraw() {
+    if (!profile?.student_id) throw new Error("로그인 필요");
+    const result = await claimDrawReward(profile.student_id);
+    applyAppStateFromBackend(result.app_state, result.leveled_up);
+    return result;
   }
 
-  function awardMissionSuccess(difficulty) {
-    const key = (difficulty || mission?.difficulty || "easy").toLowerCase();
-    const gain = MISSION_EXP_BY_DIFFICULTY[key] ?? MISSION_EXP_BY_DIFFICULTY.easy;
-    addExp(gain);
-    addTickets(1);
+  function refreshMissionData() {
+    if (!profile?.student_id) return;
+    fetchMissionByStudent(profile.student_id)
+      .then(setMission)
+      .catch(() => {});
+    fetchStudentStats(profile.student_id)
+      .then(setStats)
+      .catch(() => {});
   }
 
-  // 미션 로드 (프로필 확정 후)
+  // 미션/통계 로드 (프로필 확정 후)
   useEffect(() => {
-    if (!profile) return;
-    awardAttendanceIfNeeded();
+    if (!profile) {
+      setAppStateLoaded(false);
+      return;
+    }
     fetchMissionByStudent(profile.student_id)
       .then(setMission)
       .catch(() => setMission({ mission_id: 1, mission_name: "오늘의 미션" }));
+    fetchStudentStats(profile.student_id)
+      .then(setStats)
+      .catch(() => setStats({ streak_days: 0, success_dates: [] }));
+    // 출석 체크 — 응답으로 받는 app_state가 (오늘 첫 진입이면 ticket+1 반영된) 최신값.
+    // 실패 시 fetchAppState로 fallback.
+    claimAttendance(profile.student_id)
+      .then((res) => {
+        const s = res.app_state;
+        setLevel(s.level);
+        setCurrentXp(s.current_xp);
+        setMaxXp(LEVEL_THRESHOLDS[s.level + 1] ?? 100);
+        setTicketCount(s.ticket_count);
+        setHeartCount(s.heart_count);
+        setAppStateLoaded(true);
+      })
+      .catch(() => {
+        fetchAppState(profile.student_id)
+          .then((state) => {
+            setLevel(state.level ?? FRESH_STATS.level);
+            setCurrentXp(state.current_xp ?? FRESH_STATS.currentXp);
+            setMaxXp(LEVEL_THRESHOLDS[state.level + 1] ?? 100);
+            setTicketCount(state.ticket_count ?? FRESH_STATS.ticketCount);
+            setHeartCount(state.heart_count ?? FRESH_STATS.heartCount);
+            setAppStateLoaded(true);
+          })
+          .catch(() => setAppStateLoaded(true));
+      });
   }, [profile]);
 
   // 채팅 히스토리 로드
@@ -217,33 +270,54 @@ export default function App() {
   function resetUserStats() {
     setLevel(FRESH_STATS.level);
     setCurrentXp(FRESH_STATS.currentXp);
-    setMaxXp(LEVEL_THRESHOLDS[FRESH_STATS.level]);
+    setMaxXp(LEVEL_THRESHOLDS[FRESH_STATS.level + 1]);
     setTicketCount(FRESH_STATS.ticketCount);
     setHeartCount(FRESH_STATS.heartCount);
   }
 
+  // ── 인증/온보딩 핸들러 ───────────────────────────────────────────────────
   async function handleSignup({ name, phone4 }) {
     setLoginError("");
     setLoginLoading(true);
-    // 디자인 미리보기용: 백엔드 없이 바로 다음 단계로 진행
-    const MOCK_MODE = true;
-    if (MOCK_MODE) {
-      await new Promise((r) => setTimeout(r, 400));
-      const saved = { student_id: 0, student_name: name };
-      setProfile(saved);
-      resetUserStats();
-      setNeedsInfoInput(true);
-      setLoginLoading(false);
-      return;
-    }
     try {
       const student = await verifyStudent(name, phone4);
-      await saveProfile(sessionId, student.student_id, student.student_name);
+      const profileResult = await saveProfile(sessionId, student.student_id, student.student_name);
+      const assignedMission = profileResult.mission ?? null;
       const saved = { student_id: student.student_id, student_name: student.student_name };
       localStorage.setItem("user_profile", JSON.stringify(saved));
       setProfile(saved);
+      if (assignedMission) setMission(assignedMission);
+      // 출석 체크는 profile useEffect에서 claimAttendance로 자동 호출됨.
+      resetTo(SCREENS.HOME);
+    } catch (err) {
+      if (err.status === 404) {
+        setPendingSignup({ name, phone4 });
+        setLoginError("");
+        goTo(SCREENS.SIGNUP_CONFIRM);
+        return;
+      }
+      setLoginError(err.message);
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleConfirmSignup() {
+    if (!pendingSignup) return;
+    setLoginError("");
+    setLoginLoading(true);
+    try {
+      const demo = await registerDemoStudent(pendingSignup.name, pendingSignup.phone4);
+      const student = demo.student;
+      const profileResult = await saveProfile(sessionId, student.student_id, student.student_name);
+      const assignedMission = profileResult.mission ?? demo.mission ?? null;
+      const saved = { student_id: student.student_id, student_name: student.student_name };
+      localStorage.setItem("user_profile", JSON.stringify(saved));
+      setProfile(saved);
+      if (assignedMission) setMission(assignedMission);
       resetUserStats();
-      setNeedsInfoInput(true);
+      setPendingSignup(null);
+      resetTo(SCREENS.ONBOARD_INFO);
     } catch (err) {
       setLoginError(err.message);
     } finally {
@@ -251,76 +325,78 @@ export default function App() {
     }
   }
 
+  function handleCancelSignup() {
+    setPendingSignup(null);
+    setSignupFarewell(true);
+    setLoginError("");
+    goTo(SCREENS.SIGNUP_FAREWELL);
+    setTimeout(() => {
+      setSignupFarewell(false);
+      resetTo(SCREENS.LOGIN);
+    }, 1200);
+  }
+
   function handleInfoSubmit(info) {
     setExtraInfo(info);
-    setNeedsInfoInput(false);
-    setNeedsHealthNote(true);
+    goTo(SCREENS.ONBOARD_HEALTH);
   }
 
   function handleHealthSubmit(note) {
     setHealthNote(note);
     saveHealthNote(note);
-    setNeedsHealthNote(false);
-    setNeedsWelcomeCelebrate(true);
+    goTo(SCREENS.ONBOARD_WELCOME);
   }
 
   function handleHealthSkip() {
     setHealthNote(null);
     saveHealthNote(null);
-    setNeedsHealthNote(false);
-    setNeedsWelcomeCelebrate(true);
+    goTo(SCREENS.ONBOARD_WELCOME);
   }
 
   function handleWelcomeContinue() {
-    awardAttendanceIfNeeded();
-    setNeedsWelcomeCelebrate(false);
-    setShowHome(true);
+    // 출석 체크는 profile useEffect에서 claimAttendance로 자동 호출됨 (가입 시 이미 발동).
+    resetTo(SCREENS.HOME);
   }
 
   function handleHealthBack() {
-    setNeedsHealthNote(false);
-    setNeedsInfoInput(true);
+    goBack(SCREENS.ONBOARD_INFO);
   }
 
   async function handleReset() {
-    if (loading) return;
+    // 채팅 스트리밍 중이어도 로그아웃은 항상 통과시킴 — 진행 중인 요청은 그냥 버려짐.
+    setLoading(false);
     try {
       await clearChatHistory(sessionId);
     } catch {
-      // 삭제 실패해도 초기화
+      // 삭제 실패해도 초기화 진행
     }
     localStorage.removeItem("user_profile");
-    localStorage.removeItem(USER_STATS_KEY);
+    // 클라 잔여 캐시(예: 옛 빌드 흔적) 정리만.
     localStorage.removeItem("tommy_lesson_progress");
     localStorage.removeItem("tommy_run_records");
     localStorage.removeItem(HEALTH_NOTE_KEY);
     setSessionId(createSessionId());
     setProfile(null);
     setMission(null);
+    setStats({ streak_days: 0, success_dates: [] });
     setMessages([]);
     setDebugMap({});
     setSelectedDebugId(null);
     setLoginError("");
-    setShowWelcome(true);
-    setNeedsInfoInput(false);
+    setPendingSignup(null);
+    setSignupFarewell(false);
     setExtraInfo(null);
-    setNeedsHealthNote(false);
     setHealthNote(null);
-    setNeedsWelcomeCelebrate(false);
-    setShowHome(false);
-    setShowNewChat(false);
-    setShowDraw(false);
-    setShowSettings(false);
-    setShowRanking(false);
-    setShowLearn(false);
     setLevel(FRESH_STATS.level);
     setCurrentXp(FRESH_STATS.currentXp);
-    setMaxXp(LEVEL_THRESHOLDS[FRESH_STATS.level]);
+    setMaxXp(LEVEL_THRESHOLDS[FRESH_STATS.level + 1]);
     setTicketCount(FRESH_STATS.ticketCount);
     setHeartCount(FRESH_STATS.heartCount);
-    setFirstDrawOfDay(true);
+    setAppStateLoaded(false);
+    resetTo(SCREENS.LOGIN);
   }
 
+  // ── 채팅 핸들러 ──────────────────────────────────────────────────────────
   async function requestGreeting(missionTitle) {
     setLoading(true);
     try {
@@ -339,10 +415,10 @@ export default function App() {
   async function handleSend(text) {
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
-    setPipeline([]); // 파이프라인 초기화
+    setPipeline([]);
     const debugId = crypto.randomUUID();
+    let shouldRefreshMissionAfterDone = false;
 
-    // 빈 어시스턴트 버블 먼저 추가
     setMessages((prev) => [...prev, { role: "assistant", content: "", debugId, streaming: true }]);
 
     try {
@@ -353,7 +429,6 @@ export default function App() {
         {
           onPipeline: (stage) => {
             setPipeline((prev) => [...prev, stage]);
-            // 디버그맵에도 최신 파이프라인 정보 반영
             if (stage.stage === "intent") {
               setDebugMap((prev) => ({
                 ...prev,
@@ -362,12 +437,26 @@ export default function App() {
               setSelectedDebugId(debugId);
             }
             if (stage.stage === "qwen") {
+              const calls = Array.isArray(stage.calls)
+                ? stage.calls
+                : stage.fn
+                  ? [[stage.fn, stage.args || {}]]
+                  : [];
+              const [detectedFn, detectedArgs = {}] = calls[0] || [];
+              if (
+                calls.some(([fn]) =>
+                  fn === "request_mission_adjustment" || fn === "cancel_mission_action"
+                )
+              ) {
+                shouldRefreshMissionAfterDone = true;
+              }
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: {
                   ...prev[debugId],
-                  detected_function: stage.fn,
-                  fn_args: stage.args,
+                  detected_function: detectedFn,
+                  fn_args: detectedArgs,
+                  fn_calls: calls,
                 },
               }));
             }
@@ -381,28 +470,37 @@ export default function App() {
           },
           onDone: (debug) => {
             if (debug) {
-              if (
-                debug.submit_result?.status === "saved" &&
-                debug.submit_result?.db_changed &&
-                debug.submit_result?.result_type === "success"
-              ) {
-                awardMissionSuccess();
+              // 백엔드가 미션 성공 시 XP/티켓 지급 후 새 app_state를 응답에 포함시킴.
+              // 프론트는 그 값을 그대로 반영만 함 — 자체 계산 X.
+              if (debug.app_state) {
+                const s = debug.app_state;
+                setLevel(s.level);
+                setCurrentXp(s.current_xp);
+                setMaxXp(LEVEL_THRESHOLDS[s.level + 1] ?? 100);
+                setTicketCount(s.ticket_count);
+                setHeartCount(s.heart_count);
+                if (debug.reward?.leveled_up) {
+                  setLeveledUpTo(s.level);
+                }
+              }
+              if (debug.submit_result?.status === "saved" && profile?.student_id) {
+                refreshMissionData();
               }
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: { ...prev[debugId], ...debug },
               }));
-              // adjustment 후 미션 제목 갱신
-              if (debug.fn_args?.adjustment_type || debug.detected_function === "request_mission_adjustment") {
-                fetchMissionByStudent(profile.student_id)
-                  .then(setMission)
-                  .catch(() => {});
+              if (
+                shouldRefreshMissionAfterDone ||
+                debug.fn_args?.adjustment_type ||
+                debug.detected_function === "request_mission_adjustment"
+              ) {
+                refreshMissionData();
               }
             }
           },
         }
       );
-      // 스트리밍 완료 — 파이프라인 로그 숨김
       setMessages((prev) =>
         prev.map((m) => (m.debugId === debugId ? { ...m, streaming: false } : m))
       );
@@ -421,7 +519,7 @@ export default function App() {
     }
   }
 
-  // ── 레벨업 미리보기 (URL #levelup 또는 #levelup=3) ──────────────────────────
+  // ── 해시 라우트 (디버그 프리뷰 전용 — 화면 상태와 독립) ───────────────────
   const hash = routeHash;
   if (hash.startsWith("#levelup")) {
     const m = hash.match(/=(\d)/);
@@ -429,22 +527,22 @@ export default function App() {
     return <LevelUp level={lv} onContinue={() => { window.location.hash = ""; }} />;
   }
   if (hash.startsWith("#ranking")) {
-    return <Ranking studentName={profile?.student_name || "민준"} currentXp={cumulativeXp(level, currentXp)} onNavigate={() => { window.location.hash = ""; }} />;
+    return <Ranking studentId={profile?.student_id} onNavigate={() => { window.location.hash = ""; }} />;
   }
   if (hash.startsWith("#game-ranking")) {
-    return <GameRanking studentName={profile?.student_name || "민준"} currentLevel={level} onNavigate={() => { window.location.hash = ""; }} />;
+    return <GameRanking studentId={profile?.student_id} onNavigate={() => { window.location.hash = ""; }} />;
   }
   if (hash.startsWith("#learn")) {
     return (
       <LearnScreen
+        studentId={profile?.student_id}
+        todayMission={{ title: mission?.mission_name || "오늘의 미션" }}
         level={level}
         currentXp={currentXp}
         maxXp={maxXp}
         ticketCount={ticketCount}
         heartCount={heartCount}
-        onQuizReward={(reward) => {
-          addTickets(reward.tickets || 0);
-        }}
+        onAppStateUpdate={(s) => applyAppStateFromBackend(s)}
         onNavigate={() => { window.location.hash = ""; }}
       />
     );
@@ -452,288 +550,192 @@ export default function App() {
   if (hash.startsWith("#game")) {
     return (
       <GameScreen
+        studentId={profile?.student_id}
         level={level}
         heartCount={heartCount}
         onSpendHeart={() => spendHeart(1)}
         onRefundHeart={() => refundHeart(1)}
+        onRecordRun={({ score, durationSec }) =>
+          profile?.student_id
+            ? recordGameRun({ studentId: profile.student_id, gameType: "run", score, durationSec }).catch(() => null)
+            : null
+        }
         onNavigate={() => { window.location.hash = ""; }}
       />
     );
   }
 
-  // ── 레벨업 축하 화면 (다른 화면보다 우선) ──────────────────────────────────
+  // ── 레벨업 오버레이 (다른 화면보다 우선) ─────────────────────────────────
   if (leveledUpTo) {
     return (
       <LevelUp
         level={leveledUpTo}
         onContinue={() => {
           setLeveledUpTo(null);
-          // 홈으로 이동 (다른 화면 닫기)
-          setShowNewChat(false);
-          setShowDraw(false);
-          setShowSettings(false);
-          setShowRanking(false);
-          setShowLearn(false);
-          setShowHome(true);
+          resetTo(SCREENS.HOME);
         }}
       />
     );
   }
 
-  // ── 시작 화면 (Figma 로그인 화면) ────────────────────────────────────────────
-  if (!profile && showWelcome) {
-    return (
-      <Login onStart={() => setShowWelcome(false)} />
-    );
-  }
+  // ── 화면별 렌더 ──────────────────────────────────────────────────────────
+  switch (screen) {
+    case SCREENS.LOGIN:
+      return <Login onStart={() => goTo(SCREENS.SIGNUP)} />;
 
-  // ── 회원가입 화면 (Figma 1. 로그인 화면/회원가입) ─────────────────────────────
-  if (!profile) {
-    return (
-      <Signup onSubmit={handleSignup} loading={loginLoading} error={loginError} />
-    );
-  }
-
-  // ── 정보입력 화면 (Figma 1. 로그인 화면/정보입력) ─────────────────────────────
-  if (needsInfoInput) {
-    return (
-      <InfoInput onSubmit={handleInfoSubmit} loading={false} error="" />
-    );
-  }
-
-  // ── 건강노트 화면 (Figma 1. 로그인 화면/건강노트) ─────────────────────────────
-  if (needsHealthNote) {
-    return (
-      <HealthNote
-        onSubmit={handleHealthSubmit}
-        onSkip={handleHealthSkip}
-        onBack={handleHealthBack}
-        loading={false}
-      />
-    );
-  }
-
-  // ── 가입축하 화면 (Figma 1. 로그인 화면/가입축하) ─────────────────────────────
-  if (needsWelcomeCelebrate) {
-    return <Welcome onContinue={handleWelcomeContinue} />;
-  }
-
-  // ── 홈 화면 (Figma 2. 홈 화면) ───────────────────────────────────────────────
-  if (showHome && !showNewChat && !showDraw && !showSettings && !showRanking && !showLearn) {
-    return (
-      <Home
-        studentName={profile?.student_name || "민준"}
-        level={level}
-        currentXp={currentXp}
-        maxXp={maxXp}
-        ticketCount={ticketCount}
-        heartCount={heartCount}
-        onNavigate={(key) => {
-          if (key === "coach") setShowNewChat(true);
-          if (key === "learn") setShowLearn(true);
-          if (key === "draw") setShowDraw(true);
-          if (key === "settings") setShowSettings(true);
-          if (key === "rank") setShowRanking(true);
-        }}
-      />
-    );
-  }
-
-  // ── 배움 길 화면 ────────────────────────────────────────────────────────────
-  if (showLearn) {
-    return (
-      <LearnScreen
-        level={level}
-        currentXp={currentXp}
-        maxXp={maxXp}
-        ticketCount={ticketCount}
-        heartCount={heartCount}
-        onQuizReward={(reward) => {
-          addTickets(reward.tickets || 0);
-        }}
-        onNavigate={(key) => {
-          if (key === "home") setShowLearn(false);
-          if (key === "coach") { setShowLearn(false); setShowNewChat(true); }
-          if (key === "rank") { setShowLearn(false); setShowRanking(true); }
-          if (key === "settings") { setShowLearn(false); setShowSettings(true); }
-          if (key === "draw") { setShowLearn(false); setShowDraw(true); }
-        }}
-      />
-    );
-  }
-
-  // ── 랭킹 화면 ───────────────────────────────────────────────────────────────
-  if (showRanking) {
-    return (
-      <Ranking
-        studentName={profile?.student_name || "민준"}
-        currentXp={cumulativeXp(level, currentXp)}
-        onNavigate={(key) => {
-          if (key === "home") setShowRanking(false);
-          if (key === "coach") { setShowRanking(false); setShowNewChat(true); }
-          if (key === "learn") { setShowRanking(false); setShowLearn(true); }
-          if (key === "settings") { setShowRanking(false); setShowSettings(true); }
-        }}
-      />
-    );
-  }
-
-  // ── 설정 → 건강 노트 수정 모드 ────────────────────────────────────────────────
-  if (showSettings && editHealthNote) {
-    return (
-      <HealthNote
-        initialAllergens={healthNote?.allergens || []}
-        initialCautionFoods={healthNote?.cautionFoods || []}
-        onSubmit={(note) => {
-          setHealthNote(note);
-          saveHealthNote(note);
-          setEditHealthNote(false);
-        }}
-        onSkip={() => setEditHealthNote(false)}
-        onBack={() => setEditHealthNote(false)}
-        loading={false}
-      />
-    );
-  }
-
-  // ── 설정 화면 ───────────────────────────────────────────────────────────────
-  if (showSettings) {
-    return (
-      <Settings
-        studentName={profile?.student_name || "민준"}
-        level={level}
-        heartCount={heartCount}
-        onBack={() => setShowSettings(false)}
-        onOpenHealthNote={() => setEditHealthNote(true)}
-        onLogout={handleReset}
-        onWithdraw={handleReset}
-        onNavigate={(key) => {
-          setShowSettings(false);
-          if (key === "coach") setShowNewChat(true);
-          if (key === "learn") setShowLearn(true);
-          if (key === "rank") setShowRanking(true);
-        }}
-      />
-    );
-  }
-
-  // ── 뽑기 화면 (Figma 3. 뽑기) ────────────────────────────────────────────────
-  if (showDraw) {
-    return (
-      <DrawScreen
-        level={level}
-        currentXp={currentXp}
-        maxXp={maxXp}
-        ticketCount={ticketCount}
-        heartCount={heartCount}
-        firstOfDay={firstDrawOfDay}
-        onSpendTicket={() => addTickets(-1)}
-        onReward={(reward) => {
-          addHearts(reward.heart || 0);
-          addExp(reward.exp || 0);
-          setFirstDrawOfDay(false);
-        }}
-        onBack={() => setShowDraw(false)}
-        onNavigate={(key) => {
-          if (key === "home") setShowDraw(false);
-          if (key === "coach") {
-            setShowDraw(false);
-            setShowNewChat(true);
-          }
-          if (key === "settings") {
-            setShowDraw(false);
-            setShowSettings(true);
-          }
-          if (key === "rank") {
-            setShowDraw(false);
-            setShowRanking(true);
-          }
-          if (key === "learn") {
-            setShowDraw(false);
-            setShowLearn(true);
-          }
-        }}
-      />
-    );
-  }
-
-  // ── 새 채팅 화면 (Figma 3. 채팅 화면) ─────────────────────────────────────────
-  if (showNewChat) {
-    return (
-      <ChatScreen onBack={() => setShowNewChat(false)} />
-    );
-  }
-
-  // ── 채팅 화면 ────────────────────────────────────────────────────────────────
-  return (
-    <div className="app-layout">
-      <header className="app-header">
-        <span>🌟 {profile.student_name}의 코치</span>
-        <button className="reset-btn" onClick={handleReset} disabled={loading}>
-          학생 변경
-        </button>
-      </header>
-
-      {mission && (
-        <div className="mission-banner">
-          🎯 오늘 미션: <strong>{mission.mission_name}</strong>
-        </div>
-      )}
-
-      <div className="main-area">
-        <div className="chat-area">
-          <ChatWindow
-            messages={messages}
-            onSend={handleSend}
-            loading={loading}
-            selectedDebugId={selectedDebugId}
-            onSelectMessage={setSelectedDebugId}
-          />
-          {pipeline.length > 0 && (
-            <div className="pipeline-log">
-              {pipeline.map((s, i) => {
-                if (s.stage === "intent") {
-                  const colors = { A: "#6c757d", B: "#0d6efd", C: "#198754", D: "#dc3545" };
-                  return (
-                    <span key={i} className="pipeline-chip" style={{ borderColor: colors[s.value] ?? "#aaa" }}>
-                      🔍 인텐트 <strong>{s.value}</strong> — {s.label} <em>({s.ms}ms)</em>
-                    </span>
-                  );
-                }
-                if (s.stage === "qwen") {
-                  return (
-                    <span key={i} className="pipeline-chip" style={{ borderColor: "#fd7e14" }}>
-                      ⚡ Qwen → <strong>{s.fn ?? "없음"}</strong> <em>({s.ms}ms)</em>
-                    </span>
-                  );
-                }
-                if (s.stage === "rag") {
-                  return (
-                    <span key={i} className="pipeline-chip" style={{ borderColor: "#198754" }}>
-                      📚 RAG <strong>{s.hits}개</strong> 결과
-                    </span>
-                  );
-                }
-                if (s.stage === "generating") {
-                  return (
-                    <span key={i} className="pipeline-chip generating" style={{ borderColor: "#6f42c1" }}>
-                      ✨ Gemma4 응답 생성 중...
-                    </span>
-                  );
-                }
-                return null;
-              })}
-            </div>
-          )}
-        </div>
-        <DebugPanel
-          debugInfo={debugMap[selectedDebugId] ?? null}
-          selected={selectedDebugId !== null}
-          previewText={
-            messages.find((m) => m.debugId === selectedDebugId)?.content?.slice(0, 30) ?? null
-          }
+    case SCREENS.SIGNUP:
+    case SCREENS.SIGNUP_CONFIRM:
+    case SCREENS.SIGNUP_FAREWELL:
+      return (
+        <Signup
+          onSubmit={handleSignup}
+          loading={loginLoading}
+          error={loginError}
+          pendingSignup={pendingSignup}
+          farewell={signupFarewell}
+          onConfirmSignup={handleConfirmSignup}
+          onCancelSignup={handleCancelSignup}
         />
-      </div>
-    </div>
-  );
+      );
+
+    case SCREENS.ONBOARD_INFO:
+      return <InfoInput onSubmit={handleInfoSubmit} loading={false} error="" />;
+
+    case SCREENS.ONBOARD_HEALTH:
+      return (
+        <HealthNote
+          onSubmit={handleHealthSubmit}
+          onSkip={handleHealthSkip}
+          onBack={handleHealthBack}
+          loading={false}
+        />
+      );
+
+    case SCREENS.ONBOARD_WELCOME:
+      return <Welcome onContinue={handleWelcomeContinue} />;
+
+    case SCREENS.HOME:
+      return (
+        <Home
+          studentName={profile?.student_name || "민준"}
+          level={level}
+          currentXp={currentXp}
+          maxXp={maxXp}
+          streakDays={stats.streak_days || 0}
+          successDates={stats.success_dates || []}
+          ticketCount={ticketCount}
+          heartCount={heartCount}
+          todayMission={{
+            title: mission?.mission_name || "오늘의 미션",
+            done: mission?.status === "completed" || mission?.status === "success",
+          }}
+          onNavigate={navHandler(SCREENS.HOME)}
+        />
+      );
+
+    case SCREENS.CHAT:
+      return (
+        <ChatScreen
+          onBack={() => goBack(SCREENS.HOME)}
+          messages={messages}
+          loading={loading}
+          onSend={handleSend}
+        />
+      );
+
+    case SCREENS.DRAW:
+      return (
+        <DrawScreen
+          level={level}
+          currentXp={currentXp}
+          maxXp={maxXp}
+          ticketCount={ticketCount}
+          heartCount={heartCount}
+          onDraw={handleDraw}
+          onBack={() => goBack(SCREENS.HOME)}
+          onNavigate={navHandler(SCREENS.DRAW)}
+        />
+      );
+
+    case SCREENS.SETTINGS:
+      return (
+        <Settings
+          studentName={profile?.student_name || "민준"}
+          level={level}
+          heartCount={heartCount}
+          streakDays={stats.streak_days || 0}
+          onBack={() => goBack(SCREENS.HOME)}
+          onOpenHealthNote={() => goTo(SCREENS.SETTINGS_HEALTH_EDIT)}
+          onLogout={handleReset}
+          onWithdraw={handleReset}
+          onNavigate={navHandler(SCREENS.SETTINGS)}
+        />
+      );
+
+    case SCREENS.SETTINGS_HEALTH_EDIT:
+      return (
+        <HealthNote
+          initialAllergens={healthNote?.allergens || []}
+          initialCautionFoods={healthNote?.cautionFoods || []}
+          onSubmit={(note) => {
+            setHealthNote(note);
+            saveHealthNote(note);
+            goBack(SCREENS.SETTINGS);
+          }}
+          onSkip={() => goBack(SCREENS.SETTINGS)}
+          onBack={() => goBack(SCREENS.SETTINGS)}
+          loading={false}
+        />
+      );
+
+    case SCREENS.RANKING:
+      return (
+        <Ranking
+          studentId={profile?.student_id}
+          onNavigate={navHandler(SCREENS.RANKING)}
+        />
+      );
+
+    case SCREENS.LEARN:
+      return (
+        <LearnScreen
+          studentId={profile?.student_id}
+          todayMission={{ title: mission?.mission_name || "오늘의 미션" }}
+          level={level}
+          currentXp={currentXp}
+          maxXp={maxXp}
+          ticketCount={ticketCount}
+          heartCount={heartCount}
+          onAppStateUpdate={(s) => applyAppStateFromBackend(s)}
+          onNavigate={navHandler(SCREENS.LEARN)}
+        />
+      );
+
+    case SCREENS.GAME:
+      return (
+        <GameScreen
+          studentId={profile?.student_id}
+          level={level}
+          heartCount={heartCount}
+          onSpendHeart={() => spendHeart(1)}
+          onRefundHeart={() => refundHeart(1)}
+          onRecordRun={({ score, durationSec }) =>
+            recordGameRun({ studentId: profile.student_id, gameType: "run", score, durationSec })
+              .catch(() => null)
+          }
+          onNavigate={navHandler(SCREENS.GAME)}
+        />
+      );
+
+    case SCREENS.GAME_RANKING:
+      return (
+        <GameRanking
+          studentId={profile?.student_id}
+          onNavigate={navHandler(SCREENS.GAME_RANKING)}
+        />
+      );
+
+    default:
+      return <div style={{ padding: 24 }}>알 수 없는 화면: {screen}</div>;
+  }
 }

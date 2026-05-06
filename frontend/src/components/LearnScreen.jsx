@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BottomNav, LevelRing } from "./Home.jsx";
 import { LESSONS } from "../data/lessons.js";
+import { completeLessonQuiz, fetchLessonProgress, updateLessonProgress } from "../api.js";
 import EducationScreen from "./EducationScreen.jsx";
 import QuizScreen from "./QuizScreen.jsx";
 import gachaImg from "../assets/tomato/draw/gacha.png";
@@ -24,20 +25,12 @@ const DAILY_PLAN = [
   { day: 7, title: "응급처치와 마음 건강",   lessonIds: ["first-aid", "emotion-stress"] },
 ];
 
-const NODE_GAP = 100; 
-const PATH_WIDTH = 280; 
-const PROGRESS_KEY = "tommy_lesson_progress";
-
-function readProgress() {
-  try {
-    return JSON.parse(localStorage.getItem(PROGRESS_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
+const NODE_GAP = 100;
+const PATH_WIDTH = 280;
 
 export default function LearnScreen({
   onNavigate,
+  studentId,
   todayMission = { title: "15분 책 읽기" },
   currentDay = 1,
   level = 3,
@@ -45,15 +38,28 @@ export default function LearnScreen({
   maxXp = 20,
   ticketCount = 2,
   heartCount = 4,
-  onQuizReward,
+  onAppStateUpdate,
 }) {
   const [activeNav, setActiveNav] = useState("learn");
-  const [progress, setProgress] = useState(() => readProgress());
+  // progress[lessonId] = { eduDone, quizDone }. 백엔드 lesson_progress에서 로드.
+  const [progress, setProgress] = useState({});
 
-  // progress 변경 시 localStorage에 저장
+  // 진입 시 백엔드에서 진행도 로드
   useEffect(() => {
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
-  }, [progress]);
+    if (!studentId) return;
+    let cancelled = false;
+    fetchLessonProgress(studentId)
+      .then((rows) => {
+        if (cancelled) return;
+        const map = {};
+        for (const r of rows) {
+          map[r.lesson_id] = { eduDone: r.edu_done, quizDone: r.quiz_done };
+        }
+        setProgress(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [studentId]);
   const [openLessonId, setOpenLessonId] = useState(null);
   const [openMode, setOpenMode] = useState(null);
   const [expOpen, setExpOpen] = useState(false);
@@ -115,15 +121,24 @@ export default function LearnScreen({
       [lessonId]: { ...(prev[lessonId] || {}), eduDone: true },
     }));
     setOpenMode("quiz");
+    if (studentId) {
+      updateLessonProgress({ studentId, lessonId, eduDone: true }).catch(() => {});
+    }
   }
 
   function handleQuizComplete(lessonId) {
-    const alreadyCompleted = progress[lessonId]?.quizDone;
     setProgress((prev) => ({
       ...prev,
       [lessonId]: { ...(prev[lessonId] || {}), quizDone: true },
     }));
-    if (!alreadyCompleted) onQuizReward?.({ tickets: 1 });
+    if (studentId) {
+      completeLessonQuiz({ studentId, lessonId })
+        .then((res) => {
+          // 첫 완료라면 백엔드가 ticket +1 한 새 app_state를 반환 — 부모에 반영.
+          if (res?.app_state) onAppStateUpdate?.(res.app_state);
+        })
+        .catch(() => {});
+    }
   }
 
   function closeOverlay() {

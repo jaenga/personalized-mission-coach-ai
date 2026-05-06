@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BottomNav } from "./Home.jsx";
+import { fetchGameRanking } from "../api.js";
 import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.png";
 import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.png";
 import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.png";
@@ -18,111 +19,12 @@ const LEVEL_FULLS = { 1: lv1Full, 2: lv2Full, 3: lv3Full, 4: lv4Full, 5: lv5Full
 const LIST_FACE_SIZE = { 1: 28, 2: 32, 3: 35, 4: 32, 5: 32 };
 const ME_FACE_SIZE   = { 1: 36, 2: 40, 3: 43, 4: 40, 5: 40 };
 
-const PLAYER_LEVELS = {
-  u1: 4,
-  u2: 4,
-  u3: 3,
-  me: 3,
-  u5: 3,
-  u6: 2,
-  u7: 2,
-  u8: 2,
-  u9: 1,
-  u10: 1,
-};
-
 function levelFace(lv) {
   return LEVEL_FACES[Math.min(5, Math.max(1, lv))];
 }
 function levelFull(lv) {
   return LEVEL_FULLS[Math.min(5, Math.max(1, lv))];
 }
-function playerLevel(user, fallback = 3) {
-  return PLAYER_LEVELS[user.id] ?? user.level ?? fallback;
-}
-
-const GAME_RECORD_KEY = "tommy_run_records";
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function getMonthKey(date = new Date()) {
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
-}
-
-function getWeekKey(date = new Date()) {
-  const monday = new Date(date);
-  const offset = (date.getDay() + 6) % 7;
-  monday.setDate(date.getDate() - offset);
-  return `${monday.getFullYear()}-${pad2(monday.getMonth() + 1)}-${pad2(monday.getDate())}`;
-}
-
-function readGameRecords() {
-  try {
-    return JSON.parse(localStorage.getItem(GAME_RECORD_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function currentGameRecords(fallbackScore) {
-  const records = readGameRecords();
-  const monthKey = getMonthKey();
-  const weekKey = getWeekKey();
-  const monthSame = records.monthKey === monthKey;
-  const weekSame = records.weekKey === weekKey;
-  return {
-    all: Math.max(records.all || 0, fallbackScore),
-    month: monthSame ? Math.max(records.month || 0, fallbackScore) : fallbackScore,
-    week: weekSame ? Math.max(records.week || 0, fallbackScore) : fallbackScore,
-    playsAll: records.playsAll || 0,
-    playsMonth: monthSame ? (records.playsMonth || 0) : 0,
-    playsWeek: weekSame ? (records.playsWeek || 0) : 0,
-  };
-}
-
-/* ─────────────────────────────────────────────────────────
-   임시 데이터 (게임 점수 기준)
-   ───────────────────────────────────────────────────────── */
-const GAME_WEEK_USERS = [
-  { id: "u1",  name: "하준", score: 2380, plays: 9, level: 5, change: 0 },
-  { id: "u2",  name: "서연", score: 1960, plays: 7, level: 4, change: 2 },
-  { id: "u3",  name: "지우", score: 1810, plays: 8, level: 4, change: -1 },
-  { id: "me",  name: "민준", score: 1540, plays: 5, level: 3, change: 3 },
-  { id: "u5",  name: "채원", score: 1390, plays: 6, level: 3, change: -2 },
-  { id: "u6",  name: "도윤", score: 1120, plays: 4, level: 2, change: 1 },
-  { id: "u7",  name: "윤아", score:  980, plays: 4, level: 2, change: 0 },
-  { id: "u8",  name: "시우", score:  720, plays: 3, level: 2, change: -1 },
-  { id: "u9",  name: "지민", score:  540, plays: 2, level: 1, change: 0 },
-  { id: "u10", name: "수현", score:  320, plays: 2, level: 1, change: -2 },
-];
-
-const GAME_MONTH_USERS = [
-  { id: "u1",  name: "하준", score: 4820, plays: 24, level: 5, change: 0 },
-  { id: "u2",  name: "서연", score: 4150, plays: 19, level: 5, change: 1 },
-  { id: "u3",  name: "지우", score: 3680, plays: 21, level: 4, change: -1 },
-  { id: "me",  name: "민준", score: 3120, plays: 16, level: 4, change: 2 },
-  { id: "u5",  name: "채원", score: 2740, plays: 15, level: 4, change: -2 },
-  { id: "u6",  name: "도윤", score: 2210, plays: 12, level: 3, change: 0 },
-  { id: "u7",  name: "윤아", score: 1830, plays: 10, level: 3, change: 1 },
-  { id: "u8",  name: "시우", score: 1420, plays:  9, level: 2, change: -1 },
-  { id: "u9",  name: "지민", score: 1080, plays:  7, level: 2, change: 0 },
-  { id: "u10", name: "수현", score:  720, plays:  5, level: 2, change: -2 },
-];
-
-const GAME_ALL_USERS = [
-  { id: "u1",  name: "하준", score: 12480, plays: 76, level: 5, change: 0 },
-  { id: "u2",  name: "서연", score:  9320, plays: 58, level: 5, change: 0 },
-  { id: "u3",  name: "지우", score:  8750, plays: 64, level: 5, change: 0 },
-  { id: "me",  name: "민준", score:  4860, plays: 32, level: 4, change: 0 },
-  { id: "u5",  name: "채원", score:  4200, plays: 28, level: 4, change: 0 },
-  { id: "u6",  name: "도윤", score:  3680, plays: 24, level: 4, change: 0 },
-  { id: "u7",  name: "윤아", score:  3120, plays: 22, level: 4, change: 0 },
-  { id: "u8",  name: "시우", score:  2540, plays: 18, level: 3, change: 0 },
-  { id: "u9",  name: "지민", score:  1820, plays: 14, level: 3, change: 0 },
-  { id: "u10", name: "수현", score:  1240, plays: 10, level: 3, change: 0 },
-];
 
 /* ─────────────────────────────────────────────────────────
    상단 헤더 헬퍼
@@ -456,32 +358,43 @@ function RankRow({ rank, user, isMe, showChange }) {
 /* ─────────────────────────────────────────────────────────
    GameRanking — 메인
    ───────────────────────────────────────────────────────── */
-export default function GameRanking({ studentName = "민준", currentScore = 0, currentLevel = 1, onNavigate }) {
+export default function GameRanking({ studentId, gameType = "run", onNavigate }) {
   const [tab, setTab] = useState("week");
   const [activeNav, setActiveNav] = useState("rank");
+  const [rawList, setRawList] = useState([]);
+  const [, setLoading] = useState(false);
+
+  // 탭 변경 또는 진입 시 백엔드 게임 랭킹 조회
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchGameRanking(tab, gameType)
+      .then((data) => {
+        if (!cancelled) setRawList(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRawList([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, gameType]);
 
   const ranked = useMemo(() => {
-    const myRecords = currentGameRecords(currentScore);
-    const src =
-      tab === "week" ? GAME_WEEK_USERS :
-      tab === "month" ? GAME_MONTH_USERS :
-      GAME_ALL_USERS;
-    const myScore = myRecords[tab];
-    const myPlays =
-      tab === "week" ? myRecords.playsWeek :
-      tab === "month" ? myRecords.playsMonth :
-      myRecords.playsAll;
-    const data = src.map((u) =>
-      u.id === "me" || u.name === studentName
-        ? { ...u, id: "me", name: studentName, score: myScore, plays: myPlays, level: currentLevel }
-        : { ...u, level: playerLevel(u) }
-    );
-    if (!data.some((u) => u.id === "me")) {
-      data.push({ id: "me", name: studentName, score: myScore, plays: myPlays, level: currentLevel, change: 0 });
-    }
-    const sorted = [...data].sort((a, b) => b.score - a.score);
-    return sorted.map((u, i) => ({ ...u, rank: i + 1, isMe: u.id === "me" }));
-  }, [tab, studentName, currentScore, currentLevel]);
+    return rawList.map((r) => ({
+      id: String(r.student_id),
+      name: r.student_name,
+      level: r.level,
+      score: r.best_score,
+      plays: r.plays,
+      rank: r.rank,
+      change: 0, // 순위 변동 추적은 추후
+      isMe: studentId != null && r.student_id === studentId,
+    }));
+  }, [rawList, studentId]);
 
   const top3 = ranked.slice(0, 3);
   const me = ranked.find((u) => u.isMe);

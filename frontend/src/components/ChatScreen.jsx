@@ -89,7 +89,33 @@ function FaqSheet({ open, onClose, onPick }) {
 /* ─────────────────────────────────────────────────────────
    메시지 버블
    ───────────────────────────────────────────────────────── */
-function AssistantMessage({ text }) {
+function TypingDots() {
+  return (
+    <span
+      aria-label="토미가 말하는 중"
+      className="inline-flex items-center"
+      style={{ gap: 3, height: 20 }}
+    >
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: "50%",
+            background: "#E35D49",
+            display: "inline-block",
+            animation: "typingDot 1s infinite ease-in-out",
+            animationDelay: `${i * 0.16}s`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function AssistantMessage({ text, streaming = false }) {
+  const showTyping = streaming && !String(text || "").trim();
   return (
     <div className="flex items-end gap-2" style={{ maxWidth: "82%" }}>
       <img
@@ -114,7 +140,7 @@ function AssistantMessage({ text }) {
           wordBreak: "break-word",
         }}
       >
-        {text}
+        {showTyping ? <TypingDots /> : text}
       </div>
     </div>
   );
@@ -154,23 +180,38 @@ const INITIAL_MESSAGES = [
 
 export default function ChatScreen({
   onBack,
+  messages: backendMessages,
+  loading = false,
+  onSend,
   initialMessages = INITIAL_MESSAGES,
 }) {
-  const [messages, setMessages] = useState(initialMessages);
+  const [localMessages, setLocalMessages] = useState(initialMessages);
   const [input, setInput] = useState("");
   const [faqOpen, setFaqOpen] = useState(false);
   const scrollRef = useRef(null);
+  const messages = backendMessages
+    ? backendMessages.map((m, index) => ({
+        id: m.debugId || `${m.role}-${index}`,
+        role: m.role,
+        text: m.content ?? m.text ?? "",
+        streaming: !!m.streaming,
+      }))
+    : localMessages;
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, loading]);
 
   function handleSend(textOverride) {
     const text = (textOverride ?? input).trim();
-    if (!text) return;
-    setMessages((prev) => [...prev, { id: Date.now(), role: "user", text }]);
+    if (!text || loading) return;
     setInput("");
+    if (onSend) {
+      onSend(text);
+      return;
+    }
+    setLocalMessages((prev) => [...prev, { id: Date.now(), role: "user", text }]);
   }
 
   function handleFaqPick(item) {
@@ -235,10 +276,13 @@ export default function ChatScreen({
       >
         {messages.map((m) =>
           m.role === "assistant" ? (
-            <AssistantMessage key={m.id} text={m.text} />
+            <AssistantMessage key={m.id} text={m.text} streaming={m.streaming} />
           ) : (
             <UserMessage key={m.id} text={m.text} />
           )
+        )}
+        {loading && messages[messages.length - 1]?.role !== "assistant" && (
+          <AssistantMessage text="" streaming />
         )}
       </div>
 
@@ -281,6 +325,7 @@ export default function ChatScreen({
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              disabled={loading}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -304,7 +349,7 @@ export default function ChatScreen({
           <button
             type="button"
             onClick={() => handleSend()}
-            disabled={!input.trim()}
+            disabled={!input.trim() || loading}
             aria-label="보내기"
             className="flex items-center justify-center transition-transform active:scale-95 disabled:opacity-50"
             style={{
@@ -312,7 +357,7 @@ export default function ChatScreen({
               borderRadius: 999,
               background: "#E35D49",
               border: "none", padding: 0,
-              cursor: input.trim() ? "pointer" : "not-allowed",
+              cursor: input.trim() && !loading ? "pointer" : "not-allowed",
               flexShrink: 0,
             }}
           >

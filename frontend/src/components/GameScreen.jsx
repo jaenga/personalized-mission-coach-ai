@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BottomNav } from "./Home.jsx";
+import { fetchGameRanking } from "../api.js";
 import runImg from "../assets/tomato/run.png";
 import jumpImg from "../assets/tomato/jump.png";
 import fallImg from "../assets/tomato/fall.png";
@@ -34,71 +35,33 @@ const BASE_SPEED = 320; // px/s
 const SPEED_GROWTH = 16; // 시간당 속도 증가
 const MAX_SPEED = 620;
 const EARLY_RETRY_LIMIT = 5;
-const GAME_RECORD_KEY = "tommy_run_records";
+const SCORE_DISTANCE_SCALE = 0.05;
 
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function getMonthKey(date = new Date()) {
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
-}
-
-function getWeekKey(date = new Date()) {
-  const monday = new Date(date);
-  const offset = (date.getDay() + 6) % 7;
-  monday.setDate(date.getDate() - offset);
-  return `${monday.getFullYear()}-${pad2(monday.getMonth() + 1)}-${pad2(monday.getDate())}`;
-}
-
-function readGameRecords() {
-  try {
-    return JSON.parse(localStorage.getItem(GAME_RECORD_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function writeGameRecords(records) {
-  localStorage.setItem(GAME_RECORD_KEY, JSON.stringify(records));
-}
-
-function updateGameRecords(score) {
-  const now = new Date();
-  const monthKey = getMonthKey(now);
-  const weekKey = getWeekKey(now);
-  const prev = readGameRecords();
-  const monthSame = prev.monthKey === monthKey;
-  const weekSame = prev.weekKey === weekKey;
-  const next = {
-    all: Math.max(prev.all || 0, score),
-    monthKey,
-    month: monthSame ? Math.max(prev.month || 0, score) : score,
-    weekKey,
-    week: weekSame ? Math.max(prev.week || 0, score) : score,
-    playsAll: (prev.playsAll || 0) + 1,
-    playsMonth: monthSame ? (prev.playsMonth || 0) + 1 : 1,
-    playsWeek: weekSame ? (prev.playsWeek || 0) + 1 : 1,
-  };
-  writeGameRecords(next);
-  return {
-    records: next,
-    isNewBest: score > (prev.all || 0),
-  };
-}
-
-export default function GameScreen({ onNavigate, level = 3, bestScore = 1240, heartCount = 4, onSpendHeart, onRefundHeart }) {
+export default function GameScreen({ onNavigate, studentId, onRecordRun, level = 3, bestScore = 1240, heartCount = 4, onSpendHeart, onRefundHeart }) {
   const [phase, setPhase] = useState("intro"); // intro | play | result
   const [score, setScore] = useState(0);
   const [activeNav, setActiveNav] = useState("home");
-  const [best, setBest] = useState(() => Math.max(bestScore, readGameRecords().all || 0));
+  const [best, setBest] = useState(bestScore);
   const [lastRun, setLastRun] = useState({ elapsed: 0, earlyRetry: false, isNewBest: false });
   const [currentFree, setCurrentFree] = useState(false); // 이번 라운드가 무료 재도전이었는지
 
-  function start({ free = false } = {}) {
+  useEffect(() => {
+    if (studentId == null) return;
+    let cancelled = false;
+    fetchGameRanking("week", "run")
+      .then((data) => {
+        if (cancelled) return;
+        const me = Array.isArray(data) ? data.find((r) => r.student_id === studentId) : null;
+        if (me) setBest(me.best_score || 0);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [studentId]);
+
+  async function start({ free = false } = {}) {
     if (!free) {
       if (heartCount <= 0) return;
-      const spent = onSpendHeart?.();
+      const spent = await onSpendHeart?.();
       if (spent === false) return;
     }
     setCurrentFree(free);
@@ -106,17 +69,21 @@ export default function GameScreen({ onNavigate, level = 3, bestScore = 1240, he
     setPhase("play");
   }
 
-  function handleGameOver({ score: finalScore, elapsed }) {
-    const { records, isNewBest } = updateGameRecords(finalScore);
-    const newBest = Math.max(best, records.all, finalScore);
+  async function handleGameOver({ score: finalScore, elapsed }) {
+    const isNewBest = finalScore > best;
+    const newBest = Math.max(best, finalScore);
     setBest(newBest);
     const earlyRetry = elapsed < EARLY_RETRY_LIMIT;
     if (currentFree) {
       // 무료 재도전 라운드 — 5초 넘게 살았으면 그제서야 하트 차감
-      if (!earlyRetry) onSpendHeart?.();
+      if (!earlyRetry) await onSpendHeart?.();
     } else {
       // 차감하고 시작한 라운드 — 5초 안에 죽으면 환불
-      if (earlyRetry) onRefundHeart?.();
+      if (earlyRetry) await onRefundHeart?.();
+    }
+    // 5초 미만(early retry) 라운드는 hateful이라 백엔드 기록 X — 점수 0/스팸 방지
+    if (!earlyRetry && finalScore > 0 && studentId != null) {
+      await onRecordRun?.({ score: finalScore, durationSec: Math.round(elapsed) });
     }
     setScore(finalScore);
     setLastRun({ elapsed, earlyRetry, isNewBest });
@@ -150,6 +117,7 @@ export default function GameScreen({ onNavigate, level = 3, bestScore = 1240, he
         )}
         {phase === "result" && (
           <ResultScreen
+            studentId={studentId}
             score={score}
             best={best}
             heartCount={heartCount}
@@ -385,7 +353,7 @@ function PlayScreen({ level, onGameOver }) {
         setSpeedView(speed);
 
         // 거리 증가
-        distanceRef.current += speed * dt * 0.25;
+        distanceRef.current += speed * dt * SCORE_DISTANCE_SCALE;
         setDistance(distanceRef.current);
 
         // 토마토 물리
@@ -649,7 +617,7 @@ function makeStone() {
 /* ─────────────────────────────────────────────────────────
    결과 화면
    ───────────────────────────────────────────────────────── */
-function ResultScreen({ score, best, heartCount, earlyRetry, elapsed, isNewBest, onRetry, onConfirm }) {
+function ResultScreen({ studentId, score, best, heartCount, earlyRetry, elapsed, isNewBest, onRetry, onConfirm }) {
   const canRetry = earlyRetry || heartCount > 0;
   return (
     <div
@@ -743,7 +711,7 @@ function ResultScreen({ score, best, heartCount, earlyRetry, elapsed, isNewBest,
         <StatBox label="생존 시간" value={`${elapsed.toFixed(1)}초`} accent />
       </div>
 
-      <GameRankingPreview score={score} onOpenRanking={() => { window.location.hash = "#game-ranking"; }} />
+      <GameRankingPreview studentId={studentId} score={score} onOpenRanking={() => { window.location.hash = "#game-ranking"; }} />
 
       {/* 버튼 */}
       <div className="mt-4 w-full flex flex-col" style={{ gap: 10 }}>
@@ -835,32 +803,30 @@ function StatBox({ label, value, accent }) {
   );
 }
 
-// 주간 게임 랭킹 
-const PREVIEW_WEEK_USERS = [
-  { name: "하준", score: 2380 },
-  { name: "서연", score: 1960 },
-  { name: "지우", score: 1810 },
-  { name: "채원", score: 1390 },
-  { name: "도윤", score: 1120 },
-  { name: "윤아", score:  980 },
-  { name: "시우", score:  720 },
-];
+function GameRankingPreview({ studentId, score, onOpenRanking }) {
+  const [list, setList] = useState([]);
 
-function GameRankingPreview({ score, onOpenRanking }) {
-  // 주간 랭킹 + 내 점수 → 정렬 → 순위 부여
-  const all = [
-    ...PREVIEW_WEEK_USERS,
-    { name: "나", score, isMe: true },
-  ]
-    .sort((a, b) => b.score - a.score)
-    .map((u, i) => ({ ...u, rank: i + 1 }));
+  // 결과 화면 진입 시 주간 게임 랭킹 조회
+  useEffect(() => {
+    let cancelled = false;
+    fetchGameRanking("week", "run")
+      .then((data) => { if (!cancelled) setList(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setList([]); });
+    return () => { cancelled = true; };
+  }, [studentId, score]);
 
-  const top3 = all.slice(0, 3);
-  const me = all.find((u) => u.isMe);
+  // API 응답 → 표시 모양으로 변환 자기 자신은 student_id 매칭
+  const ranked = list.map((r) => ({
+    name: r.student_id === studentId ? "나" : r.student_name,
+    score: r.student_id === studentId ? Math.max(r.best_score, score) : r.best_score,
+    rank: r.rank,
+    isMe: r.student_id === studentId,
+  }));
+
+  const top3 = ranked.slice(0, 3);
+  const me = ranked.find((u) => u.isMe);
   const meInTop3 = me && me.rank <= 3;
-
-  // 표시할 행: top 3, me가 top3 밖이면 me 추가
-  const rows = meInTop3 ? top3 : [...top3, me];
+  const rows = me && !meInTop3 ? [...top3, me] : top3;
 
   return (
     <button

@@ -1,6 +1,6 @@
 /**
- * 백엔드 API 호출 모듈.
- * Vite proxy 덕분에 상대경로 그대로 사용 가능.
+ * 백엔드 API 호출 모듈
+ * Vite proxy 덕분에 상대경로 그대로 사용 가능
  */
 
 export async function fetchMission() {
@@ -93,12 +93,188 @@ export async function verifyStudent(studentName, phoneLast4) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ student_name: studentName, phone_last4: phoneLast4 }),
   });
-  if (res.status === 404) throw new Error("일치하는 학생을 찾을 수 없어요.");
-  if (!res.ok) throw new Error("확인 중 오류가 발생했어요.");
+  if (res.status === 404) {
+    const err = new Error("일치하는 학생을 찾을 수 없어요.");
+    err.status = 404;
+    throw err;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "확인 중 오류가 발생했어요.");
+  }
+  return res.json();
+}
+
+export async function fetchStudentStats(studentId) {
+  const res = await fetch(`/stats/${studentId}`);
+  if (!res.ok) throw new Error("통계 불러오기 실패");
+  return res.json();
+}
+
+export async function fetchAppState(studentId) {
+  const res = await fetch(`/app-state/${studentId}`);
+  if (!res.ok) throw new Error("상태 불러오기 실패");
+  return res.json();
+}
+
+export async function adjustHeart(studentId, delta) {
+  const res = await fetch(`/app-state/${studentId}/heart`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ delta }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "하트 변경 실패");
+  }
+  return res.json();
+}
+
+/**
+ * 가챠 한 판. 백엔드가 보상 굴림 + 상태 갱신 + history 기록.
+ * Returns { reward, app_state, leveled_up, level_after, xp_gain, heart_gain, ticket_gain, first_of_day }
+ */
+export async function claimDrawReward(studentId) {
+  const res = await fetch(`/draw/reward/${studentId}`, { method: "POST" });
+  if (res.status === 409) {
+    const err = new Error("뽑기권이 부족해요.");
+    err.status = 409;
+    throw err;
+  }
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "뽑기 실패");
+  }
+  return res.json();
+}
+
+/**
+ * 출석 체크인. 오늘 첫 진입이면 ticket +1, 두 번째 이후는 no-op.
+ * Returns { first_check_in, ticket_awarded, app_state }
+ */
+export async function claimAttendance(studentId) {
+  const res = await fetch(`/attendance/check-in/${studentId}`, { method: "POST" });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "출석 체크 실패");
+  }
+  return res.json();
+}
+
+/**
+ * 경험치 랭킹. xp_history 기간 합계 기준.
+ * @param {"week"|"month"} period
+ * Returns [{rank, student_id, student_name, level, period_xp}, ...]
+ */
+export async function fetchXpRanking(period = "week") {
+  const res = await fetch(`/ranking/xp?period=${encodeURIComponent(period)}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "랭킹 불러오기 실패");
+  }
+  return res.json();
+}
+
+/** 게임 한 판 기록. Returns inserted run row. */
+export async function recordGameRun({ studentId, gameType, score, durationSec = 0 }) {
+  const res = await fetch("/game/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      game_type: gameType,
+      score,
+      duration_sec: durationSec,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "게임 기록 저장 실패");
+  }
+  return res.json();
+}
+
+/**
+ * 게임 랭킹. game_runs 기간 MAX(score) 기준.
+ * @param {"week"|"month"|"all"} period
+ * @param {string} [gameType]  특정 게임만 필터 (생략 시 전체)
+ * Returns [{rank, student_id, student_name, level, best_score, plays}, ...]
+ */
+export async function fetchGameRanking(period = "week", gameType) {
+  const params = new URLSearchParams({ period });
+  if (gameType) params.set("game_type", gameType);
+  const res = await fetch(`/ranking/game?${params}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "게임 랭킹 불러오기 실패");
+  }
+  return res.json();
+}
+
+/** 학생의 모든 lesson 진행도 조회. Returns [{lesson_id, current_step, edu_done, quiz_done, ...}, ...] */
+export async function fetchLessonProgress(studentId) {
+  const res = await fetch(`/lessons/progress/${studentId}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "학습 진행도 불러오기 실패");
+  }
+  return res.json();
+}
+
+/**
+ * lesson 진행도 부분 업데이트 (current_step / edu_done / quiz_done).
+ * 생략한 필드는 기존 값 유지.
+ */
+export async function updateLessonProgress({ studentId, lessonId, currentStep, eduDone, quizDone }) {
+  const body = { student_id: studentId, lesson_id: lessonId };
+  if (currentStep !== undefined) body.current_step = currentStep;
+  if (eduDone !== undefined) body.edu_done = eduDone;
+  if (quizDone !== undefined) body.quiz_done = quizDone;
+  const res = await fetch("/lessons/progress", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "학습 진행도 저장 실패");
+  }
+  return res.json();
+}
+
+/**
+ * 퀴즈 완료. 첫 완료면 ticket +1 지급.
+ * Returns { progress, app_state, first_completion, ticket_awarded }
+ */
+export async function completeLessonQuiz({ studentId, lessonId, quizScore }) {
+  const body = { student_id: studentId, lesson_id: lessonId };
+  if (quizScore !== undefined) body.quiz_score = quizScore;
+  const res = await fetch("/lessons/quiz-complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "퀴즈 완료 처리 실패");
+  }
   return res.json();
 }
 
 /** 유저 프로필(student_id, student_name) 저장. */
+export async function registerDemoStudent(studentName, phoneLast4) {
+  const res = await fetch("/demo-register-student", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ student_name: studentName, phone_last4: phoneLast4 }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "회원가입에 실패했어요.");
+  }
+  return res.json();
+}
+
 export async function saveProfile(sessionId, studentId, studentName) {
   const res = await fetch("/profile", {
     method: "POST",

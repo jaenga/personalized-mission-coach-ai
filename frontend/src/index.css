@@ -7,6 +7,17 @@
   50%      { transform: translateY(-10px); }
 }
 
+@keyframes typingDot {
+  0%, 80%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
 .tomato-float {
   animation: tomato-float 2.6s ease-in-out infinite;
 }

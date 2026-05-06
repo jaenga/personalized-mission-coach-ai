@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BottomNav } from "./Home.jsx";
+import { fetchXpRanking } from "../api.js";
 import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.png";
 import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.png";
 import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.png";
@@ -19,50 +20,12 @@ const LEVEL_FULLS = { 1: lv1Full, 2: lv2Full, 3: lv3Full, 4: lv4Full, 5: lv5Full
 const LIST_FACE_SIZE = { 1: 28, 2: 32, 3: 35, 4: 32, 5: 32 };
 const ME_FACE_SIZE   = { 1: 36, 2: 40, 3: 43, 4: 40, 5: 40 };
 
-// 레벨 임계값 (누적 XP)
-//  Lv1: 5 / Lv2: 17 (+12) / Lv3: 37 (+20) / Lv4: 70 (+33) / Lv5: 120 (+50)
-function levelFromXp(xp) {
-  if (xp >= 120) return 5;
-  if (xp >= 70)  return 4;
-  if (xp >= 37)  return 3;
-  if (xp >= 17)  return 2;
-  return 1;
-}
 function levelFace(lv) {
   return LEVEL_FACES[Math.min(5, Math.max(1, lv))];
 }
 function levelFull(lv) {
   return LEVEL_FULLS[Math.min(5, Math.max(1, lv))];
 }
-
-/* ─────────────────────────────────────────────────────────
-   임시 데이터 ! 나중에 바꿔야함!
-   ───────────────────────────────────────────────────────── */
-const WEEK_USERS = [
-  { id: "u1",  name: "하준", xp: 145, change: 0 },   // Lv5
-  { id: "u2",  name: "서연", xp:  92, change: 0 },   // Lv4
-  { id: "u3",  name: "지우", xp:  78, change: 0 },   // Lv4
-  { id: "me",  name: "민준", xp:  55, change: 2 },   // Lv3
-  { id: "u5",  name: "채원", xp:  48, change: -1 },  // Lv3
-  { id: "u6",  name: "도윤", xp:  32, change: 0 },   // Lv2
-  { id: "u7",  name: "윤아", xp:  25, change: 1 },   // Lv2
-  { id: "u8",  name: "시우", xp:  18, change: -1 },  // Lv2
-  { id: "u9",  name: "지민", xp:  12, change: 3 },   // Lv1
-  { id: "u10", name: "수현", xp:   8, change: -2 },  // Lv1
-];
-
-const MONTH_USERS = [
-  { id: "u1",  name: "하준", xp: 285, change: 0 },   // Lv5
-  { id: "u2",  name: "서연", xp: 224, change: 1 },   // Lv5
-  { id: "u3",  name: "지우", xp: 195, change: -1 },  // Lv5
-  { id: "me",  name: "민준", xp: 158, change: 4 },   // Lv5
-  { id: "u5",  name: "채원", xp: 142, change: -2 },  // Lv5
-  { id: "u6",  name: "도윤", xp: 118, change: 0 },   // Lv4
-  { id: "u7",  name: "윤아", xp:  95, change: 2 },   // Lv4
-  { id: "u8",  name: "시우", xp:  78, change: -1 },  // Lv4
-  { id: "u9",  name: "지민", xp:  64, change: 0 },   // Lv3
-  { id: "u10", name: "수현", xp:  50, change: -3 },  // Lv3
-];
 
 /* ─────────────────────────────────────────────────────────
    상단 헤더
@@ -194,7 +157,7 @@ function PodiumColumn({ user, rank, barHeight, charSize, showCrown }) {
       <div className="flex flex-col items-center" style={{ marginBottom: 6 }}>
         {showCrown && <div style={{ marginBottom: -4 }}><Crown /></div>}
         <img
-          src={levelFull(levelFromXp(user.xp))}
+          src={levelFull(user.level)}
           alt=""
           draggable="false"
           className="select-none pointer-events-none"
@@ -291,7 +254,7 @@ function ChangeChip({ change }) {
    ───────────────────────────────────────────────────────── */
 function MeStatusCard({ me }) {
   if (!me) return null;
-  const lv = levelFromXp(me.xp);
+  const lv = me.level;
   return (
     <div
       className="flex items-center"
@@ -340,7 +303,7 @@ function StatCell({ label, value }) {
    리스트 행
    ───────────────────────────────────────────────────────── */
 function RankRow({ rank, user, isMe }) {
-  const lv = levelFromXp(user.xp);
+  const lv = user.level;
   return (
     <div
       className="flex items-center"
@@ -392,19 +355,70 @@ function RankRow({ rank, user, isMe }) {
 /* ─────────────────────────────────────────────────────────
    Ranking — 메인
    ───────────────────────────────────────────────────────── */
-export default function Ranking({ studentName = "민준", currentXp = 55, onNavigate }) {
+export default function Ranking({ studentId, onNavigate }) {
   const [tab, setTab] = useState("week");
   const [activeNav, setActiveNav] = useState("rank");
+  const [rawList, setRawList] = useState([]);
+  const [loading, setLoading] = useState(false);
 
+  const refreshRanking = useCallback((period = tab) => {
+    setLoading(true);
+    return fetchXpRanking(period)
+      .then((data) => {
+        setRawList(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        setRawList([]);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [tab]);
+
+  // 탭 변경 또는 진입 시 백엔드 랭킹 즉시 조회
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchXpRanking(tab)
+      .then((data) => {
+        if (!cancelled) setRawList(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRawList([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
+  useEffect(() => {
+    function handleVisible() {
+      if (document.visibilityState === "visible") refreshRanking(tab);
+    }
+    window.addEventListener("focus", handleVisible);
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => {
+      window.removeEventListener("focus", handleVisible);
+      document.removeEventListener("visibilitychange", handleVisible);
+    };
+  }, [tab, refreshRanking]);
+
+  // API 응답을 컴포넌트 내부 모양으로 매핑.
+  // 자기 자신은 student_id로 식별. period_xp가 ranking 정렬 기준이자 화면 표시값.
   const ranked = useMemo(() => {
-    const src = tab === "week" ? WEEK_USERS : MONTH_USERS;
-    const hasMe = src.some((u) => u.name === studentName);
-    const data = hasMe
-      ? src
-      : [...src, { id: "me-injected", name: studentName, xp: currentXp, change: 0 }];
-    const sorted = [...data].sort((a, b) => b.xp - a.xp);
-    return sorted.map((u, i) => ({ ...u, rank: i + 1, isMe: u.name === studentName }));
-  }, [tab, studentName, currentXp]);
+    return rawList.map((r) => ({
+      id: String(r.student_id),
+      name: r.student_name,
+      level: r.level,
+      xp: r.period_xp,
+      rank: r.rank,
+      change: 0, // 순위 변동 추적은 추후 (xp_history 스냅샷 필요)
+      isMe: studentId != null && r.student_id === studentId,
+    }));
+  }, [rawList, studentId]);
 
   const top3 = ranked.slice(0, 3);
   const me = ranked.find((u) => u.isMe);
@@ -447,7 +461,16 @@ export default function Ranking({ studentName = "민준", currentXp = 55, onNavi
 
       {/* 탭 */}
       <div className="flex-shrink-0" style={{ paddingInline: 19, paddingTop: 16, paddingBottom: 12 }}>
-        <Tabs value={tab} onChange={setTab} />
+        <Tabs
+          value={tab}
+          onChange={(next) => {
+            if (next === tab) {
+              refreshRanking(next);
+            } else {
+              setTab(next);
+            }
+          }}
+        />
       </div>
 
       {/* 본문 — 스크롤 가능 */}

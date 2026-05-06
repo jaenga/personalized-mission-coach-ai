@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import gachaImg from "../assets/tomato/draw/gacha.png";
 import yahoImg from "../assets/tomato/draw/yaho.png";
 import heartImg from "../assets/tomato/_shared/heart.png";
@@ -7,30 +7,15 @@ import pointerImg from "../assets/tomato/draw/pointer.png";
 import { LevelRing, BottomNav } from "./Home.jsx";
 
 /* ─────────────────────────────────────────────────────────
-   레벨 임계값 — 다음 레벨까지 필요한 경험치
-   누적: lvl1=5, lvl2=17, lvl3=37, lvl4=70 lvl5=120 (레벨5 임시로 넣어둠)
+   레벨 임계값 — 누적 XP (그 레벨에 도달하기 위해 필요한 누적 XP)
+   Lv2=5, Lv3=17, Lv4=37, Lv5=70 (Lv5 bar max: 150)
    ───────────────────────────────────────────────────────── */
-const LEVEL_THRESHOLDS = { 1: 5, 2: 12, 3: 20, 4: 33, 5: 50 };
+const LEVEL_THRESHOLDS = { 2: 5, 3: 17, 4: 37, 5: 70, 6: 150 };
 
 /* ─────────────────────────────────────────────────────────
-   리워드 추첨 — 하루 첫 뽑기는 하트 확정, 이후 40/40/20
+   리워드 추첨은 백엔드(claim_draw_reward)가 단독으로 결정함.
+   프론트는 응답을 받아 애니메이션만 표시.
    ───────────────────────────────────────────────────────── */
-function randomExpReward() {
-  // 3~5 랜덤
-  return 3 + Math.floor(Math.random() * 3);
-}
-function randomHeartReward() {
-  // 1~2 랜덤
-  return 1 + Math.floor(Math.random() * 2);
-}
-
-function rollReward(isFirstOfDay) {
-  if (isFirstOfDay) return { type: "heart", heart: randomHeartReward(), exp: 0 };
-  const r = Math.random();
-  if (r < 0.4) return { type: "heart", heart: randomHeartReward(), exp: 0 };
-  if (r < 0.8) return { type: "exp",   heart: 0,                   exp: randomExpReward() };
-  return         { type: "both",  heart: randomHeartReward(),   exp: randomExpReward() };
-}
 
 /* ─────────────────────────────────────────────────────────
    결과 — 토마토 주위 주황 버스트 + 색종이
@@ -153,6 +138,11 @@ function TopBadges({ ticketCount, heartCount }) {
    결과 카드 (heart / exp / both)
    ───────────────────────────────────────────────────────── */
 function RewardCard({ reward }) {
+  const heartMessage =
+    reward.heart > 0
+      ? `게임에 참여할 수 있는 하트 ${reward.heart}개 획득!`
+      : "";
+
   return (
     <div
       className="mx-auto"
@@ -194,7 +184,7 @@ function RewardCard({ reward }) {
         className="font-sejong mt-2"
         style={{ fontSize: 12, color: "#000", letterSpacing: "-0.43px" }}
       >
-        {reward.type === "heart" && "게임에 참여할 수 있는 하트 하나 획득!"}
+        {reward.type === "heart" && heartMessage}
         {reward.type === "exp" && "경험치를 얻었어! 레벨업까지 한 걸음 더~"}
         {reward.type === "both" && "레어 보상! 하트 + 경험치 모두 획득!"}
       </p>
@@ -208,12 +198,10 @@ function RewardCard({ reward }) {
 export default function DrawScreen({
   level = 3,
   currentXp = 12,
-  maxXp = LEVEL_THRESHOLDS[3],
+  maxXp = LEVEL_THRESHOLDS[4],
   ticketCount = 3,
   heartCount = 4,
-  firstOfDay = true,
-  onSpendTicket,
-  onReward,
+  onDraw,
   onNavigate,
   onBack,
 }) {
@@ -222,22 +210,21 @@ export default function DrawScreen({
   const [reward, setReward] = useState(null);
   const [activeTab, setActiveTab] = useState("rank"); // 뽑기는 일단 랭킹 탭에 매핑
   const [expOpen, setExpOpen] = useState(false);
-  const drawTimerRef = useRef(null);
-
-  useEffect(() => () => clearTimeout(drawTimerRef.current), []);
 
   const canDraw = ticketCount > 0 && phase === "idle";
 
-  function handleDraw() {
-    if (!canDraw) return;
+  async function handleDraw() {
+    if (!canDraw || !onDraw) return;
     setPhase("drawing");
-    onSpendTicket?.();
-    drawTimerRef.current = setTimeout(() => {
-      const r = rollReward(firstOfDay);
-      setReward(r);
-      setTimeout(() => onReward?.(r), 400);
+    try {
+      // 최소 1.7초 애니메이션 보장 + 백엔드 응답을 병렬로 대기
+      const minWait = new Promise((r) => setTimeout(r, 1700));
+      const [, result] = await Promise.all([minWait, onDraw()]);
+      setReward(result.reward);
       setPhase("result");
-    }, 1700);
+    } catch {
+      setPhase("idle");
+    }
   }
 
   function handleConfirm() {

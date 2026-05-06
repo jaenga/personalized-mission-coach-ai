@@ -1,7 +1,15 @@
 import { useState } from "react";
 import tomatoHi from "../assets/tomato/_shared/hi.png";
 
-export default function Signup({ onSubmit, loading, error }) {
+export default function Signup({
+  onSubmit,
+  loading,
+  error,
+  pendingSignup,
+  farewell,
+  onConfirmSignup,
+  onCancelSignup,
+}) {
   const [name, setName] = useState("");
   const [phone4, setPhone4] = useState("");
 
@@ -189,7 +197,94 @@ export default function Signup({ onSubmit, loading, error }) {
         </button>
       </form>
 
-      {error && (
+      {pendingSignup && (
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.18)", zIndex: 20, padding: 28 }}
+        >
+          <div
+            className="font-sejong text-center"
+            style={{
+              width: "100%",
+              borderRadius: 24,
+              background: "#FFFFFF",
+              border: "1.5px solid #F2C5BA",
+              padding: "26px 22px 22px",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+            }}
+          >
+            <p
+              style={{
+                fontSize: 17,
+                fontWeight: 700,
+                color: "#000",
+                letterSpacing: "-0.43px",
+                lineHeight: "24px",
+              }}
+            >
+              처음 만나는 친구네요!
+            </p>
+            <p
+              className="mt-2"
+              style={{
+                fontSize: 13,
+                color: "#75726e",
+                letterSpacing: "-0.43px",
+                lineHeight: "20px",
+              }}
+            >
+              {pendingSignup.name}님 정보를 새로 등록할까요?
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={onCancelSignup}
+                disabled={loading}
+                className="font-sejong flex-1"
+                style={{
+                  height: 44,
+                  borderRadius: 50,
+                  background: "#F5E4DD",
+                  color: "#A05F50",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  padding: 0,
+                }}
+              >
+                안할래요
+              </button>
+              <button
+                type="button"
+                onClick={onConfirmSignup}
+                disabled={loading}
+                className="font-sejong flex-1"
+                style={{
+                  height: 44,
+                  borderRadius: 50,
+                  background: "#E35D49",
+                  color: "#FFFFFF",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  padding: 0,
+                }}
+              >
+                {loading ? "등록 중..." : "좋아요"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {farewell && (
+        <div
+          className="absolute inset-0 flex items-center justify-center font-sejong"
+          style={{ background: "rgba(255,243,231,0.92)", zIndex: 21, fontSize: 22, color: "#E35D49" }}
+        >
+          다음에 만나요!
+        </div>
+      )}
+
+      {error && !pendingSignup && (
         <p
           className="absolute text-center text-red-500 font-sejong"
           style={{
