@@ -11,9 +11,9 @@ RAW_DIR = BASE_DIR / 'data' / 'raw'
 OUT_DIR = BASE_DIR / 'data' / 'processed'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-CHUNK_FILE = RAW_DIR / 'chunk 모음 (3).xlsx'
-META_FILE = RAW_DIR / 'metadata 모음 (1).xlsx'
-FAQ_FILE = RAW_DIR / '자주하는 질문 모음 (1).xlsx'
+CHUNK_FILE = RAW_DIR / 'chunk 모음 (6).xlsx'
+META_FILE = RAW_DIR / 'metadata 모음 (3).xlsx'
+FAQ_FILE = RAW_DIR / '자주하는 질문 모음 (4).xlsx'
 
 
 def normalize_doc_id(value: str) -> str:

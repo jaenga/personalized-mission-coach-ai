@@ -34,6 +34,7 @@ async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
         "model": OLLAMA_MODEL,
         "stream": False,
         "messages": messages,
+        "think": False,
     }
     if use_json:
         payload["format"] = "json"
@@ -50,6 +51,7 @@ async def generate_chat_message_stream(system_prompt: str, messages: list[dict])
         "model": OLLAMA_MODEL,
         "stream": True,
         "messages": [{"role": "system", "content": system_prompt}] + messages,
+        "think": False,
     }
     async with _get_client().stream("POST", url, json=payload, timeout=120.0) as resp:
         resp.raise_for_status()
