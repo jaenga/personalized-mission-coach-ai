@@ -11,6 +11,7 @@ from database import (
     resolve_mission_ui_action,
     save_mission_change_log,
     save_mission_ui_action,
+    upsert_user_memory,
 )
 from executor import ExecResults, execute_adjustment
 from ollama_client import generate_chat_message
@@ -38,28 +39,32 @@ def _dislike_confirm_hint(mission_name: str, mission_rule: str) -> str:
 
 async def _generate_dislike_response(mission_name: str, mission_rule: str) -> str:
     hint = _dislike_confirm_hint(mission_name, mission_rule)
+    fallback = "그래도 오늘 딱 한 번만 해볼래? 아니면 다른 미션으로 바꿔줄까?"
     try:
         message, _ = await generate_chat_message(
             _DISLIKE_RESPONSE_PROMPT.format(hint=hint),
             [{"role": "user", "content": "이 상황에 맞게 짧게 답해줘."}],
         )
+        message = " ".join((message or "").split())
+        if not message or len(message) > 120:
+            return fallback
         return message
     except Exception as e:
         print(f"[UiAction] dislike response generation failed: {type(e).__name__}: {e}")
-        return "그래도 오늘 딱 한 번만 해볼래? 아니면 다른 미션으로 바꿔줄까?"
+        return fallback
 
 
 MISSION_CHANGE_REASON_BUTTONS = [
-    {"value": "too_hard", "label": "너무 어려워"},
     {"value": "too_easy", "label": "너무 쉬워"},
-    {"value": "dislike", "label": "재미없어"},
+    {"value": "too_hard", "label": "너무 어려워"},
+    {"value": "dislike", "label": "재미없어 / 싫어"},
     {"value": "cant_do", "label": "할 수 없는 상황이야"},
-    {"value": "just_change", "label": "그냥 바꿀래"},
+    {"value": "just_change", "label": "그냥 다른 거 하고 싶어"},
 ]
 
 MISSION_DISLIKE_CONFIRM_BUTTONS = [
-    {"value": "try_today", "label": "오늘 한 번 해볼래"},
-    {"value": "change", "label": "다른 미션으로 바꿀래"},
+    {"value": "try_today", "label": "그래 도전해볼게!"},
+    {"value": "change", "label": "다른 미션으로 바꿔줘"},
 ]
 
 def rebuild_ui_action_payload(active_ui: dict) -> dict:
@@ -209,15 +214,37 @@ async def _execute_adjustment_response(student_id: int, adjustment_type: str) ->
     return "미션을 바꾸는 중 문제가 있었어. 잠시 후 다시 시도해줘.", exec_results
 
 
-async def _log_change_reason(student_id: int, action: dict | None, reason_type: str) -> None:
+async def _log_change_reason(student_id: int, action: dict | None, reason_type: str) -> dict | None:
     payload = _action_payload(action)
     mission_id = payload.get("mission_id")
     if not mission_id:
-        return
+        return None
     try:
-        await run_in_threadpool(save_mission_change_log, student_id, mission_id, reason_type)
+        return await run_in_threadpool(save_mission_change_log, student_id, mission_id, reason_type)
     except Exception as e:
         print(f"[UiAction] mission change log failed: {type(e).__name__}: {e}")
+    return None
+
+
+async def _save_reason_memory(student_id: int, payload: dict, reason_type: str, log_row: dict | None = None) -> dict | None:
+    activity_key = payload.get("activity_key") or (log_row or {}).get("activity_key")
+    if not activity_key:
+        return None
+
+    if reason_type == "too_hard":
+        memory_type = "difficulty"
+        polarity = None
+    elif reason_type == "dislike":
+        memory_type = "preference"
+        polarity = -1
+    else:
+        return None
+
+    try:
+        return await run_in_threadpool(upsert_user_memory, student_id, activity_key, memory_type, polarity)
+    except Exception as e:
+        print(f"[UiAction] memory upsert failed reason={reason_type}: {type(e).__name__}: {e}")
+    return None
 
 
 async def resolve_mission_ui_action_request(action_id: str, session_id: str, value: str) -> dict:
@@ -243,7 +270,8 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
 
     if action_type == "mission_change_reason":
         if value == "too_hard":
-            await _log_change_reason(student_id, action, "too_hard")
+            log_row = await _log_change_reason(student_id, action, "too_hard")
+            memory = await _save_reason_memory(student_id, payload, "too_hard", log_row)
             response, exec_results = await _execute_adjustment_response(student_id, "easier")
             return {
                 "response": response,
@@ -254,6 +282,7 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                     "ui_action_type": action_type,
                     "ui_action_value": value,
                     "adjustment_status": exec_results.adjustment.status.value if exec_results.adjustment else None,
+                    "memory_saved": bool(memory),
                 },
             }
 
@@ -288,7 +317,8 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
             }
 
         if value == "dislike":
-            await _log_change_reason(student_id, action, "dislike")
+            log_row = await _log_change_reason(student_id, action, "dislike")
+            memory = await _save_reason_memory(student_id, payload, "dislike", log_row)
             ui_action = await create_mission_dislike_confirm_action(student_id, session_id, payload)
             response = await _generate_dislike_response(
                 payload.get("mission_name", "오늘 미션"),
@@ -303,6 +333,7 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                     "ui_action_type": action_type,
                     "ui_action_value": value,
                     "next_ui_action_type": "mission_dislike_confirm",
+                    "memory_saved": bool(memory),
                 },
             }
 

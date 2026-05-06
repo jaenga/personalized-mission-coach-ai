@@ -465,6 +465,7 @@ async def _handle_mission_change_reason(
             "mission_id": mission_id,
             "mission_name": payload.get("mission_name", ""),
             "mission_rule": payload.get("mission_rule", ""),
+            "activity_key": activity_key,
             "reason_type": "dislike",
             "original_user_message": user_message,
         }
@@ -474,6 +475,11 @@ async def _handle_mission_change_reason(
                 await run_in_threadpool(save_mission_change_log, student_id, mission_id, "dislike")
             except Exception as e:
                 print(f"[ChangeReason] log failed: {e!r}")
+        if activity_key:
+            try:
+                await run_in_threadpool(upsert_user_memory, student_id, activity_key, "preference", -1)
+            except Exception as e:
+                print(f"[ChangeReason] dislike memory upsert failed: {e!r}")
         return PendingOutcome(
             action_type="mission_change_reason",
             decision="dislike",
