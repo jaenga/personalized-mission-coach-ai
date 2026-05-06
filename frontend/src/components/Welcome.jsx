@@ -159,9 +159,9 @@ export default function Welcome({ onContinue }) {
       <div
         className="absolute font-noto"
         style={{
-          left: 155,
+          left: 106,
           top: 533,
-          width: 87,
+          width: 190,
           height: 22,
           color: "#000000",
           fontSize: 15,
@@ -169,6 +169,7 @@ export default function Welcome({ onContinue }) {
           textAlign: "center",
           letterSpacing: "-0.43px",
           lineHeight: "22px",
+          whiteSpace: "nowrap",
         }}
       >
         가입 기념 선물

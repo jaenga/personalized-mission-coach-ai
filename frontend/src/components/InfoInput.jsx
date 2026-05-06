@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import tomatoHi from "../assets/tomato/_shared/hi.png";
 
 function formatBirth(iso) {
@@ -11,6 +11,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
   const [birth, setBirth] = useState("");
   const [gender, setGender] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
+  const birthInputRef = useRef(null);
 
   const canSubmit = !loading && (isPrivate || (birth.length > 0 && gender.length > 0));
 
@@ -112,6 +113,13 @@ export default function InfoInput({ onSubmit, loading, error }) {
       <form onSubmit={handleSubmit}>
         <label
           className="absolute font-sejong flex items-center"
+          onClick={() => {
+            if (isPrivate) return;
+            const input = birthInputRef.current;
+            if (!input) return;
+            input.focus();
+            input.showPicker?.();
+          }}
           style={{
             left: 56,
             top: 472,
@@ -131,15 +139,23 @@ export default function InfoInput({ onSubmit, loading, error }) {
           }}
         >
           <input
+            ref={birthInputRef}
             type="date"
             value={birth}
             onChange={(e) => setBirth(e.target.value)}
             max={today}
             disabled={isPrivate}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-            style={{ borderRadius: 50 }}
+            style={{ borderRadius: 50, zIndex: 2 }}
           />
-          <span style={{ color: birth ? "#FFFFFF" : "rgba(255,255,255,0.85)" }}>
+          <span
+            style={{
+              color: birth ? "#FFFFFF" : "rgba(255,255,255,0.85)",
+              pointerEvents: "none",
+              position: "relative",
+              zIndex: 1,
+            }}
+          >
             {birth ? formatBirth(birth) : "생년월일"}
           </span>
         </label>
