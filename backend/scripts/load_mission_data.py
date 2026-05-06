@@ -47,7 +47,8 @@ def main() -> None:
                 mission_location,
                 reward_xp,
                 mission_group,
-                mission_rule
+                mission_rule,
+                activity_key
             )
             VALUES (
                 :mission_id,
@@ -61,7 +62,8 @@ def main() -> None:
                 :mission_location,
                 :reward_xp,
                 :mission_group,
-                :mission_rule
+                :mission_rule,
+                :activity_key
             )
         """)
 
@@ -83,6 +85,7 @@ def main() -> None:
                     ),
                     "mission_group": row["mission_group"],
                     "mission_rule": row["mission_rule"],
+                    "activity_key": row["activity_key"] if "activity_key" in df.columns else None,
                 }
             )
 

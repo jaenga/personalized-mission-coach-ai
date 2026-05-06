@@ -23,6 +23,20 @@ class MissionUiActionResolveRequest(BaseModel):
     value: str = Field(..., min_length=1)
 
 
+class MissionReviewRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    mission_id: int
+    rating: int = Field(..., ge=1, le=5)
+    comment: str | None = None
+
+
+class OnboardingPreferencesRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    preferred_activity_keys: list[str] = Field(default_factory=list)
+    disliked_activity_keys: list[str] = Field(default_factory=list)
+    restrictions: list[str] = Field(default_factory=list)
+
+
 class UiActionButton(BaseModel):
     value: str
     label: str

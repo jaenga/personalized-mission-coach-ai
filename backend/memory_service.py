@@ -5,136 +5,53 @@ import os
 import re
 import time
 
+from activity_keys import (
+    ACTIVITY_KEY_ALIASES,
+    VALID_ACTIVITY_KEYS,
+    normalize_activity_key,
+)
 from database import upsert_user_memory
 from ollama_client import generate_json_message
 
 
 MEMORY_EXTRACTION_TIMEOUT_SEC = float(os.getenv("MEMORY_EXTRACTION_TIMEOUT_SEC", "30"))
 
-VALID_SUBJECTS = {
-    "걷기",
-    "걸음수 채우기",
-    "계단 이용하기",
-    "줄넘기",
-    "스쿼트",
-    "버피테스트",
-    "팔굽혀펴기",
-    "팔벌려뛰기",
-    "플랭크",
-    "벽 밀기",
-    "제자리 달리기",
-    "자유 운동",
-    "스트레칭",
-    "활동 놀이",
-    "야외 놀이",
-    "자전거 타기",
-    "물 마시기",
-    "아침 식사",
-    "규칙적 식사",
-    "균형 식단",
-    "천천히 먹기",
-    "과식 방지",
-    "야식 금지",
-    "식사 집중",
-    "식사 위생",
-    "간식 줄이기",
-    "건강 간식 선택",
-    "과일 먹기",
-    "채소 먹기",
-    "우유 마시기",
-    "가공식품 줄이기",
-    "건강 음료 선택",
-    "취침 시간 지키기",
-    "취침 전 루틴",
-    "기상 시간 지키기",
-    "기상 후 루틴",
-    "손 씻기",
-    "양치하기",
-    "위생 관리",
-    "독서",
-    "정리 정돈",
-    "공부 집중",
-    "계획 세우기",
-    "게임 시간 줄이기",
-    "숏폼 줄이기",
-    "영상 시청 줄이기",
-    "스마트폰 절제",
-    "화면 없는 시간",
-}
-
 SHORT_MEMORY_SKIP_ANSWERS = {
     "응",
-    "ㅇ",
-    "ㅇㅇ",
-    "응응",
-    "어",
-    "엉",
     "네",
-    "그래",
+    "넵",
     "좋아",
+    "그래",
     "맞아",
     "아니",
     "아냐",
-    "ㄴ",
-    "ㄴㄴ",
-    "아님",
     "싫어",
     "취소",
 }
 
-PREFERENCE_POSITIVE_RE = re.compile(r"좋아|재밌|재미있|하고\s*싶|괜찮")
-PREFERENCE_NEGATIVE_RE = re.compile(r"싫어|싫다|재미없|재미\s*없|별로")
-DIFFICULTY_RE = re.compile(r"어려워|어렵|어려움|힘들|못하겠|까먹|깜빡|못\s*했|못했")
-GENERIC_SUBJECTS = {"자유 운동", "활동 놀이", "야외 놀이"}
-SUBJECT_ALIASES = {
-    "축구": "자유 운동",
-    "농구": "자유 운동",
-    "야구": "자유 운동",
-    "수영": "자유 운동",
-    "태권도": "자유 운동",
-    "달리기": "자유 운동",
-    "배드민턴": "활동 놀이",
-    "탁구": "활동 놀이",
-    "훌라후프": "활동 놀이",
-    "공원 놀이": "야외 놀이",
-}
+TOO_EASY_RE = re.compile(r"너무\s*쉬|쉬웠|쉽다|쉬워|시시|간단")
+PREFERENCE_POSITIVE_RE = re.compile(r"좋아|좋았|좋은|선호|재밌|재미있|마음에\s*들")
+PREFERENCE_NEGATIVE_RE = re.compile(r"싫어|싫었|싫은|재미없|재미\s*없|별로|비선호|하기\s*싫")
+DIFFICULTY_RE = re.compile(r"어려|힘들|못\s*하|못하|버거|무리|까먹|실패")
 
-MEMORY_EXTRACTION_SYSTEM_PROMPT = """아이의 발화에서 기억할 정보를 1개만 추출해.
+MEMORY_EXTRACTION_SYSTEM_PROMPT = """아이의 발화에서 장기기억으로 저장할 정보 1개만 JSON으로 추출해.
 
-저장 가능 타입: preference, difficulty
-restriction(알레르기/금지활동/못 먹는 음식)은 절대 추출하지 않음.
-too_easy(너무 쉬움)는 추출하지 않음.
+저장 가능한 type은 preference 또는 difficulty뿐이야.
+restriction은 채팅에서 추출하지 않는다.
+"너무 쉬워"처럼 쉬움 피드백은 저장하지 않는다.
 
-difficulty는 "어려워/힘들어/못하겠어/까먹었어"처럼 어렵거나 실패가 명확할 때만 사용해.
-preference는 "좋아/싫어/재미있어/재미없어"처럼 선호가 명확할 때 사용해.
-예: "줄넘기가 싫어" → {"subject":"줄넘기","type":"preference","polarity":-1}
-예: "줄넘기가 어려워" → {"subject":"줄넘기","type":"difficulty","polarity":null}
+subject는 반드시 아래 activity_key 목록 중 하나여야 한다.
+목록에 없거나 애매하면 {"subject": null}을 출력한다.
 
-우선순위: difficulty > preference
-단, "싫어/좋아/재미없어/재미있어"는 difficulty가 아니라 preference야.
-
-subject는 아래 목록 중 하나와 정확히 일치하도록 출력해.
-목록에 없거나 애매하면 {"subject": null}을 반환해.
-새로운 subject를 만들지 말고, 비슷하다는 이유로 억지 매핑하지 마.
-축구/농구/야구/배드민턴/수영 같은 목록 밖 활동을 "자유 운동", "활동 놀이", "야외 놀이"로 바꾸지 마.
-단, 코드에 명시된 alias 매핑은 서버에서만 처리한다.
-
-[subject 목록]
-걷기, 걸음수 채우기, 계단 이용하기, 줄넘기, 스쿼트, 버피테스트,
-팔굽혀펴기, 팔벌려뛰기, 플랭크, 벽 밀기, 제자리 달리기, 자유 운동,
-스트레칭, 활동 놀이, 야외 놀이, 자전거 타기, 물 마시기, 아침 식사,
-규칙적 식사, 균형 식단, 천천히 먹기, 과식 방지, 야식 금지, 식사 집중,
-식사 위생, 간식 줄이기, 건강 간식 선택, 과일 먹기, 채소 먹기,
-우유 마시기, 가공식품 줄이기, 건강 음료 선택, 취침 시간 지키기,
-취침 전 루틴, 기상 시간 지키기, 기상 후 루틴, 손 씻기, 양치하기,
-위생 관리, 독서, 정리 정돈, 공부 집중, 계획 세우기, 게임 시간 줄이기,
-숏폼 줄이기, 영상 시청 줄이기, 스마트폰 절제, 화면 없는 시간
-
-추출할 정보 없으면 {"subject": null} 반환.
-다른 텍스트 없이 JSON만 출력.
+[activity_key 목록]
+{activity_keys}
 
 출력 형식:
-{"subject":"...","type":"preference|difficulty","polarity":1|-1|null}
+{"subject":"걷기","type":"preference","polarity":1}
+{"subject":"줄넘기","type":"difficulty","polarity":null}
+{"subject":null}
+
+다른 설명 없이 JSON 하나만 출력해.
 """
 
 
@@ -143,32 +60,11 @@ def should_skip_memory_extraction(
     user_message: str,
     is_pending_turn: bool = False,
 ) -> bool:
-    if not student_id:
-        return True
-    if is_pending_turn:
-        return True
-    text = (user_message or "").replace(" ", "").strip()
-    if not text or text == "__GREET__":
-        return True
-    return text in SHORT_MEMORY_SKIP_ANSWERS
+    return bool(_memory_skip_reason(student_id, user_message, is_pending_turn))
 
 
-def _infer_memory_signal(user_message: str) -> tuple[str | None, int | None]:
-    if DIFFICULTY_RE.search(user_message or ""):
-        return "difficulty", None
-    if PREFERENCE_NEGATIVE_RE.search(user_message or ""):
-        return "preference", -1
-    if PREFERENCE_POSITIVE_RE.search(user_message or ""):
-        return "preference", 1
-    return None, None
-
-
-def _alias_subject_from_message(user_message: str) -> str | None:
-    compact_message = (user_message or "").replace(" ", "")
-    for alias, subject in SUBJECT_ALIASES.items():
-        if alias.replace(" ", "") in compact_message:
-            return subject
-    return None
+def _compact(text: str) -> str:
+    return "".join((text or "").split()).lower()
 
 
 def _memory_skip_reason(
@@ -180,48 +76,108 @@ def _memory_skip_reason(
         return "missing_student"
     if is_pending_turn:
         return "pending_turn"
-    text = (user_message or "").replace(" ", "").strip()
+    text = _compact(user_message)
     if not text:
         return "empty"
-    if text == "__GREET__":
+    if text == "__greet__":
         return "greet"
-    if text in SHORT_MEMORY_SKIP_ANSWERS:
+    if text in {_compact(value) for value in SHORT_MEMORY_SKIP_ANSWERS}:
         return "short_answer"
+    if TOO_EASY_RE.search(user_message or ""):
+        return "too_easy"
     return ""
 
 
-def parse_memory_candidate(raw: str, user_message: str = "") -> dict | None:
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
+def _find_activity_key_in_text(text: str) -> str | None:
+    compact_text = _compact(text)
+    if not compact_text:
         return None
 
-    raw_subject = data.get("subject")
-    subject = SUBJECT_ALIASES.get(raw_subject, raw_subject)
-    alias_subject = _alias_subject_from_message(user_message)
-    if alias_subject and subject in GENERIC_SUBJECTS:
-        subject = alias_subject
+    matches: list[tuple[int, str]] = []
+    for key in VALID_ACTIVITY_KEYS:
+        compact_key = _compact(key)
+        if compact_key and compact_key in compact_text:
+            matches.append((len(compact_key), key))
+
+    for alias, key in ACTIVITY_KEY_ALIASES.items():
+        compact_alias = _compact(alias)
+        if compact_alias and compact_alias in compact_text:
+            normalized = normalize_activity_key(key)
+            if normalized:
+                matches.append((len(compact_alias), normalized))
+
+    if not matches:
+        return None
+    matches.sort(reverse=True)
+    return matches[0][1]
+
+
+def _infer_memory_signal(user_message: str) -> tuple[str | None, int | None]:
+    if TOO_EASY_RE.search(user_message or ""):
+        return None, None
+    if DIFFICULTY_RE.search(user_message or ""):
+        return "difficulty", None
+    if PREFERENCE_NEGATIVE_RE.search(user_message or ""):
+        return "preference", -1
+    if PREFERENCE_POSITIVE_RE.search(user_message or ""):
+        return "preference", 1
+    return None, None
+
+
+def infer_memory_candidate_from_text(user_message: str) -> dict | None:
+    memory_type, polarity = _infer_memory_signal(user_message)
+    if not memory_type:
+        return None
+
+    subject = _find_activity_key_in_text(user_message)
     if not subject:
         return None
-    if subject not in VALID_SUBJECTS:
-        return None
-    if subject in GENERIC_SUBJECTS:
-        compact_message = (user_message or "").replace(" ", "")
-        subject_mentioned = subject.replace(" ", "") in compact_message
-        if not subject_mentioned and alias_subject != subject:
-            return None
 
-    memory_type = data.get("type")
+    return {
+        "subject": subject,
+        "memory_type": memory_type,
+        "polarity": polarity,
+    }
+
+
+def _loads_json_object(raw: str) -> dict | None:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def parse_memory_candidate(raw: str, user_message: str = "") -> dict | None:
+    data = _loads_json_object(raw)
+    if not data:
+        return None
+
+    subject = normalize_activity_key(data.get("subject"))
+    if not subject:
+        return None
+
+    inferred_type, inferred_polarity = _infer_memory_signal(user_message)
+    memory_type = inferred_type or data.get("type")
+    polarity = inferred_polarity if inferred_type else data.get("polarity")
+
     if memory_type not in {"preference", "difficulty"}:
         return None
-
-    polarity = data.get("polarity")
-    inferred_type, inferred_polarity = _infer_memory_signal(user_message)
-    if inferred_type:
-        memory_type = inferred_type
-        polarity = inferred_polarity
-
     if memory_type == "preference":
+        if polarity in {"1", "+1"}:
+            polarity = 1
+        elif polarity in {"-1", -1}:
+            polarity = -1
         if polarity not in {-1, 1}:
             return None
     if memory_type == "difficulty":
@@ -234,6 +190,15 @@ def parse_memory_candidate(raw: str, user_message: str = "") -> dict | None:
     }
 
 
+def _save_memory_candidate(student_id: int, candidate: dict) -> dict | None:
+    return upsert_user_memory(
+        student_id=student_id,
+        subject=candidate["subject"],
+        memory_type=candidate["memory_type"],
+        polarity=candidate["polarity"],
+    )
+
+
 async def extract_and_save_memory(
     student_id: int | None,
     user_message: str,
@@ -244,11 +209,25 @@ async def extract_and_save_memory(
         print(f"[Memory] skipped reason={skip_reason} message={user_message[:60]!r}")
         return None
 
+    rule_candidate = infer_memory_candidate_from_text(user_message)
+    if rule_candidate and student_id:
+        saved = _save_memory_candidate(student_id, rule_candidate)
+        if saved:
+            print(
+                "[Memory] saved rule "
+                f"student={student_id} subject={rule_candidate['subject']} "
+                f"type={rule_candidate['memory_type']}"
+            )
+        return saved
+
     print(f"[Memory] extracting student={student_id} message={user_message[:80]!r}")
     started_at = time.perf_counter()
     try:
+        prompt = MEMORY_EXTRACTION_SYSTEM_PROMPT.format(
+            activity_keys=", ".join(sorted(VALID_ACTIVITY_KEYS))
+        )
         raw = await generate_json_message(
-            MEMORY_EXTRACTION_SYSTEM_PROMPT,
+            prompt,
             f"발화: {user_message}",
             timeout=MEMORY_EXTRACTION_TIMEOUT_SEC,
         )
@@ -268,20 +247,10 @@ async def extract_and_save_memory(
         print(f"[Memory] no valid memory raw={raw[:120]!r}")
         return None
 
-    print(
-        "[Memory] parsed "
-        f"subject={candidate['subject']} type={candidate['memory_type']} "
-        f"polarity={candidate['polarity']}"
-    )
-    saved = upsert_user_memory(
-        student_id=student_id,
-        subject=candidate["subject"],
-        memory_type=candidate["memory_type"],
-        polarity=candidate["polarity"],
-    )
+    saved = _save_memory_candidate(student_id, candidate)
     if saved:
         print(
-            "[Memory] saved "
+            "[Memory] saved llm "
             f"student={student_id} subject={candidate['subject']} type={candidate['memory_type']}"
             f" score={saved.get('score')} count={saved.get('count')}"
         )

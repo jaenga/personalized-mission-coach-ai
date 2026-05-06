@@ -1,5 +1,6 @@
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
+from activity_keys import normalize_activity_key
 from database import (
     DEMO_MODE,
     _kst_today,
@@ -14,15 +15,24 @@ from database import (
     get_student_by_credentials,
     get_student_mission_db,
     init_db,
+    save_mission_review as save_mission_review_db,
     save_profile,
+    upsert_user_memory,
 )
 from demo_mission_messages import attach_mission_message
+from memory_service import extract_and_save_memory
 from mission_ui_action_service import get_active_ui_action, rebuild_ui_action_payload, resolve_mission_ui_action_request
 from starlette.concurrency import run_in_threadpool
 from rag import preload_model
 from qwen_client import preload_qwen
 from sheets import generate_daily_status
-from schemas import MissionUiActionResolveRequest, ProfileRequest, VerifyRequest
+from schemas import (
+    MissionReviewRequest,
+    MissionUiActionResolveRequest,
+    OnboardingPreferencesRequest,
+    ProfileRequest,
+    VerifyRequest,
+)
 
 
 def startup_tasks() -> None:
@@ -102,6 +112,80 @@ def get_today_mission(student_id: int | None = None):
         "status": "assigned",
         "mission_message": "오늘 미션을 아직 불러오지 못했어. 잠시 후 다시 확인해보자!",
     }
+
+
+def save_mission_review(body: MissionReviewRequest, background_tasks: BackgroundTasks | None = None):
+    profile = fetch_profile(body.session_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    try:
+        review = save_mission_review_db(
+            student_id=profile["student_id"],
+            mission_id=body.mission_id,
+            rating=body.rating,
+            comment=body.comment,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not review:
+        raise HTTPException(status_code=404, detail="mission not found")
+    if background_tasks and body.comment and body.comment.strip():
+        background_tasks.add_task(
+            extract_and_save_memory,
+            profile["student_id"],
+            body.comment.strip(),
+            False,
+        )
+    return {"ok": True, "review": review}
+
+
+def save_onboarding_preferences(body: OnboardingPreferencesRequest):
+    profile = fetch_profile(body.session_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    student_id = profile["student_id"]
+    saved = []
+    skipped = []
+
+    for subject in _clean_subjects(body.preferred_activity_keys):
+        activity_key = normalize_activity_key(subject)
+        if not activity_key:
+            skipped.append({"value": subject, "type": "preference", "reason": "invalid_activity_key"})
+            continue
+        memory = upsert_user_memory(student_id, activity_key, "preference", 1)
+        if memory:
+            saved.append(memory)
+
+    for subject in _clean_subjects(body.disliked_activity_keys):
+        activity_key = normalize_activity_key(subject)
+        if not activity_key:
+            skipped.append({"value": subject, "type": "preference", "reason": "invalid_activity_key"})
+            continue
+        memory = upsert_user_memory(student_id, activity_key, "preference", -1)
+        if memory:
+            saved.append(memory)
+
+    for subject in _clean_subjects(body.restrictions):
+        memory = upsert_user_memory(student_id, subject, "restriction")
+        if memory:
+            saved.append(memory)
+
+    return {"ok": True, "saved_count": len(saved), "skipped": skipped, "memories": saved}
+
+
+def _clean_subjects(values: list[str]) -> list[str]:
+    seen = set()
+    cleaned = []
+    for value in values or []:
+        subject = (value or "").strip()
+        if not subject or subject in seen:
+            continue
+        seen.add(subject)
+        cleaned.append(subject)
+    return cleaned
 
 
 def get_chat_messages(session_id: str):

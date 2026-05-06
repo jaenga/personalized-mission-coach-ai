@@ -6,6 +6,8 @@ import uuid
 from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
 
+from activity_keys import normalize_activity_key
+
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -181,6 +183,36 @@ def init_db():
                             'just_change'
                         )
                     ),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                ALTER TABLE mission_change_logs
+                ADD COLUMN IF NOT EXISTS activity_key TEXT
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mission_reviews (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    review_date DATE NOT NULL,
+                    activity_key TEXT,
+                    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+                    comment TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (student_id, review_date)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS generated_missions (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER REFERENCES students(student_id),
+                    mission_name TEXT NOT NULL,
+                    mission_rule TEXT,
+                    activity_keys TEXT[],
+                    difficulty TEXT,
+                    source_reason TEXT,
+                    status TEXT DEFAULT 'draft',
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
@@ -598,7 +630,7 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
                        m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
-                       m.mission_rule, sdm.status
+                       m.mission_rule, m.activity_key, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s AND sdm.assigned_date = %s
@@ -1187,6 +1219,75 @@ def get_last_action_type(student_id: int) -> str | None:
 
 # ── 장기기억 (user_memories) ─────────────────────────────────────────────────
 
+def save_mission_review(
+    student_id: int,
+    mission_id: int,
+    rating: int,
+    comment: str | None = None,
+    review_date: str | None = None,
+) -> dict | None:
+    """Save or update one daily mission review. activity_key is always read from missions."""
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not mission_id:
+        raise ValueError("mission_id is required")
+    if rating < 1 or rating > 5:
+        raise ValueError("rating must be between 1 and 5")
+
+    target_date = review_date or _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT mission_id, activity_key
+                FROM missions
+                WHERE mission_id = %s
+                """,
+                (mission_id,),
+            )
+            mission = cur.fetchone()
+            if not mission:
+                return None
+            activity_key = normalize_activity_key(mission.get("activity_key"))
+            if mission.get("activity_key") and not activity_key:
+                print(
+                    "[MissionReview] invalid activity_key ignored "
+                    f"mission_id={mission_id} activity_key={mission.get('activity_key')!r}"
+                )
+
+            cur.execute(
+                """
+                INSERT INTO mission_reviews (
+                    student_id,
+                    mission_id,
+                    review_date,
+                    activity_key,
+                    rating,
+                    comment
+                )
+                VALUES (%s, %s, %s::date, %s, %s, %s)
+                ON CONFLICT (student_id, review_date)
+                DO UPDATE SET
+                    mission_id = EXCLUDED.mission_id,
+                    activity_key = EXCLUDED.activity_key,
+                    rating = EXCLUDED.rating,
+                    comment = EXCLUDED.comment
+                RETURNING *
+                """,
+                (
+                    student_id,
+                    mission["mission_id"],
+                    target_date,
+                    activity_key,
+                    rating,
+                    comment or "",
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
 def upsert_user_memory(
     student_id: int,
     subject: str,
@@ -1202,6 +1303,10 @@ def upsert_user_memory(
     subject = (subject or "").strip()
     if not student_id or not subject:
         return None
+    if memory_type in {"preference", "difficulty"}:
+        subject = normalize_activity_key(subject) or ""
+        if not subject:
+            return None
 
     if memory_type == "preference":
         delta = 1 if polarity == 1 else -1 if polarity == -1 else 0
@@ -1416,6 +1521,12 @@ def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) 
             mission = cur.fetchone()
             if not mission:
                 return None
+            activity_key = normalize_activity_key(mission.get("activity_key"))
+            if mission.get("activity_key") and not activity_key:
+                print(
+                    "[MissionChangeLog] invalid activity_key ignored "
+                    f"mission_id={mission_id} activity_key={mission.get('activity_key')!r}"
+                )
             cur.execute("""
                 INSERT INTO mission_change_logs (
                     student_id,
@@ -1425,7 +1536,7 @@ def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) 
                 )
                 VALUES (%s, %s, %s, %s)
                 RETURNING *
-            """, (student_id, mission_id, mission.get("activity_key"), reason_type))
+            """, (student_id, mission_id, activity_key, reason_type))
             row = cur.fetchone()
         conn.commit()
     return dict(row) if row else None

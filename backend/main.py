@@ -10,6 +10,8 @@ from app_services import (
     get_user_profile,
     register_demo_student,
     resolve_mission_ui_action,
+    save_mission_review,
+    save_onboarding_preferences,
     save_user_profile,
     startup_tasks,
     verify_student,
@@ -18,7 +20,14 @@ from chat_service import process_chat, process_chat_stream
 from intent_router import close_intent_router_client
 from ollama_client import close_ollama_client
 from qwen_client import close_qwen_client
-from schemas import ChatRequest, MissionUiActionResolveRequest, ProfileRequest, VerifyRequest
+from schemas import (
+    ChatRequest,
+    MissionReviewRequest,
+    MissionUiActionResolveRequest,
+    OnboardingPreferencesRequest,
+    ProfileRequest,
+    VerifyRequest,
+)
 
 
 app = FastAPI(title="AI 생활습관 코치 MVP")
@@ -66,6 +75,16 @@ def get_profile(session_id: str):
 @app.get("/mission")
 def get_mission(student_id: int | None = None):
     return get_today_mission(student_id)
+
+
+@app.post("/mission-review")
+def post_mission_review(body: MissionReviewRequest, background_tasks: BackgroundTasks):
+    return save_mission_review(body, background_tasks)
+
+
+@app.post("/onboarding-preferences")
+def post_onboarding_preferences(body: OnboardingPreferencesRequest):
+    return save_onboarding_preferences(body)
 
 
 @app.post("/chat")
