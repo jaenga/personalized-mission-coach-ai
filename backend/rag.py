@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 import time
 import psycopg2
-from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,7 +13,9 @@ load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 
-_model: SentenceTransformer | None = None
+_model = None
+_sentence_transformer_cls = None
+_sentence_transformer_import_failed = False
 
 CHUNK_THRESHOLD = 0.75
 FAQ_THRESHOLD = 0.65  
@@ -23,17 +24,37 @@ FAQ_LIMIT = 2
 
 
 
-def _get_model() -> SentenceTransformer:
+def _get_sentence_transformer_cls():
+    global _sentence_transformer_cls, _sentence_transformer_import_failed
+    if _sentence_transformer_cls is not None or _sentence_transformer_import_failed:
+        return _sentence_transformer_cls
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        _sentence_transformer_cls = SentenceTransformer
+    except ModuleNotFoundError as e:
+        _sentence_transformer_import_failed = True
+        print(f"[RAG] sentence_transformers 없음 - RAG 검색 비활성화: {e}")
+    return _sentence_transformer_cls
+
+
+def _get_model():
     global _model
     if _model is None:
+        sentence_transformer_cls = _get_sentence_transformer_cls()
+        if sentence_transformer_cls is None:
+            raise RuntimeError("sentence_transformers is not installed")
         print(f"[RAG] 임베딩 모델 로드 중: {MODEL_NAME}")
-        _model = SentenceTransformer(MODEL_NAME)
+        _model = sentence_transformer_cls(MODEL_NAME)
         print("[RAG] 모델 로드 완료")
     return _model
 
 
 def preload_model():
-    _get_model()
+    try:
+        _get_model()
+    except RuntimeError as e:
+        print(f"[RAG] preload skipped: {e}")
 
 
 def _to_pgvector(vec: list[float]) -> str:
@@ -42,7 +63,11 @@ def _to_pgvector(vec: list[float]) -> str:
 
 def search_rag(query: str) -> dict:
     t0 = time.perf_counter()
-    model = _get_model()
+    try:
+        model = _get_model()
+    except RuntimeError as e:
+        print(f"[RAG] 검색 스킵: {e}")
+        return {"chunks": [], "faqs": [], "context": ""}
     vec = model.encode([query], normalize_embeddings=True)[0].tolist()
     embed_ms = round((time.perf_counter() - t0) * 1000)
     vec_str = _to_pgvector(vec)
