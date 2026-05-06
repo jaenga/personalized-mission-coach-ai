@@ -75,7 +75,8 @@ def rebuild_ui_action_payload(active_ui: dict) -> dict:
         return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_CHANGE_REASON_BUTTONS}
     if action_type == "mission_dislike_confirm":
         return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_DISLIKE_CONFIRM_BUTTONS}
-    return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": []}
+    payload = active_ui.get("payload") if isinstance(active_ui.get("payload"), dict) else {}
+    return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": [], "payload": payload}
 
 
 UI_ACTION_ALLOWED_VALUES = {
@@ -138,6 +139,7 @@ async def create_replacement_mission_input_action(
     session_id: str,
     payload: dict,
 ) -> dict:
+    payload = {**payload, "retry_count": int(payload.get("retry_count") or 0)}
     row = await run_in_threadpool(
         save_mission_ui_action,
         student_id,
@@ -151,6 +153,7 @@ async def create_replacement_mission_input_action(
         "type": row["action_type"],
         "lock_chat": False,
         "buttons": [],
+        "payload": row.get("payload") if isinstance(row.get("payload"), dict) else payload,
     }
 
 

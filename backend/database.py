@@ -1642,6 +1642,33 @@ def get_pending_mission_ui_action(student_id: int, session_id: str) -> dict | No
     return dict(row) if row else None
 
 
+def update_mission_ui_action_payload(
+    action_id: str,
+    student_id: int,
+    session_id: str,
+    payload: dict,
+) -> dict | None:
+    """대기 중인 UI action의 payload만 갱신한다."""
+    if not action_id or not student_id or not session_id or not isinstance(payload, dict):
+        return None
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET payload = %s::jsonb
+                WHERE action_id = %s
+                  AND student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                  AND (expires_at IS NULL OR expires_at >= NOW())
+                RETURNING *
+            """, (payload_json, action_id, student_id, session_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
 def resolve_mission_ui_action(
     action_id: str,
     student_id: int,
