@@ -247,7 +247,7 @@ export default function LearnScreen({
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col"
+      className="mobile-frame flex flex-col"
       style={{ background: "#FFF3E7" }}
     >
       {/* 상단 바 (LevelRing + 뽑기권/하트 칩) */}
@@ -358,7 +358,7 @@ export default function LearnScreen({
       {/* 본문 */}
       <div
         className="flex-1 overflow-y-auto relative"
-        style={{ paddingInline: 19, paddingTop: 6, paddingBottom: 110 }}
+        style={{ paddingInline: 19, paddingTop: 6, paddingBottom: "calc(110px + env(safe-area-inset-bottom))" }}
       >
         {/* 배경 데코 (구름/풀) */}
         <BackgroundDecor />

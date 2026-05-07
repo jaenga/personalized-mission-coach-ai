@@ -49,6 +49,9 @@ def generate_daily_status(today: str) -> int:
     날짜 탭(예: 2026-03-29)을 생성하고 DB students 테이블의 is_active 학생 전체를 추가
     탭이 이미 있으면 없는 학생만 추가
     """
+    if not SPREADSHEET_ID:
+        return 0
+
     from database import get_conn
     import psycopg2.extras
 

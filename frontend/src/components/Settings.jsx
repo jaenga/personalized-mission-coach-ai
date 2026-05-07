@@ -183,7 +183,7 @@ export default function Settings({
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col"
+      className="mobile-frame flex flex-col"
       style={{ background: "#FFF3E7" }}
     >
       {/* 헤더 */}
@@ -222,7 +222,7 @@ export default function Settings({
       {/* 본문 */}
       <div
         className="flex-1 overflow-y-auto"
-        style={{ paddingInline: 19, paddingTop: 20, paddingBottom: 96 }}
+        style={{ paddingInline: 19, paddingTop: 20, paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}
       >
         {/* 프로필 카드 */}
         <div

@@ -350,7 +350,7 @@ export default function ChatScreen({
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto"
+      className="mobile-frame"
       style={{ background: "#FFF3E7" }}
     >
       {/* 상단 헤더: 뒤로가기 + 하트 카운트 */}
@@ -436,7 +436,7 @@ export default function ChatScreen({
         className="absolute left-0 right-0 overflow-y-auto"
         style={{
           top: missionOpen ? 124 : 56,
-          bottom: 76,
+          bottom: "calc(76px + env(safe-area-inset-bottom))",
           padding: "16px 16px 8px",
           display: "flex",
           flexDirection: "column",
@@ -460,7 +460,10 @@ export default function ChatScreen({
       <div className="absolute left-0 right-0" style={{ bottom: 0 }}>
         <div
           className="flex items-center gap-2"
-          style={{ padding: "10px 16px 16px", background: "transparent" }}
+          style={{
+            padding: "10px 16px calc(16px + env(safe-area-inset-bottom))",
+            background: "transparent",
+          }}
         >
           <button
             type="button"

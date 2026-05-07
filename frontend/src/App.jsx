@@ -47,9 +47,15 @@ const NAV_KEY_TO_SCREEN = {
 
 // ── 세션/프로필 헬퍼 ───────────────────────────────────────────────────────
 function createSessionId() {
-  const id = crypto.randomUUID();
+  const id = createClientId("session");
   localStorage.setItem("chat_session_id", id);
   return id;
+}
+
+function createClientId(prefix = "id") {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function getOrCreateSessionId() {
@@ -448,7 +454,7 @@ export default function App() {
     setLoading(true);
     try {
       const res = await sendMessage("__GREET__", sessionId, missionTitle);
-      const debugId = crypto.randomUUID();
+      const debugId = createClientId("debug");
       setMessages([{ role: "assistant", content: res.response, debugId }]);
       setDebugMap({ [debugId]: { ...res.debug } });
       setSelectedDebugId(debugId);
@@ -463,7 +469,7 @@ export default function App() {
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
     setPipeline([]);
-    const debugId = crypto.randomUUID();
+    const debugId = createClientId("debug");
     let shouldRefreshMissionAfterDone = false;
 
     setMessages((prev) => [...prev, { role: "assistant", content: "", debugId, streaming: true }]);

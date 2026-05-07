@@ -97,7 +97,7 @@ export default function GameScreen({ onNavigate, studentId, onRecordRun, level =
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col"
+      className="mobile-frame flex flex-col"
       style={{ background: "#FFF3E7" }}
     >
       {/* 본문 — 게임 영역 */}
@@ -221,7 +221,7 @@ function IntroScreen({ onStart, bestScore, heartCount }) {
       </div>
 
       {/* 캐릭터 */}
-      <div className="flex-1 flex items-end justify-center w-full" style={{ paddingBottom: 110 }}>
+      <div className="flex-1 flex items-end justify-center w-full" style={{ paddingBottom: "calc(110px + env(safe-area-inset-bottom))" }}>
         <DesertGround speed={0} distance={0}>
           <img
             src={runImg}

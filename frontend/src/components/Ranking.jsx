@@ -436,7 +436,7 @@ export default function Ranking({ studentId, onNavigate }) {
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col"
+      className="mobile-frame flex flex-col"
       style={{ background: "#FFF3E7" }}
     >
       {/* 헤더 — 설정 화면과 동일한 스타일 */}
@@ -476,7 +476,7 @@ export default function Ranking({ studentId, onNavigate }) {
       {/* 본문 — 스크롤 가능 */}
       <div
         className="flex-1 overflow-y-auto"
-        style={{ paddingInline: 19, paddingBottom: 88 }}
+        style={{ paddingInline: 19, paddingBottom: "calc(88px + env(safe-area-inset-bottom))" }}
       >
         {/* TOP 3 카드 */}
         <section

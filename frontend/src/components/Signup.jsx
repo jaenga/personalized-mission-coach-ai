@@ -22,7 +22,7 @@ export default function Signup({
   }
 
   return (
-    <div className="relative w-[402px] h-[874px] overflow-hidden mx-auto" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame" style={{ background: "#FFF3E7" }}>
       <div
         className="absolute bg-white flex items-center justify-center px-4"
         style={{

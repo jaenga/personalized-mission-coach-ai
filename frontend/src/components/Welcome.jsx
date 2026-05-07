@@ -41,7 +41,7 @@ function SparkleShape({ shape, color, size }) {
 export default function Welcome({ onContinue }) {
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto"
+      className="mobile-frame"
       style={{ background: "#FFF3E7" }}
     >
       {/* 흰색 반투명 카드 */}

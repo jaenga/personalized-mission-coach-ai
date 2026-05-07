@@ -243,7 +243,7 @@ export default function DrawScreen({
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto"
+      className="mobile-frame"
       style={{ background: "#FFF3E7" }}
     >
       {/* 상단: LevelRing + 뱃지 */}

@@ -3,7 +3,7 @@ import tomatoLeaf from "../assets/tomato/_shared/leaf.png";
 
 export default function Login({ onStart }) {
   return (
-    <div className="relative w-[402px] h-[874px] overflow-hidden mx-auto" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame" style={{ background: "#FFF3E7" }}>
         <img
           src={tomatoLeaf}
           alt=""

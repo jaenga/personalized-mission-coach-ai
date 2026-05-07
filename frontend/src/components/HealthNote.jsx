@@ -396,7 +396,7 @@ export default function HealthNote({
   }
 
   return (
-    <div className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame flex flex-col" style={{ background: "#FFF3E7" }}>
       <header
         className="flex items-center justify-between flex-shrink-0"
         style={{
@@ -525,9 +525,10 @@ export default function HealthNote({
       </div>
 
       <div
-        className="absolute left-0 right-0 px-4 pb-4 pt-3"
+        className="absolute left-0 right-0 px-4 pt-3"
         style={{
           bottom: 0,
+          paddingBottom: "calc(16px + env(safe-area-inset-bottom))",
           background: "linear-gradient(to top, #FFF8F0 60%, rgba(255,248,240,0))",
         }}
       >

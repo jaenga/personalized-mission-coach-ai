@@ -103,7 +103,7 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto flex flex-col"
+      className="mobile-frame flex flex-col"
       style={{ background: "#FFF3E7" }}
     >
       {/* 헤더 — 뒤로가기 + 우측 배움 배지 */}
@@ -197,7 +197,7 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
       <div
         className="flex-shrink-0"
         style={{
-          padding: "10px 16px 18px",
+          padding: "10px 16px calc(18px + env(safe-area-inset-bottom))",
           background: "linear-gradient(180deg, rgba(255, 243, 231, 0) 0%, #FFF3E7 30%)",
           position: "absolute",
           bottom: 0,

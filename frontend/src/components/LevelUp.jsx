@@ -69,7 +69,7 @@ export default function LevelUp({ level = 2, onContinue }) {
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto"
+      className="mobile-frame"
       style={{ background: "#FFF3E7" }}
     >
       {/* 카드 배경 */}

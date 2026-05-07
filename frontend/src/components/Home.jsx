@@ -348,7 +348,8 @@ export function BottomNav({ active = "home", onChange }) {
       className="absolute left-0 right-0 flex items-center justify-around"
       style={{
         bottom: 0,
-        height: 72,
+        height: "calc(72px + env(safe-area-inset-bottom))",
+        paddingBottom: "env(safe-area-inset-bottom)",
         background: "rgba(255, 255, 255, 0.95)",
         borderTop: "1px solid rgba(227, 93, 73, 0.15)",
         backdropFilter: "blur(8px)",
@@ -364,7 +365,7 @@ export function BottomNav({ active = "home", onChange }) {
             className="flex flex-col items-center justify-center transition-transform active:scale-95"
             style={{
               width: 60,
-              height: "100%",
+              height: 72,
               padding: 0,
               border: "none",
               background: "transparent",
@@ -436,12 +437,12 @@ export default function Home({
 
   return (
     <div
-      className="relative w-[402px] h-[874px] overflow-hidden mx-auto"
+      className="mobile-frame"
       style={{ background: "#FFF3E7" }}
     >
       <div
         className="absolute inset-0 overflow-y-auto"
-        style={{ paddingBottom: 88 }}
+        style={{ paddingBottom: "calc(88px + env(safe-area-inset-bottom))" }}
       >
         {/* 상단: 레벨 링(좌) + 뱃지(우) — 다이나믹 아일랜드와 겹치지 않게 좌우 분리 */}
         <div
