@@ -22,7 +22,7 @@ const LEVEL_FACES = { 1: lv1Face, 2: lv2Face, 3: lv3Face, 4: lv4Face, 5: lv5Face
    ───────────────────────────────────────────────────────── */
 const STAGE_W = 402;
 const STAGE_H = 600; 
-const GROUND_Y = 460; 
+const GROUND_Y = 430;
 const TOMATO_X = 80;
 const TOMATO_W = 70;
 const TOMATO_H = 70;
@@ -30,50 +30,63 @@ const STONE_W = 42;
 const STONE_H = 42;
 const STONE_SINK = 8;
 const GRAVITY = 2150; // px/s^2
-const JUMP_VELOCITY = -760; // px/s
+const JUMP_VELOCITY = -720; // px/s
 const BASE_SPEED = 320; // px/s
 const SPEED_GROWTH = 16; // 시간당 속도 증가
 const MAX_SPEED = 620;
 const EARLY_RETRY_LIMIT = 5;
-const SCORE_DISTANCE_SCALE = 0.05;
+const SCORE_DISTANCE_SCALE = 0.035;
 
-export default function GameScreen({ onNavigate, studentId, onRecordRun, level = 3, bestScore = 1240, heartCount = 4, onSpendHeart, onRefundHeart }) {
+export default function GameScreen({ onNavigate, studentId, onRecordRun, level = 3, bestScore = 0, heartCount = 4, onSpendHeart, onRefundHeart }) {
   const [phase, setPhase] = useState("intro"); // intro | play | result
   const [score, setScore] = useState(0);
   const [activeNav, setActiveNav] = useState("home");
   const [best, setBest] = useState(bestScore);
+  const [bestLoaded, setBestLoaded] = useState(studentId == null);
   const [lastRun, setLastRun] = useState({ elapsed: 0, earlyRetry: false, isNewBest: false });
   const [currentFree, setCurrentFree] = useState(false); // 이번 라운드가 무료 재도전이었는지
+  const [rankingOpen, setRankingOpen] = useState(false);
 
   useEffect(() => {
-    if (studentId == null) return;
+    if (studentId == null) {
+      setBest(bestScore);
+      setBestLoaded(true);
+      return;
+    }
     let cancelled = false;
-    fetchGameRanking("week", "run")
+    setBestLoaded(false);
+    fetchGameRanking("all", "run")
       .then((data) => {
         if (cancelled) return;
         const me = Array.isArray(data) ? data.find((r) => r.student_id === studentId) : null;
-        if (me) setBest(me.best_score || 0);
+        setBest(me?.best_score || 0);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setBest(0);
+      })
+      .finally(() => {
+        if (!cancelled) setBestLoaded(true);
+      });
     return () => { cancelled = true; };
-  }, [studentId]);
+  }, [studentId, bestScore]);
 
   async function start({ free = false } = {}) {
     if (!free) {
       if (heartCount <= 0) return;
-      const spent = await onSpendHeart?.();
-      if (spent === false) return;
     }
     setCurrentFree(free);
     setScore(0);
     setPhase("play");
+    if (!free && studentId != null) {
+      onSpendHeart?.().catch(() => {});
+    }
   }
 
   async function handleGameOver({ score: finalScore, elapsed }) {
-    const isNewBest = finalScore > best;
-    const newBest = Math.max(best, finalScore);
-    setBest(newBest);
     const earlyRetry = elapsed < EARLY_RETRY_LIMIT;
+    const recordableRun = !earlyRetry && finalScore > 0;
+    const isNewBest = recordableRun && finalScore > best;
+    if (isNewBest) setBest(finalScore);
     if (currentFree) {
       // 무료 재도전 라운드 — 5초 넘게 살았으면 그제서야 하트 차감
       if (!earlyRetry) await onSpendHeart?.();
@@ -82,7 +95,7 @@ export default function GameScreen({ onNavigate, studentId, onRecordRun, level =
       if (earlyRetry) await onRefundHeart?.();
     }
     // 5초 미만(early retry) 라운드는 hateful이라 백엔드 기록 X — 점수 0/스팸 방지
-    if (!earlyRetry && finalScore > 0 && studentId != null) {
+    if (recordableRun && studentId != null) {
       await onRecordRun?.({ score: finalScore, durationSec: Math.round(elapsed) });
     }
     setScore(finalScore);
@@ -105,7 +118,9 @@ export default function GameScreen({ onNavigate, studentId, onRecordRun, level =
         {phase === "intro" && (
           <IntroScreen
             onStart={() => start()}
+            onOpenRanking={() => setRankingOpen(true)}
             bestScore={best}
+            bestLoaded={bestLoaded}
             heartCount={heartCount}
           />
         )}
@@ -124,6 +139,7 @@ export default function GameScreen({ onNavigate, studentId, onRecordRun, level =
             earlyRetry={lastRun.earlyRetry}
             elapsed={lastRun.elapsed}
             isNewBest={lastRun.isNewBest}
+            onOpenRanking={() => setRankingOpen(true)}
             onRetry={() => start({ free: lastRun.earlyRetry })}
             onConfirm={() => setPhase("intro")}
           />
@@ -131,6 +147,12 @@ export default function GameScreen({ onNavigate, studentId, onRecordRun, level =
       </div>
 
       <BottomNav active={activeNav} onChange={handleNav} />
+      <GameRankingModal
+        open={rankingOpen}
+        studentId={studentId}
+        currentScore={score}
+        onClose={() => setRankingOpen(false)}
+      />
     </div>
   );
 }
@@ -138,7 +160,7 @@ export default function GameScreen({ onNavigate, studentId, onRecordRun, level =
 /* ─────────────────────────────────────────────────────────
    인트로 화면
    ───────────────────────────────────────────────────────── */
-function IntroScreen({ onStart, bestScore, heartCount }) {
+function IntroScreen({ onStart, onOpenRanking, bestScore, bestLoaded, heartCount }) {
   const canStart = heartCount > 0;
   return (
     <div
@@ -192,13 +214,13 @@ function IntroScreen({ onStart, bestScore, heartCount }) {
             }}
           >
             <span>★</span>
-            최고 기록 {bestScore.toLocaleString()}
+            최고 기록 {bestLoaded ? bestScore.toLocaleString() : "..."}
           </span>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              window.location.hash = "#game-ranking";
+              onOpenRanking?.();
             }}
             className="font-sejong inline-flex items-center justify-center transition-transform active:scale-95"
             style={{
@@ -222,7 +244,7 @@ function IntroScreen({ onStart, bestScore, heartCount }) {
 
       {/* 캐릭터 */}
       <div className="flex-1 flex items-end justify-center w-full" style={{ paddingBottom: "calc(110px + env(safe-area-inset-bottom))" }}>
-        <DesertGround speed={0} distance={0}>
+        <DesertGround speed={0} distance={0} groundY={390}>
           <img
             src={runImg}
             alt=""
@@ -288,10 +310,10 @@ function PlayScreen({ level, onGameOver }) {
   const [stones, setStones] = useState([]);
   const [distance, setDistance] = useState(0);
   const [speedView, setSpeedView] = useState(BASE_SPEED);
-  const [paused, setPaused] = useState(false);
+  const [paused, setPaused] = useState(true);
   const [jumping, setJumping] = useState(false);
   const [crashed, setCrashed] = useState(false);
-  const [countdown, setCountdown] = useState(null);
+  const [countdown, setCountdown] = useState(3);
   const lastTimeRef = useRef(performance.now());
   const spawnTimerRef = useRef(0);
   const elapsedRef = useRef(0);
@@ -300,7 +322,7 @@ function PlayScreen({ level, onGameOver }) {
   const vyRef = useRef(0);
   const stonesRef = useRef([]);
   const distanceRef = useRef(0);
-  const pausedRef = useRef(false);
+  const pausedRef = useRef(true);
   const gameOverRef = useRef(false);
   const onGameOverRef = useRef(onGameOver);
   onGameOverRef.current = onGameOver;
@@ -341,6 +363,11 @@ function PlayScreen({ level, onGameOver }) {
     setPaused(true);
   }
 
+  function startCountdownNow() {
+    setCountdown(null);
+    setPaused(false);
+  }
+
   // 게임 루프
   useEffect(() => {
     function tick(now) {
@@ -376,8 +403,8 @@ function PlayScreen({ level, onGameOver }) {
         if (spawnTimerRef.current <= 0) {
           stonesRef.current = [...stonesRef.current, makeStone()];
           const difficulty = Math.min(1, elapsedRef.current / 45);
-          const minGap = 0.52 - difficulty * 0.16;
-          const randomGap = 1.05 - difficulty * 0.35;
+          const minGap = 0.75 - difficulty * 0.16;
+          const randomGap = 1.4 - difficulty * 0.35;
           spawnTimerRef.current = minGap + Math.random() * randomGap;
         }
         setStones(stonesRef.current);
@@ -430,6 +457,10 @@ function PlayScreen({ level, onGameOver }) {
       onPointerDown={(e) => {
         if (e.pointerType === "mouse" && e.button !== 0) return;
         e.preventDefault();
+        if (countdown != null) {
+          startCountdownNow();
+          return;
+        }
         jump();
       }}
     >
@@ -617,48 +648,53 @@ function makeStone() {
 /* ─────────────────────────────────────────────────────────
    결과 화면
    ───────────────────────────────────────────────────────── */
-function ResultScreen({ studentId, score, best, heartCount, earlyRetry, elapsed, isNewBest, onRetry, onConfirm }) {
+function ResultScreen({ studentId, score, best, heartCount, earlyRetry, elapsed, isNewBest, onOpenRanking, onRetry, onConfirm }) {
   const canRetry = earlyRetry || heartCount > 0;
   return (
     <div
-      className="absolute inset-0 flex flex-col items-center"
-      style={{ background: "linear-gradient(180deg, #FFF3E7 0%, #FFEFE1 100%)", paddingTop: 28, paddingInline: 24 }}
+      className="absolute inset-0 overflow-y-auto"
+      style={{
+        background: "linear-gradient(180deg, #FFF3E7 0%, #FFEFE1 100%)",
+        padding: "28px 24px calc(100px + env(safe-area-inset-bottom))",
+      }}
     >
-      <div
-        className="font-sejong"
-        style={{ fontSize: 15, fontWeight: 800, color: "#E35D49", letterSpacing: "-0.3px" }}
-      >
-        {isNewBest ? "NEW BEST!" : "GAME OVER"}
+      <div className="flex flex-col items-center">
+        <div
+          className="font-sejong"
+          style={{ fontSize: 15, fontWeight: 800, color: "#E35D49", letterSpacing: "-0.3px" }}
+        >
+          {isNewBest ? "NEW BEST!" : "GAME OVER"}
+        </div>
+        <div
+          className="font-sejong"
+          style={{ fontSize: 25, fontWeight: 800, color: "#1a1a1a", letterSpacing: "-0.3px", marginTop: 4 }}
+        >
+          {isNewBest ? "최고 기록을 세웠어요!" : earlyRetry ? "한 번 더 도전해볼까요?" : "수고했어요!"}
+        </div>
+        <span
+          className="font-sejong inline-flex items-center"
+          style={{
+            marginTop: 10,
+            height: 30,
+            paddingInline: 12,
+            borderRadius: 999,
+            background: "rgba(252, 228, 225, 0.85)",
+            border: "1px solid rgba(227, 93, 73, 0.16)",
+            color: "#E35D49",
+            fontSize: 13,
+            fontWeight: 800,
+            letterSpacing: "-0.3px",
+            gap: 6,
+          }}
+        >
+          <img src={heartImg} alt="" style={{ width: 15, height: 15, objectFit: "contain" }} />
+          남은 하트 {heartCount}
+        </span>
       </div>
-      <div
-        className="font-sejong"
-        style={{ fontSize: 25, fontWeight: 800, color: "#1a1a1a", letterSpacing: "-0.3px", marginTop: 4 }}
-      >
-        {isNewBest ? "최고 기록을 세웠어요!" : earlyRetry ? "한 번 더 도전해볼까요?" : "수고했어요!"}
-      </div>
-      <span
-        className="font-sejong inline-flex items-center"
-        style={{
-          marginTop: 10,
-          height: 30,
-          paddingInline: 12,
-          borderRadius: 999,
-          background: "rgba(252, 228, 225, 0.85)",
-          border: "1px solid rgba(227, 93, 73, 0.16)",
-          color: "#E35D49",
-          fontSize: 13,
-          fontWeight: 800,
-          letterSpacing: "-0.3px",
-          gap: 6,
-        }}
-      >
-        <img src={heartImg} alt="" style={{ width: 15, height: 15, objectFit: "contain" }} />
-        남은 하트 {heartCount}
-      </span>
 
       {/* 점수 카드 */}
       <div
-        className="mt-4 w-full text-center"
+        className="mt-4 w-full text-center relative"
         style={{
           background: "#FFFFFF",
           borderRadius: 28,
@@ -684,6 +720,7 @@ function ResultScreen({ studentId, score, best, heartCount, earlyRetry, elapsed,
           }}
         >
           {score.toLocaleString()}
+          <span style={{ fontSize: 16, color: "#8A8580", marginLeft: 4 }}>m</span>
         </div>
         {isNewBest && (
           <span
@@ -703,15 +740,30 @@ function ResultScreen({ studentId, score, best, heartCount, earlyRetry, elapsed,
             최고 기록 달성
           </span>
         )}
+        <img
+          src={exerciseImg}
+          alt=""
+          draggable="false"
+          className="absolute select-none pointer-events-none"
+          style={{
+            right: -5,
+            bottom: -18,
+            width: 86,
+            height: 86,
+            objectFit: "contain",
+            opacity: 0.95,
+            zIndex: 0,
+          }}
+        />
       </div>
 
       {/* 최고기록 + 생존시간 */}
       <div className="mt-3 w-full flex" style={{ gap: 10 }}>
-        <StatBox label="최고 기록" value={best.toLocaleString()} />
+        <StatBox label="최고 기록" value={`${best.toLocaleString()}m`} />
         <StatBox label="생존 시간" value={`${elapsed.toFixed(1)}초`} accent />
       </div>
 
-      <GameRankingPreview studentId={studentId} score={score} onOpenRanking={() => { window.location.hash = "#game-ranking"; }} />
+      <GameRankingPreview studentId={studentId} score={score} onOpenRanking={onOpenRanking} />
 
       {/* 버튼 */}
       <div className="mt-4 w-full flex flex-col" style={{ gap: 10 }}>
@@ -759,19 +811,6 @@ function ResultScreen({ studentId, score, best, heartCount, earlyRetry, elapsed,
           )}
         </button>
       </div>
-
-      {/* 게임 오버 토마토 */}
-      <img
-        src={exerciseImg}
-        alt=""
-        draggable="false"
-        className="absolute select-none pointer-events-none"
-        style={{
-          right: 18, bottom: 86,
-          width: 96, height: 96, objectFit: "contain",
-          opacity: 1, zIndex: 0,
-        }}
-      />
     </div>
   );
 }
@@ -805,13 +844,16 @@ function StatBox({ label, value, accent }) {
 
 function GameRankingPreview({ studentId, score, onOpenRanking }) {
   const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // 결과 화면 진입 시 주간 게임 랭킹 조회
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     fetchGameRanking("week", "run")
       .then((data) => { if (!cancelled) setList(Array.isArray(data) ? data : []); })
-      .catch(() => { if (!cancelled) setList([]); });
+      .catch(() => { if (!cancelled) setList([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [studentId, score]);
 
@@ -826,7 +868,8 @@ function GameRankingPreview({ studentId, score, onOpenRanking }) {
   const top3 = ranked.slice(0, 3);
   const me = ranked.find((u) => u.isMe);
   const meInTop3 = me && me.rank <= 3;
-  const rows = me && !meInTop3 ? [...top3, me] : top3;
+  const rows = me && !meInTop3 ? [...top3, me] : ranked.slice(0, 4);
+  const placeholderRows = Array.from({ length: 4 }, (_, i) => ({ rank: i + 1 }));
 
   return (
     <button
@@ -837,6 +880,7 @@ function GameRankingPreview({ studentId, score, onOpenRanking }) {
         background: "#FFFFFF",
         borderRadius: 22,
         padding: "14px 16px",
+        minHeight: 214,
         border: "1px solid rgba(227, 93, 73, 0.12)",
         boxShadow: "0 6px 14px rgba(80, 60, 40, 0.06)",
         cursor: "pointer",
@@ -855,7 +899,19 @@ function GameRankingPreview({ studentId, score, onOpenRanking }) {
         </span>
       </div>
       <div className="flex flex-col" style={{ gap: 7 }}>
-        {rows.map((row) => {
+        {(loading ? placeholderRows : rows).map((row) => {
+          if (loading) {
+            return (
+              <div
+                key={`placeholder-${row.rank}`}
+                style={{
+                  height: 34,
+                  borderRadius: 999,
+                  background: "rgba(246, 241, 235, 0.76)",
+                }}
+              />
+            );
+          }
           const mine = !!row.isMe;
           return (
             <div
@@ -898,17 +954,222 @@ function GameRankingPreview({ studentId, score, onOpenRanking }) {
   );
 }
 
+function GameRankingModal({ open, studentId, currentScore = 0, onClose }) {
+  const [period, setPeriod] = useState("week");
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    fetchGameRanking(period, "run")
+      .then((data) => {
+        if (!cancelled) setList(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setList([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, period, studentId, currentScore]);
+
+  if (!open) return null;
+
+  const rows = list.map((r) => ({
+    id: r.student_id,
+    rank: r.rank,
+    name: r.student_id === studentId ? "나" : r.student_name,
+    score: r.student_id === studentId ? Math.max(r.best_score || 0, currentScore) : r.best_score || 0,
+    plays: r.plays || 0,
+    isMe: r.student_id === studentId,
+  }));
+  const me = rows.find((r) => r.isMe);
+  const visibleRows = rows.slice(0, 8);
+  const meVisible = me && !visibleRows.some((r) => r.id === me.id);
+
+  return (
+    <div
+      className="absolute inset-0 flex items-end justify-center"
+      style={{ zIndex: 30, background: "rgba(34, 28, 24, 0.28)", padding: "0 16px calc(88px + env(safe-area-inset-bottom))" }}
+      onClick={onClose}
+    >
+      <section
+        className="w-full font-sejong"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: 360,
+          maxHeight: "min(620px, calc(100dvh - 120px))",
+          borderRadius: "28px 28px 22px 22px",
+          background: "linear-gradient(180deg, #FFFFFF 0%, #FFF7EE 100%)",
+          border: "1px solid rgba(227, 93, 73, 0.18)",
+          boxShadow: "0 18px 40px rgba(80, 60, 40, 0.22)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          className="flex items-center justify-between"
+          style={{ padding: "16px 16px 12px", borderBottom: "1px solid rgba(227, 93, 73, 0.10)" }}
+        >
+          <div>
+            <div style={{ fontSize: 11, color: "#E35D49", fontWeight: 900, letterSpacing: "-0.2px" }}>
+              TOMI RUN
+            </div>
+            <h2 style={{ marginTop: 2, fontSize: 20, color: "#1a1a1a", fontWeight: 900, letterSpacing: "-0.43px" }}>
+              달리기 랭킹
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="게임 랭킹 닫기"
+            className="flex items-center justify-center"
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: "50%",
+              border: "none",
+              background: "rgba(227, 93, 73, 0.10)",
+              color: "#E35D49",
+              fontSize: 20,
+              cursor: "pointer",
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: "12px 16px 0" }}>
+          <div
+            className="flex"
+            style={{ background: "rgba(246, 241, 235, 0.9)", borderRadius: 999, padding: 4 }}
+          >
+            {[
+              ["week", "주간"],
+              ["month", "월간"],
+              ["all", "전체"],
+            ].map(([key, label]) => {
+              const active = period === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPeriod(key)}
+                  className="flex-1 font-sejong"
+                  style={{
+                    height: 34,
+                    borderRadius: 999,
+                    border: "none",
+                    background: active ? "#E35D49" : "transparent",
+                    color: active ? "#FFFFFF" : "#8A8580",
+                    fontSize: 13,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="overflow-y-auto" style={{ maxHeight: "calc(min(620px, 100dvh - 120px) - 132px)", padding: "12px 16px 16px" }}>
+          {loading ? (
+            <div style={{ padding: "28px 0", textAlign: "center", color: "#8A8580", fontSize: 13 }}>
+              랭킹 불러오는 중...
+            </div>
+          ) : visibleRows.length === 0 ? (
+            <div style={{ padding: "28px 0", textAlign: "center", color: "#8A8580", fontSize: 13 }}>
+              아직 기록이 없어요
+            </div>
+          ) : (
+            <div className="flex flex-col" style={{ gap: 8 }}>
+              {visibleRows.map((row) => (
+                <GameRankingRow key={row.id} row={row} />
+              ))}
+              {meVisible && (
+                <>
+                  <div style={{ height: 1, background: "rgba(227, 93, 73, 0.14)", margin: "2px 0" }} />
+                  <GameRankingRow row={me} />
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function GameRankingRow({ row }) {
+  const medal =
+    row.rank === 1 ? "#FFD56B" :
+    row.rank === 2 ? "#D9D5D0" :
+    row.rank === 3 ? "#E8B53D" :
+    "#FFFFFF";
+
+  return (
+    <div
+      className="flex items-center"
+      style={{
+        minHeight: 46,
+        borderRadius: 18,
+        padding: "8px 10px",
+        background: row.isMe ? "rgba(227, 93, 73, 0.10)" : "#FFFFFF",
+        border: row.isMe ? "1px solid rgba(227, 93, 73, 0.30)" : "1px solid rgba(227, 93, 73, 0.10)",
+        gap: 10,
+      }}
+    >
+      <span
+        className="flex items-center justify-center"
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          background: medal,
+          color: row.rank <= 3 ? "#7A5A0E" : "#8A8580",
+          fontSize: 12,
+          fontWeight: 900,
+          flexShrink: 0,
+        }}
+      >
+        {row.rank}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 900, color: row.isMe ? "#E35D49" : "#1a1a1a", letterSpacing: "-0.3px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {row.name}
+        </div>
+        <div style={{ marginTop: 1, fontSize: 11, color: "#8A8580", letterSpacing: "-0.2px" }}>
+          플레이 {row.plays}회
+        </div>
+      </div>
+      <div
+        className="flex items-baseline justify-end"
+        style={{ textAlign: "right", flexShrink: 0, minWidth: 72, gap: 2 }}
+      >
+        <span style={{ fontSize: 15, fontWeight: 900, color: "#1a1a1a", letterSpacing: "-0.3px" }}>
+          {row.score.toLocaleString()}
+        </span>
+        <span style={{ fontSize: 10, color: "#8A8580", letterSpacing: "-0.2px" }}>m</span>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────
    배경 — 사막 땅 + 선인장
    ───────────────────────────────────────────────────────── */
-function DesertGround({ children, speed = BASE_SPEED, distance = 0 }) {
+function DesertGround({ children, speed = BASE_SPEED, distance = 0, groundY = GROUND_Y }) {
   const stripeOffset = -(distance * 1.8) % 84;
   const pebbleOffset = -(distance * 1.2) % 120;
   return (
     <div
       className="absolute"
       style={{
-        left: 0, right: 0, top: GROUND_Y, bottom: 0,
+        left: 0, right: 0, top: groundY, bottom: 0,
         background: "linear-gradient(180deg, #F8D79A 0%, #E6B362 100%)",
         zIndex: 0,
         overflow: "hidden",
@@ -950,9 +1211,6 @@ function DesertGround({ children, speed = BASE_SPEED, distance = 0 }) {
           backgroundSize: "120px 44px",
         }}
       />
-      {/* 선인장 데코 */}
-      <Cactus style={{ left: 280, bottom: 120 }} />
-      <Cactus style={{ left: 18, bottom: 110, transform: "scale(0.7)" }} />
       {children}
     </div>
   );
@@ -987,20 +1245,6 @@ function Hill({ style }) {
     >
       <path d="M0 112 C42 34 92 16 136 64 C174 18 225 32 260 112 H0Z" fill="#CDE6B8" />
       <path d="M70 112 C103 48 143 36 178 78 C205 44 235 56 260 112 H70Z" fill="#B8DFA8" opacity="0.8" />
-    </svg>
-  );
-}
-
-function Cactus({ style }) {
-  return (
-    <svg
-      width="36" height="56" viewBox="0 0 36 56" fill="none"
-      style={{ position: "absolute", ...style }}
-      aria-hidden="true"
-    >
-      <rect x="14" y="10" width="8" height="42" rx="4" fill="#7BA45C" />
-      <rect x="6" y="22" width="6" height="16" rx="3" fill="#7BA45C" />
-      <rect x="24" y="18" width="6" height="20" rx="3" fill="#7BA45C" />
     </svg>
   );
 }

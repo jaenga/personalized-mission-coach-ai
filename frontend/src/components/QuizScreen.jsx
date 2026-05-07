@@ -224,7 +224,7 @@ export default function QuizScreen({ lesson, onBack, onComplete, alreadyComplete
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto"
-        style={{ padding: "16px 16px 12px" }}
+        style={{ padding: "16px 16px 112px" }}
       >
         {messages.map((m, i) => {
           const isLastMsg = i === messages.length - 1;
@@ -244,14 +244,12 @@ export default function QuizScreen({ lesson, onBack, onComplete, alreadyComplete
         })}
       </div>
 
-      {/* 하단 빠른답장 / 비활성 입력창 */}
-      {activeQ ? (
+      {/* 하단 정답 버튼 */}
+      {activeQ && (
         <QuickReplyBar
           question={activeQ}
           onPick={(value) => handlePick(activeQuestion.questionIdx, value)}
         />
-      ) : (
-        <DisabledChatInput />
       )}
 
       <style>{`
@@ -380,20 +378,21 @@ function QuestionBubble({ message, animate }) {
 function QuickReplyBar({ question, onPick }) {
   return (
     <div
-      className="flex-shrink-0"
+      className="absolute left-0 right-0"
       style={{
-        padding: "10px 16px max(16px, env(safe-area-inset-bottom))",
+        bottom: 0,
+        padding: "12px 16px calc(18px + env(safe-area-inset-bottom))",
         background: "linear-gradient(180deg, rgba(255, 243, 231, 0) 0%, #FFF3E7 30%)",
       }}
     >
       <div
         className="font-sejong"
-        style={{ fontSize: 11, color: "#75726e", letterSpacing: "-0.43px", marginBottom: 6, paddingLeft: 4 }}
+        style={{ fontSize: 11, color: "#75726e", letterSpacing: "-0.43px", marginBottom: 8, paddingLeft: 4 }}
       >
         답을 골라줘!
       </div>
       {question.type === "multiple" && (
-        <div className="flex flex-wrap" style={{ gap: 8, marginBottom: 10 }}>
+        <div className="flex" style={{ gap: 8 }}>
           {question.options.map((_, i) => (
             <ReplyChip
               key={i}
@@ -404,102 +403,34 @@ function QuickReplyBar({ question, onPick }) {
         </div>
       )}
       {question.type === "ox" && (
-        <div className="flex" style={{ gap: 8, marginBottom: 10 }}>
-          <ReplyChip label="O" onClick={() => onPick("O")} />
-          <ReplyChip label="X" onClick={() => onPick("X")} />
+        <div className="grid grid-cols-2" style={{ gap: 8 }}>
+          <ReplyChip label="O" onClick={() => onPick("O")} large />
+          <ReplyChip label="X" onClick={() => onPick("X")} large />
         </div>
       )}
-      <DisabledChatInput compact />
     </div>
   );
 }
 
-function DisabledChatInput({ compact = false }) {
-  return (
-    <div
-      className="flex-shrink-0 flex items-center"
-      style={{
-        padding: compact ? 0 : "10px 16px 16px",
-        gap: 8,
-      }}
-    >
-      <button
-        type="button"
-        disabled
-        aria-label="추가 메뉴 (비활성)"
-        className="flex items-center justify-center flex-shrink-0"
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 999,
-          background: "#FFFFFF",
-          border: "1.5px solid rgba(227, 93, 73, 0.32)",
-          padding: 0,
-          cursor: "not-allowed",
-        }}
-      >
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#E35D49" strokeWidth="2.4" strokeLinecap="round">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-      </button>
-      <div
-        className="flex-1 flex items-center font-sejong"
-        style={{
-          minWidth: 0,
-          background: "#FFFFFF",
-          border: "1.5px solid rgba(227, 93, 73, 0.24)",
-          borderRadius: 999,
-          height: 42,
-          paddingInline: 16,
-          color: "#A6A29D",
-          fontSize: 14,
-          fontWeight: 700,
-          letterSpacing: "-0.43px",
-        }}
-      >
-        지금은 퀴즈 시간이에요!
-      </div>
-      <button
-        type="button"
-        disabled
-        aria-label="보내기 (비활성)"
-        className="flex items-center justify-center flex-shrink-0"
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 999,
-          background: "#F3A398",
-          border: "none",
-          padding: 0,
-          cursor: "not-allowed",
-        }}
-      >
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="#FFFFFF">
-          <path d="M3 3l18 9-18 9 4-9-4-9z" />
-        </svg>
-      </button>
-    </div>
-  );
-}
-
-function ReplyChip({ label, onClick }) {
+function ReplyChip({ label, onClick, large = false }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="font-noto inline-flex items-center justify-center transition-all active:scale-[0.95]"
+      className="font-sejong flex items-center justify-center transition-all active:scale-[0.95]"
       style={{
         background: "#FFFFFF",
-        border: "1.5px solid #E35D49",
+        border: "1.5px solid rgba(227, 93, 73, 0.35)",
         borderRadius: 999,
-        minWidth: 48,
-        height: 32,
-        paddingInline: 14,
+        flex: 1,
+        height: large ? 58 : 52,
+        padding: 0,
         cursor: "pointer",
-        fontSize: 14,
         color: "#E35D49",
-        fontWeight: 700,
-        letterSpacing: "0.3px",
+        boxShadow: "0 4px 10px rgba(80, 60, 40, 0.06)",
+        fontSize: large ? 23 : 20,
+        fontWeight: 900,
+        letterSpacing: "0",
       }}
     >
       {label}

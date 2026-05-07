@@ -13,7 +13,6 @@ import LevelUp from "./components/LevelUp.jsx";
 import Ranking from "./components/Ranking.jsx";
 import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
-import GameRanking from "./components/GameRanking.jsx";
 
 // ── 화면 상수 ──────────────────────────────────────────────────────────────
 const SCREENS = {
@@ -32,7 +31,6 @@ const SCREENS = {
   RANKING: "ranking",
   LEARN: "learn",
   GAME: "game",
-  GAME_RANKING: "game_ranking",
 };
 
 // 컴포넌트 onNavigate(key) → SCREENS 매핑
@@ -601,9 +599,6 @@ export default function App() {
   if (hash.startsWith("#ranking")) {
     return <Ranking studentId={profile?.student_id} onNavigate={() => { window.location.hash = ""; }} />;
   }
-  if (hash.startsWith("#game-ranking")) {
-    return <GameRanking studentId={profile?.student_id} onNavigate={() => { window.location.hash = ""; }} />;
-  }
   if (hash.startsWith("#learn")) {
     return (
       <LearnScreen
@@ -807,14 +802,6 @@ export default function App() {
               .catch(() => null)
           }
           onNavigate={navHandler(SCREENS.GAME)}
-        />
-      );
-
-    case SCREENS.GAME_RANKING:
-      return (
-        <GameRanking
-          studentId={profile?.student_id}
-          onNavigate={navHandler(SCREENS.GAME_RANKING)}
         />
       );
 

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import chatTomato from "../assets/tomato/chat/chat.png";
 
+const COACH_MESSAGE_INITIAL_DELAY = 1200;
+const COACH_MESSAGE_INTERVAL = 2500;
+
 /* ─────────────────────────────────────────────────────────
    교육 챗 화면 — 코치 버블 + 하단 "이해했어요" 버튼
    ───────────────────────────────────────────────────────── */
@@ -50,30 +53,47 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
   const [isTyping, setIsTyping] = useState(true); // 처음엔 코치가 등장 중
   const scrollRef = useRef(null);
   const startedRef = useRef(false);
+  const timersRef = useRef([]);
+
+  function clearMessageTimers() {
+    timersRef.current.forEach((timer) => clearTimeout(timer));
+    timersRef.current = [];
+  }
+
+  function revealCoachMessages(nextMessages, initialDelay = COACH_MESSAGE_INITIAL_DELAY) {
+    clearMessageTimers();
+    setIsTyping(true);
+    nextMessages.forEach((msg, i) => {
+      const timer = setTimeout(() => {
+        setMessages((prev) => [...prev, msg]);
+        if (i === nextMessages.length - 1) setIsTyping(false);
+      }, initialDelay + i * COACH_MESSAGE_INTERVAL);
+      timersRef.current.push(timer);
+    });
+  }
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     }
-  }, [messages]);
+  }, [messages, isTyping]);
 
   // 첫 진입 시 첫 step의 메시지를 시간차로 등장
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     const firstMessages = expandStep(lesson.education[0]);
-    firstMessages.forEach((msg, i) => {
-      setTimeout(() => {
-        setMessages((prev) => [...prev, msg]);
-        if (i === firstMessages.length - 1) setIsTyping(false);
-      }, 600 + i * 700);
-    });
+    revealCoachMessages(firstMessages);
+    return () => {
+      clearMessageTimers();
+      startedRef.current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const currentStep = lesson.education[stepIdx];
   const isLast = stepIdx >= lesson.education.length - 1;
-  const ctaLabel = currentStep?.type === "summary" ? "퀴즈 풀러 가기" : "이해했어요";
+  const ctaLabel = currentStep?.type === "summary" ? "퀴즈 풀러 가기" : "이해했어요!";
 
   function handleNext() {
     if (isTyping) return; // 안전장치
@@ -91,14 +111,7 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
     const nextStep = lesson.education[nextIdx];
     const nextMessages = expandStep(nextStep);
     setStepIdx(nextIdx);
-    setIsTyping(true);
-
-    nextMessages.forEach((msg, i) => {
-      setTimeout(() => {
-        setMessages((prev) => [...prev, msg]);
-        if (i === nextMessages.length - 1) setIsTyping(false);
-      }, 500 + i * 550);
-    });
+    revealCoachMessages(nextMessages, 750);
   }
 
   return (
@@ -191,6 +204,7 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
           }
           return <CoachBubble key={i} message={m} animate={isLast} />;
         })}
+        {isTyping && <TypingBubble />}
       </div>
 
       {/* 하단 CTA */}
@@ -226,6 +240,75 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
           {isTyping ? "토미가 말하는 중..." : ctaLabel}
         </button>
       </div>
+    </div>
+  );
+}
+
+function TypingDots() {
+  return (
+    <span
+      aria-label="토미가 말하는 중"
+      className="inline-flex items-center"
+      style={{ gap: 3, height: 20 }}
+    >
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: "50%",
+            background: "#E35D49",
+            display: "inline-block",
+            animation: "typingDot 1s infinite ease-in-out",
+            animationDelay: `${i * 0.16}s`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function TypingBubble() {
+  return (
+    <div
+      className="flex items-start"
+      style={{
+        gap: 8,
+        marginBottom: 10,
+        animation: "fadeIn 0.25s forwards",
+      }}
+    >
+      <img
+        src={chatTomato}
+        alt=""
+        draggable="false"
+        className="select-none pointer-events-none flex-shrink-0"
+        style={{ width: 32, height: 32, objectFit: "contain", marginTop: 4 }}
+      />
+      <div
+        className="font-sejong"
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid rgba(227, 93, 73, 0.18)",
+          borderRadius: "18px 18px 18px 4px",
+          padding: "11px 14px",
+          minWidth: 48,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+        }}
+      >
+        <TypingDots />
+      </div>
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes typingDot {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+          40% { transform: translateY(-4px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
