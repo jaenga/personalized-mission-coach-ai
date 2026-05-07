@@ -29,7 +29,7 @@ from database import (
     update_mission_ui_action_payload,
     upsert_user_memory,
 )
-from activity_matcher import match_activity_keys, select_replacement_mission
+from activity_matcher import is_direct_condition_change_request, match_activity_keys, select_replacement_mission
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_adjustment, execute_submit
 from memory_service import extract_and_save_memory
 from mission_ui_action_service import (
@@ -858,11 +858,15 @@ async def _handle_direct_activity_replacement(
 
     result = await _apply_activity_replacement(student_id, activity_keys, mission_row)
     if result:
+        if result.get("detected_function") == "request_mission_adjustment":
+            await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "just_change")
         return result
 
     fallback_result, _ = await _random_replacement_response(student_id)
     fallback_result["debug"]["activity_keys"] = activity_keys
     fallback_result["debug"]["fallback_reason"] = "no_activity_key_mission"
+    if fallback_result.get("detected_function") == "request_mission_adjustment":
+        await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "just_change")
     return fallback_result
 
 
@@ -957,7 +961,10 @@ async def _handle_replacement_mission_input(
 
     retry_count = int(payload.get("retry_count") or 0) + 1
     if retry_count >= 2:
-        fallback_result, _ = await _random_replacement_response(student_id)
+        fallback_result, _ = await _random_replacement_response(
+            student_id,
+            prefix="일치하는 미션을 찾지 못했어. 대신 랜덤 미션으로 바꿔줄게!",
+        )
         await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
         fallback_result["debug"]["retry_count"] = retry_count
         return fallback_result
@@ -1120,13 +1127,14 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
         if not _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
             candidate_text = extract_mission_candidate_text(body.message)
-            if candidate_text:
+            if is_direct_condition_change_request(body.message):
                 direct_result = await _handle_direct_activity_replacement(student_id, body.message, mission_row)
                 if direct_result:
                     await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "request_mission_adjustment")
                     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", direct_result["response"])
                     return direct_result
 
+            if candidate_text:
                 payload = {
                     "mission_id": mission_row.get("mission_id"),
                     "mission_name": mission_row.get("mission_name"),
@@ -1538,8 +1546,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
             if not _MISSION_CHANGE_NEGATION_RE.search((body.message or "").replace(" ", "")):
                 candidate_text = extract_mission_candidate_text(body.message)
-                if candidate_text:
-                    change_started = time.perf_counter()
+                change_started = time.perf_counter()
+                if is_direct_condition_change_request(body.message):
                     direct_result = await _handle_direct_activity_replacement(student_id, body.message, mission_row)
                     if direct_result:
                         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "request_mission_adjustment")
@@ -1551,6 +1559,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                         yield _sse({"type": "done", "ui_action": direct_result["ui_action"], "debug": direct_result["debug"]})
                         return
 
+                if candidate_text:
                     payload = {
                         "mission_id": mission_row.get("mission_id"),
                         "mission_name": mission_row.get("mission_name"),

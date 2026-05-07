@@ -213,12 +213,9 @@ def select_replacement_mission(
             if normalized
         }
         preferred_keys = [key for key in keys if key not in restricted_keys]
-
-        selected = _select_replacement_mission_from_db(get_conn, current_mission_id, preferred_keys)
-        if selected:
-            return selected
-        if preferred_keys != keys:
-            return _select_replacement_mission_from_db(get_conn, current_mission_id, keys)
+        if not preferred_keys:
+            return None
+        return _select_replacement_mission_from_db(get_conn, current_mission_id, preferred_keys)
     except Exception as e:
         print(f"[ActivityMatcher] replacement select failed: {type(e).__name__}: {e}")
     return None
