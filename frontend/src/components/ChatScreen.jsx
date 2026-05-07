@@ -12,6 +12,25 @@ const FAQ_ITEMS = [
   { id: "rewards", label: "보상은 어떻게 얻어?" },
 ];
 
+const MISSION_HEADER_STORAGE_KEY = "tommyChatMissionHeaderOpen";
+
+function readMissionHeaderOpen() {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(MISSION_HEADER_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveMissionHeaderOpen(open) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MISSION_HEADER_STORAGE_KEY, open ? "true" : "false");
+  } catch {
+  }
+}
+
 function FaqSheet({ open, onClose, onPick }) {
   return (
     <>
@@ -289,7 +308,7 @@ export default function ChatScreen({
   const [localMessages, setLocalMessages] = useState(initialMessages);
   const [input, setInput] = useState("");
   const [faqOpen, setFaqOpen] = useState(false);
-  const [missionOpen, setMissionOpen] = useState(false);
+  const [missionOpen, setMissionOpen] = useState(readMissionHeaderOpen);
   const scrollRef = useRef(null);
   const messages = backendMessages
     ? backendMessages.map((m, index) => ({
@@ -303,7 +322,11 @@ export default function ChatScreen({
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, loading]);
+  }, [messages, loading, missionOpen]);
+
+  useEffect(() => {
+    saveMissionHeaderOpen(missionOpen);
+  }, [missionOpen]);
 
   function handleSend(textOverride) {
     const text = (textOverride ?? input).trim();
@@ -319,6 +342,10 @@ export default function ChatScreen({
   function handleFaqPick(item) {
     setFaqOpen(false);
     handleSend(item.label);
+  }
+
+  function setMissionHeaderOpen(nextOpen) {
+    setMissionOpen(nextOpen);
   }
 
   return (
@@ -366,7 +393,7 @@ export default function ChatScreen({
       {/* 떠 있는 미션 토글 버튼 (FAB) — 접힌 상태에서만 표시 */}
       <button
         type="button"
-        onClick={() => setMissionOpen(true)}
+        onClick={() => setMissionHeaderOpen(true)}
         aria-label="오늘의 미션 보기"
         aria-hidden={missionOpen}
         className="absolute flex items-center justify-center transition-transform active:scale-95"
@@ -401,19 +428,20 @@ export default function ChatScreen({
       <MissionHeaderCard
         mission={todayMission}
         open={missionOpen}
-        onClose={() => setMissionOpen(false)}
+        onClose={() => setMissionHeaderOpen(false)}
       />
 
       <div
         ref={scrollRef}
         className="absolute left-0 right-0 overflow-y-auto"
         style={{
-          top: 56,
+          top: missionOpen ? 124 : 56,
           bottom: 76,
           padding: "16px 16px 8px",
           display: "flex",
           flexDirection: "column",
           gap: 10,
+          transition: "top 0.24s ease",
         }}
       >
         {messages.map((m) =>
