@@ -2,6 +2,7 @@ import os
 import random
 import psycopg2
 import psycopg2.extras
+from psycopg2.extras import Json
 from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -269,6 +270,15 @@ def init_db():
                     completed_at TIMESTAMPTZ,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     PRIMARY KEY (student_id, lesson_id)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS student_health_notes (
+                    student_id INTEGER PRIMARY KEY REFERENCES students(student_id) ON DELETE CASCADE,
+                    allergens JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    caution_foods JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
         conn.commit()
@@ -1447,6 +1457,52 @@ def complete_lesson_quiz(
         "first_completion": first_completion,
         "ticket_awarded": _QUIZ_TICKET_REWARD if first_completion else 0,
     }
+
+
+def get_health_note(student_id: int) -> dict | None:
+    """학생 건강노트 최신 값. 없으면 None."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT student_id, allergens, caution_foods, created_at, updated_at
+                FROM student_health_notes
+                WHERE student_id = %s
+            """, (student_id,))
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def upsert_health_note(
+    student_id: int,
+    allergens: list[str] | None = None,
+    caution_foods: list[str] | None = None,
+) -> dict:
+    """학생 건강노트를 student_id 기준으로 1개만 저장."""
+    clean_allergens = [str(x).strip() for x in (allergens or []) if str(x).strip()]
+    clean_caution_foods = [str(x).strip() for x in (caution_foods or []) if str(x).strip()]
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO student_health_notes (student_id, allergens, caution_foods)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (student_id) DO UPDATE
+                   SET allergens = EXCLUDED.allergens,
+                       caution_foods = EXCLUDED.caution_foods,
+                       updated_at = NOW()
+                RETURNING student_id, allergens, caution_foods, created_at, updated_at
+            """, (student_id, Json(clean_allergens), Json(clean_caution_foods)))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def delete_health_note(student_id: int) -> int:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM student_health_notes WHERE student_id = %s", (student_id,))
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
 
 
 def get_student_info_db(student_id: int) -> dict | None:

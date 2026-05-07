@@ -18,6 +18,8 @@ from database import (
     get_lesson_progress,
     get_xp_ranking,
     fetch_profile,
+    delete_health_note,
+    get_health_note,
     get_latest_chat_session,
     get_success_summary,
     get_student_by_credentials,
@@ -25,6 +27,7 @@ from database import (
     init_db,
     record_game_run,
     save_profile,
+    upsert_health_note,
     upsert_lesson_progress,
 )
 from demo_mission_messages import attach_mission_message
@@ -34,6 +37,7 @@ from sheets import generate_daily_status
 from schemas import (
     GameRunRequest,
     HeartAdjustRequest,
+    HealthNoteRequest,
     LessonProgressRequest,
     LessonQuizCompleteRequest,
     ProfileRequest,
@@ -84,10 +88,11 @@ def save_user_profile(body: ProfileRequest):
 
 
 def register_demo_student(body: VerifyRequest):
+    if not DEMO_MODE:
+        raise HTTPException(status_code=403, detail="현재는 회원가입을 사용할 수 없어요.")
+
     student = create_demo_student(body.student_name, body.phone_last4)
-    mission = None
-    if DEMO_MODE:
-        mission = attach_mission_message(assign_demo_mission_on_signup(student["student_id"]))
+    mission = attach_mission_message(assign_demo_mission_on_signup(student["student_id"]))
 
     return {
         "ok": True,
@@ -190,6 +195,30 @@ def complete_student_lesson_quiz(body: LessonQuizCompleteRequest):
         lesson_id=body.lesson_id,
         quiz_score=body.quiz_score,
     )
+
+
+def get_student_health_note(student_id: int):
+    note = get_health_note(student_id)
+    if not note:
+        return {
+            "student_id": student_id,
+            "allergens": [],
+            "caution_foods": [],
+        }
+    return note
+
+
+def save_student_health_note(body: HealthNoteRequest):
+    return upsert_health_note(
+        student_id=body.student_id,
+        allergens=body.allergens,
+        caution_foods=body.caution_foods,
+    )
+
+
+def delete_student_health_note(student_id: int):
+    deleted = delete_health_note(student_id)
+    return {"ok": True, "deleted": deleted}
 
 
 def get_chat_messages(session_id: str):

@@ -15,6 +15,7 @@ export default defineConfig({
       "/attendance": "http://localhost:8000",
       "/draw": "http://localhost:8000",
       "/game": "http://localhost:8000",
+      "/health-note": "http://localhost:8000",
       "/lessons": "http://localhost:8000",
       "/ranking": "http://localhost:8000",
       "/profile": "http://localhost:8000",

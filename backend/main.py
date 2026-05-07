@@ -10,6 +10,7 @@ from app_services import (
     generate_daily,
     get_chat_messages,
     get_game_ranking_for,
+    get_student_health_note,
     get_student_app_state,
     get_student_lesson_progress,
     get_student_stats,
@@ -19,9 +20,11 @@ from app_services import (
     record_student_game_run,
     register_demo_student,
     save_user_profile,
+    save_student_health_note,
     startup_tasks,
     update_student_lesson_progress,
     verify_student,
+    delete_student_health_note,
 )
 from chat_service import process_chat, process_chat_stream
 from intent_router import close_intent_router_client
@@ -31,6 +34,7 @@ from schemas import (
     ChatRequest,
     GameRunRequest,
     HeartAdjustRequest,
+    HealthNoteRequest,
     LessonProgressRequest,
     LessonQuizCompleteRequest,
     ProfileRequest,
@@ -138,6 +142,21 @@ def post_lessons_progress(body: LessonProgressRequest):
 @app.post("/lessons/quiz-complete")
 def post_lessons_quiz_complete(body: LessonQuizCompleteRequest):
     return complete_student_lesson_quiz(body)
+
+
+@app.get("/health-note/{student_id}")
+def get_health_note_route(student_id: int):
+    return get_student_health_note(student_id)
+
+
+@app.post("/health-note")
+def post_health_note_route(body: HealthNoteRequest):
+    return save_student_health_note(body)
+
+
+@app.delete("/health-note/{student_id}")
+def delete_health_note_route(student_id: int):
+    return delete_student_health_note(student_id)
 
 
 @app.post("/chat")

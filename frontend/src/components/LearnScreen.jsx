@@ -27,6 +27,50 @@ const DAILY_PLAN = [
 
 const NODE_GAP = 100;
 const PATH_WIDTH = 280;
+const DAY_MARKER_HEIGHT = 24;
+
+function getPlanLessons(plan) {
+  return plan.lessonIds
+    .map((id) => LESSONS.find((l) => l.id === id))
+    .filter(Boolean);
+}
+
+function isDayComplete(plan, progress) {
+  return plan.lessonIds.every((lessonId) => {
+    const p = progress[lessonId] || {};
+    return p.eduDone && p.quizDone;
+  });
+}
+
+function toLocalDateKey(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isDayCompleteBeforeToday(plan, progress, todayKey) {
+  if (!isDayComplete(plan, progress)) return false;
+  const completionDates = plan.lessonIds
+    .map((lessonId) => toLocalDateKey(progress[lessonId]?.completedAt))
+    .filter(Boolean);
+  if (completionDates.length !== plan.lessonIds.length) return false;
+  return completionDates.every((dateKey) => dateKey < todayKey);
+}
+
+function getUnlockedDay(progress) {
+  let unlockedDay = 1;
+  const todayKey = toLocalDateKey(new Date());
+  for (const plan of DAILY_PLAN) {
+    if (plan.day > unlockedDay) break;
+    if (!isDayCompleteBeforeToday(plan, progress, todayKey)) break;
+    unlockedDay = Math.min(plan.day + 1, DAILY_PLAN.length);
+  }
+  return unlockedDay;
+}
 
 export default function LearnScreen({
   onNavigate,
@@ -53,7 +97,11 @@ export default function LearnScreen({
         if (cancelled) return;
         const map = {};
         for (const r of rows) {
-          map[r.lesson_id] = { eduDone: r.edu_done, quizDone: r.quiz_done };
+          map[r.lesson_id] = {
+            eduDone: r.edu_done,
+            quizDone: r.quiz_done,
+            completedAt: r.completed_at,
+          };
         }
         setProgress(map);
       })
@@ -64,33 +112,51 @@ export default function LearnScreen({
   const [openMode, setOpenMode] = useState(null);
   const [expOpen, setExpOpen] = useState(false);
 
-  const todayPlan = DAILY_PLAN.find((d) => d.day === currentDay) ?? DAILY_PLAN[0];
-  const todayLessons = todayPlan.lessonIds
-    .map((id) => LESSONS.find((l) => l.id === id))
-    .filter(Boolean);
+  const unlockedDay = useMemo(
+    () => getUnlockedDay(progress),
+    [progress]
+  );
 
-  const todayNodes = useMemo(
+  const lessonNodes = useMemo(
     () =>
-      todayLessons.flatMap((lesson, idx) => [
-        { id: `${lesson.id}-edu`,  lessonId: lesson.id, kind: "education", lesson, setIdx: idx + 1 },
-        { id: `${lesson.id}-quiz`, lessonId: lesson.id, kind: "quiz",      lesson, setIdx: idx + 1 },
-      ]),
-    [todayLessons]
+      DAILY_PLAN.filter((d) => d.day <= unlockedDay).flatMap((plan) =>
+        getPlanLessons(plan).flatMap((lesson, idx) => [
+          {
+            id: `${lesson.id}-edu`,
+            lessonId: lesson.id,
+            kind: "education",
+            lesson,
+            day: plan.day,
+            dayTitle: plan.title,
+            setIdx: idx + 1,
+          },
+          {
+            id: `${lesson.id}-quiz`,
+            lessonId: lesson.id,
+            kind: "quiz",
+            lesson,
+            day: plan.day,
+            dayTitle: plan.title,
+            setIdx: idx + 1,
+          },
+        ])
+      ),
+    [unlockedDay]
   );
 
   // 잠긴 다음 날들도 같은 패스에 연결
   const lockedDayNodes = useMemo(
     () =>
-      DAILY_PLAN.filter((d) => d.day > currentDay).map((d) => ({
+      DAILY_PLAN.filter((d) => d.day > unlockedDay).map((d) => ({
         id: `day-${d.day}`,
         kind: "lockedDay",
         day: d.day,
         title: d.title,
       })),
-    [currentDay]
+    [unlockedDay]
   );
 
-  const nodes = useMemo(() => [...todayNodes, ...lockedDayNodes], [todayNodes, lockedDayNodes]);
+  const nodes = useMemo(() => [...lessonNodes, ...lockedDayNodes], [lessonNodes, lockedDayNodes]);
 
   function nodeState(node) {
     if (node.kind === "lockedDay") return "locked";
@@ -129,13 +195,23 @@ export default function LearnScreen({
   function handleQuizComplete(lessonId) {
     setProgress((prev) => ({
       ...prev,
-      [lessonId]: { ...(prev[lessonId] || {}), quizDone: true },
+      [lessonId]: { ...(prev[lessonId] || {}), quizDone: true, completedAt: new Date().toISOString() },
     }));
     if (studentId) {
       completeLessonQuiz({ studentId, lessonId })
         .then((res) => {
           // 첫 완료라면 백엔드가 ticket +1 한 새 app_state를 반환 — 부모에 반영.
           if (res?.app_state) onAppStateUpdate?.(res.app_state);
+          if (res?.progress?.completed_at) {
+            setProgress((prev) => ({
+              ...prev,
+              [lessonId]: {
+                ...(prev[lessonId] || {}),
+                quizDone: true,
+                completedAt: res.progress.completed_at,
+              },
+            }));
+          }
         })
         .catch(() => {});
     }
@@ -407,6 +483,18 @@ function Path({ nodes, states, activeIdx, onClick }) {
     x: PATH_WIDTH / 2 + (i % 2 === 0 ? -52 : 52),
     y: 82 + i * NODE_GAP,
   }));
+  const dayMarkers = [];
+  const seenDays = new Set();
+  nodes.forEach((node, i) => {
+    if (node.kind === "lockedDay" || !node.day || seenDays.has(node.day)) return;
+    seenDays.add(node.day);
+    const prevY = i === 0 ? 0 : positions[i - 1].y;
+    const midY = (prevY + positions[i].y) / 2;
+    dayMarkers.push({
+      day: node.day,
+      y: Math.max(0, midY - DAY_MARKER_HEIGHT / 2),
+    });
+  });
   const lastPos = positions[positions.length - 1];
   const endPoint = {
     x: lastPos.x + (nodes.length % 2 === 0 ? -54 : 54),
@@ -449,6 +537,10 @@ function Path({ nodes, states, activeIdx, onClick }) {
         />
       </svg>
 
+      {dayMarkers.map((marker) => (
+        <DayMarker key={marker.day} day={marker.day} y={marker.y} />
+      ))}
+
       {nodes.map((node, i) => {
         const state = states[i];
         const isCurrent = i === activeIdx;
@@ -465,6 +557,52 @@ function Path({ nodes, states, activeIdx, onClick }) {
           />
         );
       })}
+    </div>
+  );
+}
+
+function DayMarker({ day, y }) {
+  return (
+    <div
+      className="absolute flex items-center font-sejong"
+      style={{
+        left: 10,
+        top: y,
+        zIndex: 2,
+        width: PATH_WIDTH - 20,
+        gap: 10,
+        color: "#B86A5B",
+        fontSize: 12,
+        fontWeight: 800,
+        letterSpacing: 0,
+        pointerEvents: "none",
+      }}
+    >
+      <span
+        style={{
+          height: 1,
+          flex: 1,
+          background: "linear-gradient(90deg, rgba(227,93,73,0), rgba(227,93,73,0.28))",
+        }}
+      />
+      <span
+        style={{
+          flexShrink: 0,
+          padding: "3px 10px",
+          borderRadius: 999,
+          background: "rgba(255, 243, 231, 0.92)",
+          border: "1px solid rgba(227,93,73,0.18)",
+        }}
+      >
+        {day}일차
+      </span>
+      <span
+        style={{
+          height: 1,
+          flex: 1,
+          background: "linear-gradient(90deg, rgba(227,93,73,0.28), rgba(227,93,73,0))",
+        }}
+      />
     </div>
   );
 }

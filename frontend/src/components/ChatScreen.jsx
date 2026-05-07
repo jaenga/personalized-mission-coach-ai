@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import tomatoChat from "../assets/tomato/chat/chat.png";
+import flagImg from "../assets/tomato/home/flag.png";
 
 /* ─────────────────────────────────────────────────────────
    FAQ — + 버튼 누르면 떠오르는 자주 묻는 질문 시트(수정가능)
@@ -178,16 +179,117 @@ const INITIAL_MESSAGES = [
   { id: 3, role: "assistant", text: "잘했어! 🎉\n3잔만 더 마시면 미션 완료!" },
 ];
 
+function MissionHeaderCard({ mission, open, onClose }) {
+  const title = mission?.title || "오늘의 미션";
+  const done = !!mission?.done;
+  return (
+    <div
+      className="absolute left-0 right-0"
+      style={{
+        top: 64,
+        paddingInline: 16,
+        zIndex: 9,
+        opacity: open ? 1 : 0,
+        transform: open ? "translateY(0)" : "translateY(-12px)",
+        transition: "opacity 0.22s ease, transform 0.28s cubic-bezier(0.2, 0.8, 0.25, 1)",
+        pointerEvents: open ? "auto" : "none",
+      }}
+    >
+      <div
+        className="flex items-center"
+        style={{
+          minHeight: 58,
+          borderRadius: 18,
+          background: "#FFFFFF",
+          border: "1px solid rgba(227, 93, 73, 0.18)",
+          boxShadow: "0 8px 20px rgba(184, 72, 56, 0.12), 0 2px 6px rgba(0,0,0,0.05)",
+          padding: "10px 12px",
+          gap: 10,
+        }}
+      >
+        <span
+          className="flex items-center justify-center flex-shrink-0"
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 12,
+            background: done ? "rgba(123, 164, 92, 0.14)" : "rgba(227, 93, 73, 0.10)",
+          }}
+        >
+          <img
+            src={flagImg}
+            alt=""
+            draggable="false"
+            className="select-none pointer-events-none"
+            style={{
+              width: 16,
+              height: 16,
+              objectFit: "contain",
+              filter: done ? "grayscale(0.2) brightness(0.95)" : "none",
+            }}
+          />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div
+            className="font-sejong"
+            style={{ fontSize: 11, fontWeight: 700, color: done ? "#7BA45C" : "#E35D49", letterSpacing: "-0.3px" }}
+          >
+            {done ? "완료한 미션" : "오늘의 미션"}
+          </div>
+          <div
+            className="font-sejong"
+            style={{
+              marginTop: 2,
+              fontSize: 14,
+              fontWeight: 700,
+              color: "#1a1a1a",
+              lineHeight: "18px",
+              letterSpacing: "-0.3px",
+              overflow: "hidden",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+            }}
+          >
+            {title}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="오늘의 미션 접어두기"
+          className="flex items-center justify-center flex-shrink-0 transition-opacity active:opacity-60"
+          style={{
+            width: 24,
+            height: 24,
+            padding: 0,
+            border: "none",
+            background: "transparent",
+            color: "#75726e",
+            cursor: "pointer",
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatScreen({
   onBack,
   messages: backendMessages,
   loading = false,
   onSend,
+  todayMission,
   initialMessages = INITIAL_MESSAGES,
 }) {
   const [localMessages, setLocalMessages] = useState(initialMessages);
   const [input, setInput] = useState("");
   const [faqOpen, setFaqOpen] = useState(false);
+  const [missionOpen, setMissionOpen] = useState(false);
   const scrollRef = useRef(null);
   const messages = backendMessages
     ? backendMessages.map((m, index) => ({
@@ -261,7 +363,47 @@ export default function ChatScreen({
         </span>
       </header>
 
+      {/* 떠 있는 미션 토글 버튼 (FAB) — 접힌 상태에서만 표시 */}
+      <button
+        type="button"
+        onClick={() => setMissionOpen(true)}
+        aria-label="오늘의 미션 보기"
+        aria-hidden={missionOpen}
+        className="absolute flex items-center justify-center transition-transform active:scale-95"
+        style={{
+          top: 64,
+          right: 20,
+          width: 36,
+          height: 36,
+          padding: 0,
+          border: "none",
+          borderRadius: "50%",
+          background: "#FFFFFF",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.10)",
+          cursor: "pointer",
+          zIndex: 11,
+          opacity: missionOpen ? 0 : 1,
+          pointerEvents: missionOpen ? "none" : "auto",
+          transform: missionOpen ? "scale(0.85)" : "scale(1)",
+          transition: "opacity 0.2s ease, transform 0.2s ease",
+        }}
+      >
+        <img
+          src={flagImg}
+          alt=""
+          draggable="false"
+          className="select-none pointer-events-none"
+          style={{ width: 16, height: 16, objectFit: "contain" }}
+        />
+      </button>
+
       {/* 메시지 스크롤 영역 */}
+      <MissionHeaderCard
+        mission={todayMission}
+        open={missionOpen}
+        onClose={() => setMissionOpen(false)}
+      />
+
       <div
         ref={scrollRef}
         className="absolute left-0 right-0 overflow-y-auto"

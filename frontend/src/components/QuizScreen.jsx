@@ -19,6 +19,7 @@ export default function QuizScreen({ lesson, onBack, onComplete, alreadyComplete
   const [done, setDone] = useState(false);
   const scrollRef = useRef(null);
   const startedRef = useRef(false);
+  const rewardAlreadyClaimedRef = useRef(alreadyCompleted);
 
   const totalQuestions = lesson.quiz.length;
 
@@ -237,7 +238,7 @@ export default function QuizScreen({ lesson, onBack, onComplete, alreadyComplete
             return <FeedbackBubble key={i} message={m} animate={isLastMsg} />;
           }
           if (m.kind === "complete") {
-            return <CompleteBubble key={i} animate={isLastMsg} onClose={onBack} alreadyCompleted={alreadyCompleted} />;
+            return <CompleteBubble key={i} animate={isLastMsg} onClose={onBack} alreadyCompleted={rewardAlreadyClaimedRef.current} />;
           }
           return <TextBubble key={i} text={m.text} animate={isLastMsg} />;
         })}

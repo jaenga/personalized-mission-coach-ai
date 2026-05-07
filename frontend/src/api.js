@@ -262,6 +262,41 @@ export async function completeLessonQuiz({ studentId, lessonId, quizScore }) {
 }
 
 /** 유저 프로필(student_id, student_name) 저장. */
+export async function fetchHealthNote(studentId) {
+  const res = await fetch(`/health-note/${studentId}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "건강노트 불러오기 실패");
+  }
+  return res.json();
+}
+
+export async function saveHealthNoteDb({ studentId, allergens = [], cautionFoods = [] }) {
+  const res = await fetch("/health-note", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      allergens,
+      caution_foods: cautionFoods,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "건강노트 저장 실패");
+  }
+  return res.json();
+}
+
+export async function deleteHealthNote(studentId) {
+  const res = await fetch(`/health-note/${studentId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "건강노트 삭제 실패");
+  }
+  return res.json();
+}
+
 export async function registerDemoStudent(studentName, phoneLast4) {
   const res = await fetch("/demo-register-student", {
     method: "POST",

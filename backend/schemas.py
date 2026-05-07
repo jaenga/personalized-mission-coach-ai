@@ -41,3 +41,9 @@ class LessonQuizCompleteRequest(BaseModel):
     student_id: int
     lesson_id: str = Field(..., min_length=1)
     quiz_score: int | None = Field(None, ge=0)
+
+
+class HealthNoteRequest(BaseModel):
+    student_id: int
+    allergens: list[str] = Field(default_factory=list)
+    caution_foods: list[str] = Field(default_factory=list)

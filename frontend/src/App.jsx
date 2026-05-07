@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, fetchHealthNote, saveHealthNoteDb, deleteHealthNote } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import InfoInput from "./components/InfoInput.jsx";
@@ -81,6 +81,18 @@ function getStoredHealthNote() {
 function saveHealthNote(note) {
   if (note == null) localStorage.removeItem(HEALTH_NOTE_KEY);
   else localStorage.setItem(HEALTH_NOTE_KEY, JSON.stringify(note));
+}
+
+function normalizeHealthNote(note) {
+  if (!note) return null;
+  return {
+    allergens: Array.isArray(note.allergens) ? note.allergens : [],
+    cautionFoods: Array.isArray(note.cautionFoods)
+      ? note.cautionFoods
+      : Array.isArray(note.caution_foods)
+        ? note.caution_foods
+        : [],
+  };
 }
 
 // 신규 가입자 기본값 — Lv1, 0 EXP, 뽑기권 0, 하트 1
@@ -221,6 +233,13 @@ export default function App() {
     fetchStudentStats(profile.student_id)
       .then(setStats)
       .catch(() => setStats({ streak_days: 0, success_dates: [] }));
+    fetchHealthNote(profile.student_id)
+      .then((note) => {
+        const normalized = normalizeHealthNote(note);
+        setHealthNote(normalized);
+        saveHealthNote(normalized);
+      })
+      .catch(() => {});
     // 출석 체크 — 응답으로 받는 app_state가 (오늘 첫 진입이면 ticket+1 반영된) 최신값.
     // 실패 시 fetchAppState로 fallback.
     claimAttendance(profile.student_id)
@@ -341,15 +360,43 @@ export default function App() {
     goTo(SCREENS.ONBOARD_HEALTH);
   }
 
-  function handleHealthSubmit(note) {
+  async function persistHealthNote(note) {
+    const normalized = normalizeHealthNote(note);
+    setHealthNote(normalized);
+    saveHealthNote(normalized);
+    if (profile?.student_id) {
+      await saveHealthNoteDb({
+        studentId: profile.student_id,
+        allergens: normalized.allergens,
+        cautionFoods: normalized.cautionFoods,
+      });
+    }
+  }
+
+  async function clearHealthNote() {
+    setHealthNote(null);
+    saveHealthNote(null);
+    if (profile?.student_id) {
+      await deleteHealthNote(profile.student_id);
+    }
+  }
+
+  async function handleHealthSubmit(note) {
     setHealthNote(note);
     saveHealthNote(note);
+    try {
+      await persistHealthNote(note);
+    } catch {}
     goTo(SCREENS.ONBOARD_WELCOME);
   }
 
-  function handleHealthSkip() {
-    setHealthNote(null);
-    saveHealthNote(null);
+  async function handleHealthSkip() {
+    try {
+      await clearHealthNote();
+    } catch {
+      setHealthNote(null);
+      saveHealthNote(null);
+    }
     goTo(SCREENS.ONBOARD_WELCOME);
   }
 
@@ -640,6 +687,10 @@ export default function App() {
           messages={messages}
           loading={loading}
           onSend={handleSend}
+          todayMission={{
+            title: mission?.mission_name || "오늘의 미션",
+            done: mission?.status === "completed" || mission?.status === "success",
+          }}
         />
       );
 
@@ -677,9 +728,13 @@ export default function App() {
         <HealthNote
           initialAllergens={healthNote?.allergens || []}
           initialCautionFoods={healthNote?.cautionFoods || []}
-          onSubmit={(note) => {
-            setHealthNote(note);
-            saveHealthNote(note);
+          onSubmit={async (note) => {
+            try {
+              await persistHealthNote(note);
+            } catch {
+              setHealthNote(note);
+              saveHealthNote(note);
+            }
             goBack(SCREENS.SETTINGS);
           }}
           onSkip={() => goBack(SCREENS.SETTINGS)}
