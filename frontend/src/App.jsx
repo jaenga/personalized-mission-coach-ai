@@ -104,6 +104,19 @@ function normalizeHealthNote(note) {
 // 신규 가입자 기본값 — Lv1, 0 EXP, 뽑기권 0, 하트 1
 const FRESH_STATS = { level: 1, currentXp: 0, ticketCount: 0, heartCount: 1 };
 
+function LoadingScreen() {
+  return (
+    <div className="mobile-frame flex items-center justify-center" style={{ background: "#FFF3E7" }}>
+      <div
+        className="font-sejong"
+        style={{ fontSize: 15, color: "#E35D49", letterSpacing: "-0.43px" }}
+      >
+        불러오는 중...
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // ── 화면 상태 ────────────────────────────────────────────────────────────
   const [screen, setScreen] = useState(() =>
@@ -173,6 +186,7 @@ export default function App() {
   const [ticketCount, setTicketCount] = useState(FRESH_STATS.ticketCount);
   const [heartCount, setHeartCount] = useState(FRESH_STATS.heartCount);
   const [appStateLoaded, setAppStateLoaded] = useState(false);
+  const [missionLoaded, setMissionLoaded] = useState(false);
 
   useEffect(() => {
     function handleHashChange() {
@@ -231,11 +245,15 @@ export default function App() {
   useEffect(() => {
     if (!profile) {
       setAppStateLoaded(false);
+      setMissionLoaded(false);
       return;
     }
+    setAppStateLoaded(false);
+    setMissionLoaded(false);
     fetchMissionByStudent(profile.student_id)
       .then(setMission)
-      .catch(() => setMission({ mission_id: 1, mission_name: "오늘의 미션" }));
+      .catch(() => setMission({ mission_id: 1, mission_name: "오늘의 미션" }))
+      .finally(() => setMissionLoaded(true));
     fetchStudentStats(profile.student_id)
       .then(setStats)
       .catch(() => setStats({ streak_days: 0, success_dates: [] }));
@@ -446,6 +464,7 @@ export default function App() {
     setTicketCount(FRESH_STATS.ticketCount);
     setHeartCount(FRESH_STATS.heartCount);
     setAppStateLoaded(false);
+    setMissionLoaded(false);
     resetTo(SCREENS.LOGIN);
   }
 
@@ -668,6 +687,9 @@ export default function App() {
       return <Welcome onContinue={handleWelcomeContinue} />;
 
     case SCREENS.HOME:
+      if (profile && (!appStateLoaded || !missionLoaded)) {
+        return <LoadingScreen />;
+      }
       return (
         <Home
           studentName={profile?.student_name || "민준"}

@@ -19,11 +19,11 @@ const LEVEL_THEMES = {
 // 토마토 PNG마다 캐릭터 발 위치가 달라서 그림자를 레벨별로 미세 조정
 // top: 그림자 세로 위치 / left·width: 가로 위치/너비
 const LEVEL_SHADOWS = {
-  1: { left: 111, top: 418, width: 180 },
-  2: { left: 111, top: 420, width: 180 },
-  3: { left: 111, top: 413, width: 180 },
-  4: { left: 111, top: 420, width: 180 },
-  5: { left: 111, top: 430, width: 180 },
+  1: { left: 121, top: 372, width: 160 },
+  2: { left: 121, top: 374, width: 160 },
+  3: { left: 121, top: 367, width: 160 },
+  4: { left: 121, top: 374, width: 160 },
+  5: { left: 121, top: 382, width: 160 },
 };
 
 const CONFETTI = [
@@ -72,19 +72,24 @@ export default function LevelUp({ level = 2, onContinue }) {
       className="mobile-frame"
       style={{ background: "#FFF3E7" }}
     >
-      {/* 카드 배경 */}
       <div
-        className="absolute"
-        style={{
-          left: 17,
-          top: 54,
-          width: 363,
-          height: 671,
-          borderRadius: 30,
-          background: "rgba(255, 255, 255, 0.5)",
-          border: `1px solid ${theme.main}55`,
-        }}
-      />
+        className="absolute inset-0 overflow-y-auto"
+        style={{ paddingBottom: "calc(24px + env(safe-area-inset-bottom))" }}
+      >
+        <div className="relative mx-auto" style={{ width: "100%", maxWidth: 402, minHeight: 760 }}>
+          {/* 카드 배경 */}
+          <div
+            className="absolute"
+            style={{
+              left: 17,
+              top: 42,
+              width: 363,
+              height: 610,
+              borderRadius: 30,
+              background: "rgba(255, 255, 255, 0.5)",
+              border: `1px solid ${theme.main}55`,
+            }}
+          />
 
       {/* 잎사귀 데코 (좌우) */}
       <img
@@ -92,14 +97,14 @@ export default function LevelUp({ level = 2, onContinue }) {
         alt=""
         draggable="false"
         className="absolute select-none pointer-events-none"
-        style={{ left: 78, top: 118, width: 26, height: 20, transform: "rotate(-30deg)" }}
+        style={{ left: 78, top: 98, width: 26, height: 20, transform: "rotate(-30deg)" }}
       />
       <img
         src={leaf}
         alt=""
         draggable="false"
         className="absolute select-none pointer-events-none"
-        style={{ left: 298, top: 118, width: 26, height: 20, transform: "scaleX(-1) rotate(-30deg)" }}
+        style={{ left: 298, top: 98, width: 26, height: 20, transform: "scaleX(-1) rotate(-30deg)" }}
       />
 
       {/* 레벨업! */}
@@ -108,7 +113,7 @@ export default function LevelUp({ level = 2, onContinue }) {
         style={{
           left: 0,
           right: 0,
-          top: 110,
+          top: 90,
           color: theme.main,
           fontSize: 44,
           fontWeight: 400,
@@ -126,7 +131,7 @@ export default function LevelUp({ level = 2, onContinue }) {
         style={{
           left: 0,
           right: 0,
-          top: 172,
+          top: 148,
           color: "#000",
           fontSize: 15,
           fontWeight: 400,
@@ -142,7 +147,7 @@ export default function LevelUp({ level = 2, onContinue }) {
         <svg
           key={i}
           className="sparkle absolute pointer-events-none"
-          style={{ left: c.x, top: c.y - 100, width: c.size, height: c.size, animationDelay: `${(i % 5) * 0.2}s` }}
+          style={{ left: c.x, top: c.y - 132, width: c.size, height: c.size, animationDelay: `${(i % 5) * 0.2}s` }}
           viewBox={`0 0 ${c.size} ${c.size}`}
           aria-hidden="true"
         >
@@ -157,10 +162,10 @@ export default function LevelUp({ level = 2, onContinue }) {
         draggable="false"
         className="absolute select-none pointer-events-none"
         style={{
-          left: 71,
-          top: 188,
-          width: 270,
-          height: 270,
+          left: 86,
+          top: 164,
+          width: 230,
+          height: 230,
           objectFit: "contain",
         }}
       />
@@ -187,7 +192,7 @@ export default function LevelUp({ level = 2, onContinue }) {
         style={{
           left: 0,
           right: 0,
-          top: 478,
+          top: 420,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -282,7 +287,7 @@ export default function LevelUp({ level = 2, onContinue }) {
         className="absolute flex items-center justify-center"
         style={{
           left: 81,
-          top: 638,
+          top: 570,
           width: 240,
           height: 60,
           borderRadius: 20,
@@ -319,7 +324,7 @@ export default function LevelUp({ level = 2, onContinue }) {
         className="signup-submit absolute font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
         style={{
           left: 56,
-          top: 747,
+          top: 674,
           width: 290,
           height: 45,
           borderRadius: 50,
@@ -334,6 +339,8 @@ export default function LevelUp({ level = 2, onContinue }) {
       >
         홈으로 가기
       </button>
+        </div>
+      </div>
     </div>
   );
 }

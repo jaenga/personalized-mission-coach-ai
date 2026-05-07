@@ -301,6 +301,14 @@ def get_student_by_credentials(student_name: str, phone_last4: str) -> dict | No
     return None
 
 
+def _ensure_student_app_state(cur, student_id: int) -> None:
+    cur.execute("""
+        INSERT INTO student_app_state (student_id)
+        VALUES (%s)
+        ON CONFLICT (student_id) DO NOTHING
+    """, (student_id,))
+
+
 # ── 채팅 세션 (chat_sessions 테이블) ──────────────────────────────────────────
 
 def create_demo_student(student_name: str, phone_last4: str) -> dict:
@@ -324,6 +332,8 @@ def create_demo_student(student_name: str, phone_last4: str) -> dict:
             for row in rows:
                 phone = str(row.get("phone_number", "")).replace("-", "")
                 if phone[-4:] == phone_last4:
+                    _ensure_student_app_state(cur, row["student_id"])
+                    conn.commit()
                     return dict(row)
 
             cur.execute("""
@@ -340,6 +350,7 @@ def create_demo_student(student_name: str, phone_last4: str) -> dict:
                 RETURNING *
             """, (student_name, phone_last4))
             student = cur.fetchone()
+            _ensure_student_app_state(cur, student["student_id"])
 
         conn.commit()
 
@@ -872,11 +883,7 @@ def get_success_summary(student_id: int) -> dict:
 def get_app_state(student_id: int) -> dict:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("""
-                INSERT INTO student_app_state (student_id)
-                VALUES (%s)
-                ON CONFLICT (student_id) DO NOTHING
-            """, (student_id,))
+            _ensure_student_app_state(cur, student_id)
             cur.execute("""
                 SELECT student_id, level, current_xp, ticket_count, heart_count
                 FROM student_app_state

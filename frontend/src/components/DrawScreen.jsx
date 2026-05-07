@@ -30,9 +30,16 @@ const CONFETTI = Array.from({ length: 18 }, (_, i) => ({
   rot: Math.random() * 360,
 }));
 
-function RewardBurst({ children }) {
+function RewardBurst({ children, compact = false }) {
   return (
-    <div className="relative flex items-center justify-center" style={{ width: 332, height: 332 }}>
+    <div
+      className="relative flex items-center justify-center"
+      style={{
+        width: compact ? 268 : 332,
+        height: compact ? 268 : 332,
+        transform: compact ? "scale(0.75)" : "none",
+      }}
+    >
       {/* 주황 방사형 글로우 */}
       <div
         aria-hidden="true"
@@ -40,6 +47,7 @@ function RewardBurst({ children }) {
         style={{
           width: 320,
           height: 320,
+          transform: compact ? "scale(0.82)" : "none",
           borderRadius: "50%",
           background:
             "radial-gradient(circle, rgba(255,189,44,0.6) 0%, rgba(255,144,77,0.35) 35%, rgba(255,243,231,0) 70%)",
@@ -137,21 +145,22 @@ function TopBadges({ ticketCount, heartCount }) {
 /* ─────────────────────────────────────────────────────────
    결과 카드 (heart / exp / both)
    ───────────────────────────────────────────────────────── */
-function RewardCard({ reward }) {
+function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
   const heartMessage =
     reward.heart > 0
       ? `게임에 참여할 수 있는 하트 ${reward.heart}개 획득!`
       : "";
+  const hasTicket = ticketCount > 0;
 
   return (
     <div
       className="mx-auto"
       style={{
-        width: 290,
+        width: "min(336px, calc(100vw - 40px))",
         borderRadius: 30,
         background: "rgba(255, 255, 255, 0.85)",
         border: "1px solid rgba(227, 93, 73, 0.4)",
-        padding: "16px 20px",
+        padding: "16px 20px 18px",
         textAlign: "center",
       }}
     >
@@ -188,6 +197,74 @@ function RewardCard({ reward }) {
         {reward.type === "exp" && "경험치를 얻었어! 레벨업까지 한 걸음 더~"}
         {reward.type === "both" && "레어 보상! 하트 + 경험치 모두 획득!"}
       </p>
+      <div className="mt-4 flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="signup-submit w-full font-sejong text-white shadow-md flex items-center justify-center transition-all duration-200"
+          style={{
+            height: 45,
+            borderRadius: 50,
+            background: "#E35D49",
+            fontSize: 16,
+            fontWeight: 400,
+            letterSpacing: "-0.43px",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+          }}
+        >
+          확인
+        </button>
+        {hasTicket ? (
+          <>
+            <button
+              type="button"
+              onClick={onDrawAgain}
+              className="w-full font-sejong text-white flex items-center justify-center transition-all duration-200"
+              style={{
+                height: 45,
+                borderRadius: 50,
+                background: "#92B774",
+                fontSize: 15,
+                fontWeight: 400,
+                letterSpacing: "-0.43px",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              한 번 더 뽑기
+            </button>
+            <p
+              className="font-sejong"
+              style={{
+                fontSize: 12,
+                color: "#8A8580",
+                letterSpacing: "-0.43px",
+                lineHeight: "16px",
+              }}
+            >
+              남은 티켓 수량: {ticketCount}
+            </p>
+          </>
+        ) : (
+          <div
+            className="w-full font-sejong flex items-center justify-center"
+            style={{
+              height: 45,
+              borderRadius: 50,
+              background: "#E5E1DC",
+              color: "#8A8580",
+              fontSize: 14,
+              fontWeight: 400,
+              letterSpacing: "-0.43px",
+            }}
+          >
+            뽑기권이 없어요 · 다음 기회에!
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -213,8 +290,7 @@ export default function DrawScreen({
 
   const canDraw = ticketCount > 0 && phase === "idle";
 
-  async function handleDraw() {
-    if (!canDraw || !onDraw) return;
+  async function runDraw() {
     setPhase("drawing");
     try {
       // 최소 1.7초 애니메이션 보장 + 백엔드 응답을 병렬로 대기
@@ -225,6 +301,17 @@ export default function DrawScreen({
     } catch {
       setPhase("idle");
     }
+  }
+
+  async function handleDraw() {
+    if (!canDraw || !onDraw) return;
+    runDraw();
+  }
+
+  async function handleDrawAgain() {
+    if (ticketCount <= 0 || !onDraw) return;
+    setReward(null);
+    runDraw();
   }
 
   function handleConfirm() {
@@ -243,13 +330,13 @@ export default function DrawScreen({
 
   return (
     <div
-      className="mobile-frame"
+      className="mobile-frame flex flex-col"
       style={{ background: "#FFF3E7" }}
     >
       {/* 상단: LevelRing + 뱃지 */}
       <div
-        className="absolute flex items-start justify-between"
-        style={{ left: 19, right: 19, top: 16, zIndex: 5 }}
+        className="relative flex-shrink-0 flex items-start justify-between"
+        style={{ padding: "16px 19px 0", zIndex: 5 }}
       >
         <button
           type="button"
@@ -305,213 +392,172 @@ export default function DrawScreen({
         </div>
       </div>
 
-      {/* BONUS / 행운의 뽑기! 헤더 (idle/drawing만) */}
-      {!isResult && (
-      <div className="absolute" style={{ left: 26, top: 69 }}>
-        <p
-          className="font-noto"
-          style={{
-            fontSize: 15,
-            fontWeight: 900,
-            color: "#FFBD2C",
-            letterSpacing: "-0.43px",
-            lineHeight: "22px",
-          }}
-        >
-          BONUS
-        </p>
-        <h1
-          className="font-jeju"
-          style={{
-            fontSize: 25,
-            color: "#E35D49",
-            letterSpacing: "-0.43px",
-            lineHeight: "30px",
-          }}
-        >
-          {isResult
-            ? reward?.type === "both"
-              ? "짜잔!"
-              : reward?.type === "exp"
-              ? "오~ 좋아!"
-              : "축하해!"
-            : "행운의 뽑기!"}
-        </h1>
-        {isResult && reward?.type === "both" && (
-          <p
-            className="font-sejong"
-            style={{ fontSize: 14, color: "#E35D49", letterSpacing: "-0.43px", fontWeight: 700, marginTop: 4 }}
-          >
-            레어 보상이에요!
-          </p>
-        )}
-      </div>
-      )}
-
-      {/* 말풍선: 과연! 뭐가 나올까? (idle/drawing) */}
-      {!isResult && (
-        <div
-          className="absolute"
-          style={{ left: 119, top: 156, width: 164, height: 51 }}
-        >
-          <div
-            className="flex items-center justify-center font-sejong"
-            style={{
-              width: 164,
-              height: 42,
-              borderRadius: 14,
-              background: "rgba(255, 255, 255, 0.6)",
-              border: "1px solid rgba(227, 93, 73, 0.5)",
-              fontSize: 14,
-              color: "#000",
-              letterSpacing: "-0.43px",
-            }}
-          >
-            과연! 뭐가 나올까?
-          </div>
-          {/* 말풍선 꼬리 (아래로 향하는 삼각형) */}
-          <svg
-            aria-hidden="true"
-            className="absolute"
-            style={{ left: 75, top: 41, width: 14, height: 16 }}
-            viewBox="0 0 14 16"
-          >
-            <path
-              d="M0 0 L7 14 L14 0 Z"
-              fill="rgba(255, 255, 255, 0.6)"
-              stroke="rgba(227, 93, 73, 0.5)"
-              strokeWidth="1"
-              strokeLinejoin="round"
-            />
-            {/* 위쪽 line은 배경에 가려지도록 흰선 덮어쓰기 */}
-            <path d="M1 0 L13 0" stroke="rgba(255, 251, 246, 1)" strokeWidth="1.5" />
-          </svg>
-        </div>
-      )}
-
-      {/* 가챠/결과 영역 */}
-      <div
-        className="absolute flex items-center justify-center"
-        style={{ left: 0, right: 0, top: isResult ? 105 : 200 }}
+      <main
+        className="flex-1 overflow-y-auto"
+        style={{
+          padding: isResult
+            ? "18px 20px calc(96px + env(safe-area-inset-bottom))"
+            : "10px 20px calc(112px + env(safe-area-inset-bottom))",
+        }}
       >
         {!isResult ? (
-          <img
-            src={gachaImg}
-            alt="가챠"
-            draggable="false"
-            className={`select-none pointer-events-none ${isDrawing ? "gacha-shake" : "gacha-idle"}`}
-            style={{ width: 320, height: 395
-              , objectFit: "contain" }}
-          />
-        ) : (
-          <div className="relative" style={{ width: 332, height: 360 }}>
-            <RewardBurst>
+          <div className="flex min-h-full flex-col">
+            <div style={{ paddingLeft: 6, paddingTop: 4 }}>
+              <p
+                className="font-noto"
+                style={{
+                  fontSize: 15,
+                  fontWeight: 900,
+                  color: "#FFBD2C",
+                  letterSpacing: "-0.43px",
+                  lineHeight: "22px",
+                }}
+              >
+                BONUS
+              </p>
+              <h1
+                className="font-jeju"
+                style={{
+                  fontSize: 25,
+                  color: "#E35D49",
+                  letterSpacing: "-0.43px",
+                  lineHeight: "30px",
+                }}
+              >
+                행운의 뽑기!
+              </h1>
+            </div>
+
+            <div className="mx-auto mt-8" style={{ width: 164, height: 51 }}>
+              <div
+                className="flex items-center justify-center font-sejong"
+                style={{
+                  width: 164,
+                  height: 42,
+                  borderRadius: 14,
+                  background: "rgba(255, 255, 255, 0.6)",
+                  border: "1px solid rgba(227, 93, 73, 0.5)",
+                  fontSize: 14,
+                  color: "#000",
+                  letterSpacing: "-0.43px",
+                }}
+              >
+                과연! 뭐가 나올까?
+              </div>
+              <svg
+                aria-hidden="true"
+                className="relative"
+                style={{ left: 75, top: -1, width: 14, height: 16 }}
+                viewBox="0 0 14 16"
+              >
+                <path
+                  d="M0 0 L7 14 L14 0 Z"
+                  fill="rgba(255, 255, 255, 0.6)"
+                  stroke="rgba(227, 93, 73, 0.5)"
+                  strokeWidth="1"
+                  strokeLinejoin="round"
+                />
+                <path d="M1 0 L13 0" stroke="rgba(255, 251, 246, 1)" strokeWidth="1.5" />
+              </svg>
+            </div>
+
+            <div className="flex flex-1 items-center justify-center">
               <img
-                src={yahoImg}
-                alt="기뻐하는 토미"
+                src={gachaImg}
+                alt="가챠"
                 draggable="false"
-                className="select-none pointer-events-none reward-pop"
-                style={{ width: 240, height: 240, objectFit: "contain", position: "relative", zIndex: 2 }}
+                className={`select-none pointer-events-none ${isDrawing ? "gacha-shake" : "gacha-idle"}`}
+                style={{ width: "min(320px, 82vw)", height: "auto", maxHeight: 395, objectFit: "contain" }}
               />
-            </RewardBurst>
-          </div>
-        )}
-      </div>
+            </div>
 
-      {/* 결과 카드 */}
-      {isResult && reward && (
-        <div className="absolute" style={{ left: 0, right: 0, top: 485 }}>
-          <RewardCard reward={reward} />
-        </div>
-      )}
-
-      {/* 하단 버튼 */}
-      <div className="absolute" style={{ left: 56, right: 56, bottom: 112 }}>
-        {!isResult ? (
-          <button
-            type="button"
-            onClick={handleDraw}
-            disabled={!canDraw}
-            className="signup-submit w-full font-sejong text-white shadow-md flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              height: 45,
-              borderRadius: 50,
-              background: "#92B774",
-              fontSize: 16,
-              fontWeight: 400,
-              letterSpacing: "-0.43px",
-              border: "none",
-              padding: 0,
-              cursor: canDraw ? "pointer" : "not-allowed",
-            }}
-          >
-            <img src={ticketImg} alt="" style={{ width: 16, height: 16 }} />
-            1개 사용해서 뽑기
-          </button>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={handleConfirm}
-              className="signup-submit w-full font-sejong text-white shadow-md flex items-center justify-center transition-all duration-200"
-              style={{
-                height: 45,
-                borderRadius: 50,
-                background: "#E35D49",
-                fontSize: 16,
-                fontWeight: 400,
-                letterSpacing: "-0.43px",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-              }}
-            >
-              확인
-            </button>
-            {ticketCount > 0 ? (
+            <div style={{ paddingInline: 36 }}>
               <button
                 type="button"
-                onClick={() => {
-                  setReward(null);
-                  setPhase("idle");
-                  setTimeout(handleDraw, 50);
-                }}
-                className="w-full font-sejong text-white flex items-center justify-center gap-2 transition-all duration-200"
+                onClick={handleDraw}
+                disabled={!canDraw}
+                className="signup-submit w-full font-sejong text-white shadow-md flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
                   height: 45,
                   borderRadius: 50,
                   background: "#92B774",
-                  fontSize: 15,
+                  fontSize: 16,
                   fontWeight: 400,
                   letterSpacing: "-0.43px",
                   border: "none",
                   padding: 0,
-                  cursor: "pointer",
+                  cursor: canDraw ? "pointer" : "not-allowed",
                 }}
               >
-                한 번 더 뽑기
-                <img src={ticketImg} alt="" style={{ width: 14, height: 14 }} />
-                {ticketCount}
+                <img src={ticketImg} alt="" style={{ width: 16, height: 16 }} />
+                1개 사용해서 뽑기
               </button>
-            ) : (
-              <div
-                className="w-full font-sejong flex items-center justify-center"
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-full flex-col items-center">
+            <div className="w-full" style={{ paddingLeft: 6 }}>
+              <p
+                className="font-noto"
                 style={{
-                  height: 45,
-                  borderRadius: 50,
-                  background: "#E5E1DC",
-                  color: "#8A8580",
                   fontSize: 14,
-                  fontWeight: 400,
+                  fontWeight: 900,
+                  color: "#FFBD2C",
                   letterSpacing: "-0.43px",
+                  lineHeight: "20px",
                 }}
               >
-                뽑기권이 없어요 · 다음 기회에!
+                BONUS
+              </p>
+              <h1
+                className="font-jeju"
+                style={{
+                  fontSize: 24,
+                  color: "#E35D49",
+                  letterSpacing: "-0.43px",
+                  lineHeight: "30px",
+                }}
+              >
+                {reward?.type === "both" ? "짜잔!" : reward?.type === "exp" ? "오~ 좋아!" : "축하해!"}
+              </h1>
+              {reward?.type === "both" && (
+                <p
+                  className="font-sejong"
+                  style={{ fontSize: 13, color: "#E35D49", letterSpacing: "-0.43px", fontWeight: 700, marginTop: 2 }}
+                >
+                  레어 보상이에요!
+                </p>
+              )}
+            </div>
+
+            <div
+              className="flex flex-shrink-0 items-center justify-center"
+              style={{ height: "clamp(250px, 38dvh, 332px)", marginTop: 4 }}
+            >
+              <RewardBurst compact>
+                <img
+                  src={yahoImg}
+                  alt="기뻐하는 토미"
+                  draggable="false"
+                  className="select-none pointer-events-none reward-pop"
+                  style={{ width: "min(210px, 52vw)", height: "auto", objectFit: "contain", position: "relative", zIndex: 2 }}
+                />
+              </RewardBurst>
+            </div>
+
+            {reward && (
+              <div className="w-full flex-shrink-0">
+                <RewardCard
+                  reward={reward}
+                  ticketCount={ticketCount}
+                  onConfirm={handleConfirm}
+                  onDrawAgain={handleDrawAgain}
+                />
               </div>
             )}
           </div>
         )}
-      </div>
+      </main>
 
       {/* 하단 네비 */}
       <BottomNav active={activeTab} onChange={handleNav} />
