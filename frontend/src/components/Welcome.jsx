@@ -46,7 +46,7 @@ export default function Welcome({ onContinue }) {
     >
       {/* 흰색 반투명 카드 */}
       <div
-        className="absolute"
+        className="welcome-card-bg absolute"
         style={{
           left: 17,
           top: 54,
@@ -82,13 +82,13 @@ export default function Welcome({ onContinue }) {
         src={leaf}
         alt=""
         draggable="false"
-        className="absolute select-none pointer-events-none"
+        className="welcome-leaf absolute select-none pointer-events-none"
         style={{ left: 251, top: 98, width: 31.2, height: 23.65, transform: "rotate(23deg)", transformOrigin: "center" }}
       />
 
       {/* 환영해요! */}
       <div
-        className="absolute font-jeju"
+        className="welcome-title absolute font-jeju"
         style={{
           left: 83,
           top: 110,
@@ -107,7 +107,7 @@ export default function Welcome({ onContinue }) {
 
       {/* 가입이 완료되었습니다 */}
       <div
-        className="absolute font-sejong"
+        className="welcome-subtitle absolute font-sejong"
         style={{
           left: 119,
           top: 172,
@@ -129,7 +129,7 @@ export default function Welcome({ onContinue }) {
         src={tomatoHi}
         alt="환영하는 토미"
         draggable="false"
-        className="absolute select-none pointer-events-none"
+        className="welcome-hero absolute select-none pointer-events-none"
         style={{
           left: 83,
           top: 270,
@@ -142,7 +142,7 @@ export default function Welcome({ onContinue }) {
       {/* 그림자 (부드러운 타원 그라데이션) */}
       <div
         aria-hidden="true"
-        className="absolute"
+        className="welcome-shadow absolute"
         style={{
           left: 122,
           top: 482,
@@ -157,7 +157,7 @@ export default function Welcome({ onContinue }) {
 
       {/* 가입 기념 선물 */}
       <div
-        className="absolute font-noto"
+        className="welcome-gift-label absolute font-sejong"
         style={{
           left: 106,
           top: 533,
@@ -177,7 +177,7 @@ export default function Welcome({ onContinue }) {
 
       {/* 선물 카드 */}
       <div
-        className="absolute"
+        className="welcome-gift-card absolute"
         style={{
           left: 57,
           top: 565,
@@ -194,13 +194,13 @@ export default function Welcome({ onContinue }) {
         src={heart}
         alt=""
         draggable="false"
-        className="absolute select-none pointer-events-none"
+        className="welcome-heart absolute select-none pointer-events-none"
         style={{ left: 181, top: 596, width: 36, height: 36, objectFit: "contain" }}
       />
 
       {/* +1 */}
       <div
-        className="absolute font-sejong"
+        className="welcome-plus absolute font-sejong"
         style={{
           left: 184,
           top: 643,
@@ -224,7 +224,7 @@ export default function Welcome({ onContinue }) {
       <button
         type="button"
         onClick={onContinue}
-        className="signup-submit absolute font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
+        className="welcome-home-button signup-submit absolute font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
         style={{
           left: 56,
           top: 747,
