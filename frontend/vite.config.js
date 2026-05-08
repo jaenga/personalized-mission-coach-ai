@@ -14,6 +14,9 @@ export default defineConfig({
       "/profile": "http://127.0.0.1:8000",
       "/verify-student": "http://127.0.0.1:8000",
       "/demo-register-student": "http://127.0.0.1:8000",
+      "/onboarding-preferences": "http://127.0.0.1:8000",
+      "/mission-review": "http://127.0.0.1:8000",
+      "/mission-ui-actions": "http://127.0.0.1:8000",
     },
   },
 });

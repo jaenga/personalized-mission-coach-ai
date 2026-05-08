@@ -93,6 +93,42 @@ def _sse(payload: dict) -> str:
     return f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _done_sse(
+    ui_action=None,
+    debug: dict | None = None,
+    *,
+    mission_result_submitted: bool = False,
+    mission_result_type: str | None = None,
+    mission_id: int | None = None,
+) -> str:
+    payload = {
+        "type": "done",
+        "ui_action": ui_action,
+        "mission_result_submitted": bool(mission_result_submitted),
+    }
+    if debug is not None:
+        payload["debug"] = debug
+    if mission_result_submitted:
+        payload["mission_result_type"] = mission_result_type
+        if mission_id is not None:
+            payload["mission_id"] = mission_id
+    return _sse(payload)
+
+
+def _mission_review_trigger_kwargs(submit_result, mission_id: int | None) -> dict:
+    if (
+        submit_result
+        and getattr(getattr(submit_result, "status", None), "value", None) == "saved"
+        and submit_result.result_type in ("success", "fail")
+    ):
+        return {
+            "mission_result_submitted": True,
+            "mission_result_type": submit_result.result_type,
+            "mission_id": mission_id,
+        }
+    return {}
+
+
 def _chunk_template_response(text: str, chunk_size: int = _FAKE_STREAM_CHARS) -> list[str]:
     """서버 템플릿 응답을 프론트 스트리밍처럼 보이도록 작은 조각으로 나눈다."""
     if not text:
@@ -1435,7 +1471,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", identity_message)
             async for event in _fake_stream_template_response(identity_message):
                 yield event
-            yield _sse({"type": "done", "ui_action": None, "debug": {"intent": "IDENTITY_GUARD", "timing": {}}})
+            yield _done_sse(None, {"intent": "IDENTITY_GUARD", "timing": {}})
             return
 
         if not is_greet and _OFFTOPIC_RE.search(body.message):
@@ -1444,7 +1480,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", _OFFTOPIC_RESPONSE)
             async for event in _fake_stream_template_response(_OFFTOPIC_RESPONSE):
                 yield event
-            yield _sse({"type": "done", "ui_action": None, "debug": {"intent": "OFFTOPIC_GUARD", "timing": {}}})
+            yield _done_sse(None, {"intent": "OFFTOPIC_GUARD", "timing": {}})
             return
 
         current_mission_title = mission_title
@@ -1471,7 +1507,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     block_message = "아래 선택지 중 하나를 골라줘!"
                     async for event in _fake_stream_template_response(block_message):
                         yield event
-                    yield _sse({"type": "done", "ui_action": ui_action_payload, "debug": {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type}})
+                    yield _done_sse(ui_action_payload, {"intent": "UI_ACTION_GUARD", "ui_action_type": action_type})
                     return
 
                 if action_type == "awaiting_replacement_mission":
@@ -1480,7 +1516,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", result["response"])
                     async for event in _fake_stream_template_response(result["response"]):
                         yield event
-                    yield _sse({"type": "done", "ui_action": result["ui_action"], "debug": result["debug"]})
+                    yield _done_sse(result["ui_action"], result["debug"])
                     return
 
         if not is_greet and student_id:
@@ -1512,7 +1548,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
                 debug_payload = _pending_debug(pending_outcome, call1_ms, ai_message)
                 debug_payload["timing"]["total_ms"] = round((time.perf_counter() - pending_started) * 1000)
-                yield _sse({"type": "done", "ui_action": pending_outcome.ui_action, "debug": debug_payload})
+                yield _done_sse(
+                    pending_outcome.ui_action,
+                    debug_payload,
+                    **_mission_review_trigger_kwargs(
+                        pending_outcome.exec_results.submit if pending_outcome.exec_results else None,
+                        mission_id,
+                    ),
+                )
                 return
 
         if not is_greet and student_id and mission_row:
@@ -1540,7 +1583,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 async for event in _fake_stream_template_response(ai_message):
                     yield event
                 total_ms = round((time.perf_counter() - dislike_started) * 1000)
-                yield _sse({"type": "done", "ui_action": ui_action, "debug": {"intent": "MISSION_DISLIKE_GUARD", "ui_action_id": ui_action.get("action_id"), "memory_saved": bool(memory), "timing": {"total_ms": total_ms}}})
+                yield _done_sse(ui_action, {"intent": "MISSION_DISLIKE_GUARD", "ui_action_id": ui_action.get("action_id"), "memory_saved": bool(memory), "timing": {"total_ms": total_ms}})
                 return
 
         if not is_greet and student_id and mission_row and should_force_mission_adjustment(body.message):
@@ -1556,7 +1599,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                             yield event
                         total_ms = round((time.perf_counter() - change_started) * 1000)
                         direct_result["debug"].setdefault("timing", {})["total_ms"] = total_ms
-                        yield _sse({"type": "done", "ui_action": direct_result["ui_action"], "debug": direct_result["debug"]})
+                        yield _done_sse(direct_result["ui_action"], direct_result["debug"])
                         return
 
                 if candidate_text:
@@ -1575,7 +1618,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     async for event in _fake_stream_template_response(ai_message):
                         yield event
                     total_ms = round((time.perf_counter() - change_started) * 1000)
-                    yield _sse({"type": "done", "ui_action": ui_action, "debug": {"intent": "DIRECT_REPLACEMENT_REQUEST", "ui_action_id": ui_action.get("action_id"), "timing": {"total_ms": total_ms}}})
+                    yield _done_sse(ui_action, {"intent": "DIRECT_REPLACEMENT_REQUEST", "ui_action_id": ui_action.get("action_id"), "timing": {"total_ms": total_ms}})
                     return
 
                 if not candidate_text:
@@ -1594,7 +1637,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     async for event in _fake_stream_template_response(ai_message):
                         yield event
                     total_ms = round((time.perf_counter() - change_started) * 1000)
-                    yield _sse({"type": "done", "ui_action": ui_action, "debug": {"intent": "MISSION_CHANGE_REASON_GUARD", "ui_action_id": ui_action.get("action_id"), "timing": {"total_ms": total_ms}}})
+                    yield _done_sse(ui_action, {"intent": "MISSION_CHANGE_REASON_GUARD", "ui_action_id": ui_action.get("action_id"), "timing": {"total_ms": total_ms}})
                     return
 
         intent = "A"
@@ -1617,7 +1660,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", cancel_negation_message)
                 async for event in _fake_stream_template_response(cancel_negation_message):
                     yield event
-                yield _sse({"type": "done", "ui_action": None, "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}}})
+                yield _done_sse(None, {"intent": "CANCEL_NEGATION_GUARD", "timing": {}})
                 return
             intent, intent_ms = await step_classify(body.message, current_mission_title)
             if intent == "B" and "취소" in body.message:
@@ -1690,10 +1733,9 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             async for event in _fake_stream_template_response(clarify_response):
                 yield event
             total_ms = round((time.perf_counter() - t_total) * 1000)
-            yield _sse({
-                "type": "done",
-                "ui_action": None,
-                "debug": {
+            yield _done_sse(
+                None,
+                {
                     "intent": intent,
                     "clarify_reason": clarify_reason,
                     "clarify_template": True,
@@ -1711,7 +1753,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     },
                     "rag_hits": {"chunks": 0, "faqs": 0},
                 },
-            })
+            )
             return
 
         combo = classify_multi(fn_calls) if fn_calls else None
@@ -1902,10 +1944,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
-        yield f"data: {_json.dumps({'type': 'done', 'ui_action': None, 'debug': debug_payload}, ensure_ascii=False)}\n\n"
         mission_status = None
         if exec_results.submit and exec_results.submit.status.value == "saved":
             mission_status = exec_results.submit.result_type
+        yield _done_sse(
+            None,
+            debug_payload,
+            **_mission_review_trigger_kwargs(exec_results.submit if exec_results else None, mission_id),
+        )
         if exec_results.cancel and exec_results.cancel.status is CancelStatus.CANCELLED_SUBMIT:
             today = _kst_today()
             background_tasks.add_task(_cancel_sheet_bg, student_id, today)

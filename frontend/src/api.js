@@ -65,7 +65,11 @@ export async function sendMessageStream(message, sessionId, mission = null, { on
         } else if (data.type === "token") {
           onToken?.(data.content);
         } else if (data.type === "done") {
-          onDone?.(data.debug, data.ui_action ?? null);
+          onDone?.(data.debug, data.ui_action ?? null, {
+            mission_result_submitted: data.mission_result_submitted === true,
+            mission_result_type: data.mission_result_type ?? null,
+            mission_id: data.mission_id ?? null,
+          });
         }
       } catch {}
     }
@@ -157,6 +161,42 @@ export async function resolveMissionUiAction(actionId, sessionId, value) {
 }
 
 /** 학생 미션 조회. */
+export async function saveMissionReview({ session_id, mission_id, rating, comment }) {
+  const res = await fetch("/mission-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id, mission_id, rating, comment }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "미션 평가 저장에 실패했어요");
+  }
+  return res.json();
+}
+
+export async function saveOnboardingPreferences({
+  session_id,
+  preferred_activity_keys,
+  disliked_activity_keys,
+  restrictions,
+}) {
+  const res = await fetch("/onboarding-preferences", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id,
+      preferred_activity_keys,
+      disliked_activity_keys,
+      restrictions,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "선호 정보 저장에 실패했어요");
+  }
+  return res.json();
+}
+
 export async function fetchMissionByStudent(studentId) {
   const res = await fetch(`/mission?student_id=${studentId}`);
   if (!res.ok) throw new Error("미션 불러오기 실패");

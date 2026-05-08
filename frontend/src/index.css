@@ -804,3 +804,299 @@ button:not(:disabled):hover { opacity: 0.85; }
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Onboarding preferences and mission review */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.34);
+}
+
+.modal-backdrop.soft {
+  background: rgba(120, 65, 45, 0.24);
+}
+
+.onboarding-card,
+.review-card {
+  width: min(100%, 430px);
+  max-height: min(92vh, 760px);
+  overflow-y: auto;
+  background: #fff8f4;
+  border: 1.5px solid #f2c5ba;
+  border-radius: 24px;
+  box-shadow: 0 18px 48px rgba(120, 65, 45, 0.18);
+}
+
+.onboarding-card {
+  padding: 18px;
+}
+
+.onboarding-hero {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 16px;
+  margin-bottom: 14px;
+  background: #fff;
+  border: 1px solid rgba(227, 93, 73, 0.14);
+  border-radius: 20px;
+}
+
+.tomato-mark,
+.review-tomato {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #ffe5dd;
+  font-size: 1.55rem;
+  flex-shrink: 0;
+}
+
+.onboarding-hero h2,
+.review-card h2 {
+  font-size: 1.18rem;
+  line-height: 1.35;
+  color: #2f241f;
+  margin-bottom: 4px;
+}
+
+.onboarding-hero p,
+.onboarding-section-title p {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #75645c;
+}
+
+.onboarding-section {
+  background: #fff;
+  border: 1px solid rgba(227, 93, 73, 0.12);
+  border-radius: 18px;
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.onboarding-section-title {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.onboarding-section-title h3 {
+  font-size: 0.98rem;
+  color: #2f241f;
+  margin-bottom: 2px;
+}
+
+.onboarding-section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 0.9rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.onboarding-section-icon.like {
+  background: #ffe5dd;
+  color: #e35d49;
+}
+
+.onboarding-section-icon.dislike {
+  background: #eef6ff;
+  color: #4f8ef7;
+}
+
+.onboarding-section-icon.caution {
+  background: #fff2c7;
+  color: #b7791f;
+}
+
+.preference-chip-grid,
+.restriction-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preference-chip,
+.restriction-preview span {
+  border-radius: 999px;
+  font-size: 0.86rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.preference-chip {
+  padding: 9px 13px;
+  border: 1.5px solid transparent;
+  background: #fff1eb;
+  color: #6f5b54;
+}
+
+.preference-chip.selected {
+  background: #ffe5dd;
+  color: #e35d49;
+  border-color: #f2c5ba;
+  font-weight: 700;
+}
+
+.restriction-textarea,
+.review-textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1.5px solid #f2c5ba;
+  border-radius: 16px;
+  outline: none;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  background: #fffaf7;
+  color: #2f241f;
+}
+
+.restriction-textarea:focus,
+.review-textarea:focus {
+  border-color: #e35d49;
+  box-shadow: 0 0 0 3px rgba(227, 93, 73, 0.14);
+}
+
+.restriction-preview {
+  margin-top: 10px;
+}
+
+.restriction-preview span {
+  padding: 6px 10px;
+  background: #ffe5dd;
+  color: #e35d49;
+  border: 1px solid #f2c5ba;
+  font-weight: 600;
+}
+
+.review-card {
+  padding: 24px 20px 20px;
+  text-align: center;
+}
+
+.review-tomato {
+  margin: 0 auto 10px;
+}
+
+.review-kicker {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #e35d49;
+  margin-bottom: 4px;
+}
+
+.star-row {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin: 16px 0 14px;
+}
+
+.star-btn {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  background: #fff;
+  color: #d8c5bd;
+  border: 1.5px solid #f2d6ce;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.star-btn.selected {
+  color: #f6b73c;
+  background: #fff6df;
+  border-color: #f3d28a;
+}
+
+.review-label {
+  display: block;
+  text-align: left;
+  margin: 8px 2px 8px;
+  color: #2f241f;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  flex: 1;
+  border-radius: 999px;
+  padding: 12px 14px;
+  font-size: 0.95rem;
+}
+
+.primary-action {
+  background: #e35d49;
+  color: #fff;
+}
+
+.secondary-action {
+  background: #fff;
+  color: #7a6a64;
+  border: 1.5px solid #f2c5ba;
+}
+
+.form-error {
+  margin-top: 10px;
+  color: #dc2626;
+  font-size: 0.86rem;
+  text-align: center;
+  line-height: 1.45;
+}
+
+.toast-message {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 1300;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: #2f241f;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
+}
+
+@media (max-width: 760px) {
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 10px;
+  }
+
+  .onboarding-card,
+  .review-card {
+    border-radius: 22px 22px 18px 18px;
+    max-height: 88vh;
+  }
+
+  .star-btn {
+    width: 38px;
+    height: 38px;
+  }
+}

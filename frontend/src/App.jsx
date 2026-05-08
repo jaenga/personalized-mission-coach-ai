@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
+import { verifyStudent, saveProfile, registerDemoStudent, fetchMissionByStudent, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, resolveMissionUiAction, fetchActiveUiAction, saveMissionReview, saveOnboardingPreferences } from "./api.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import DebugPanel from "./components/DebugPanel.jsx";
+import MissionReviewModal from "./components/MissionReviewModal.jsx";
+import OnboardingPreferences from "./components/OnboardingPreferences.jsx";
 
 function createSessionId() {
   const id = crypto.randomUUID();
@@ -35,6 +37,13 @@ export default function App() {
   const greetingRequestedRef = useRef(false);
   const syncedProfileKeyRef = useRef(null);
   const loadedHistoryKeyRef = useRef(null);
+  const [showOnboardingPreferences, setShowOnboardingPreferences] = useState(false);
+  const [onboardingSaving, setOnboardingSaving] = useState(false);
+  const [onboardingError, setOnboardingError] = useState("");
+  const [reviewModal, setReviewModal] = useState(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
 
   // 로그인 화면용 상태
   const [loginForm, setLoginForm] = useState({ name: "", phone4: "" });
@@ -42,6 +51,22 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [signupPopupOpen, setSignupPopupOpen] = useState(false);
   const [farewellMessage, setFarewellMessage] = useState("");
+
+  useEffect(() => {
+    if (!profile?.student_id) {
+      setShowOnboardingPreferences(false);
+      return;
+    }
+    const key = `onboarding_preferences_done:${profile.student_id}`;
+    setShowOnboardingPreferences(profileSynced && localStorage.getItem(key) !== "true");
+    setOnboardingError("");
+  }, [profile?.student_id, profileSynced]);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => setToastMessage(""), 1800);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   // 로컬 프로필을 백엔드 세션 매핑과 동기화
   useEffect(() => {
@@ -238,6 +263,71 @@ export default function App() {
     setLoginError("");
     setSignupPopupOpen(false);
     setFarewellMessage("");
+    setShowOnboardingPreferences(false);
+    setReviewModal(null);
+    setToastMessage("");
+  }
+
+  async function handleSaveOnboardingPreferences(values) {
+    if (!profile?.student_id) return;
+    if (!profileSynced) {
+      setOnboardingError("프로필을 준비하는 중이에요. 잠시 후 다시 눌러주세요.");
+      return;
+    }
+    setOnboardingSaving(true);
+    setOnboardingError("");
+    try {
+      await saveOnboardingPreferences({
+        session_id: sessionId,
+        preferred_activity_keys: values.preferred_activity_keys,
+        disliked_activity_keys: values.disliked_activity_keys,
+        restrictions: values.restrictions,
+      });
+      localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
+      setShowOnboardingPreferences(false);
+      setToastMessage("선호 정보가 저장됐어요!");
+    } catch (err) {
+      setOnboardingError(err.message);
+    } finally {
+      setOnboardingSaving(false);
+    }
+  }
+
+  function handleSkipOnboardingPreferences() {
+    if (profile?.student_id) {
+      localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
+    }
+    setShowOnboardingPreferences(false);
+    setOnboardingError("");
+  }
+
+  async function handleSaveMissionReview({ rating, comment }) {
+    const missionId = reviewModal?.missionId ?? mission?.mission_id;
+    if (!missionId) {
+      setReviewError("미션 정보를 찾지 못했어요. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    setReviewSaving(true);
+    setReviewError("");
+    try {
+      await saveMissionReview({
+        session_id: sessionId,
+        mission_id: missionId,
+        rating,
+        comment,
+      });
+      setReviewModal(null);
+      setToastMessage("평가가 저장됐어요!");
+    } catch (err) {
+      setReviewError(err.message);
+    } finally {
+      setReviewSaving(false);
+    }
+  }
+
+  function handleSkipMissionReview() {
+    setReviewModal(null);
+    setReviewError("");
   }
 
   async function requestGreeting(currentMission) {
@@ -311,7 +401,7 @@ export default function App() {
               )
             );
           },
-          onDone: (debug, uiAction) => {
+          onDone: (debug, uiAction, doneInfo) => {
             if (debug) {
               setDebugMap((prev) => ({
                 ...prev,
@@ -324,6 +414,16 @@ export default function App() {
                   m.debugId === debugId ? { ...m, ui_action: uiAction } : m
                 )
               );
+            }
+            if (doneInfo?.mission_result_submitted === true) {
+              const reviewMissionId = doneInfo.mission_id ?? mission?.mission_id;
+              if (reviewMissionId) {
+                setReviewModal({
+                  missionId: reviewMissionId,
+                  resultType: doneInfo.mission_result_type,
+                });
+                setReviewError("");
+              }
             }
             if (profile?.student_id) {
               fetchMissionByStudent(profile.student_id)
@@ -562,6 +662,26 @@ export default function App() {
           }
         />
       </div>
+
+      {toastMessage && <div className="toast-message">{toastMessage}</div>}
+
+      {showOnboardingPreferences && (
+        <OnboardingPreferences
+          onSubmit={handleSaveOnboardingPreferences}
+          onSkip={handleSkipOnboardingPreferences}
+          loading={onboardingSaving}
+          error={onboardingError}
+        />
+      )}
+
+      <MissionReviewModal
+        open={!!reviewModal}
+        resultType={reviewModal?.resultType}
+        onSave={handleSaveMissionReview}
+        onSkip={handleSkipMissionReview}
+        loading={reviewSaving}
+        error={reviewError}
+      />
     </div>
   );
 }
