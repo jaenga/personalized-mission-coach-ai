@@ -104,7 +104,7 @@ const FRESH_STATS = { level: 1, currentXp: 0, ticketCount: 0, heartCount: 1 };
 
 function LoadingScreen() {
   return (
-    <div className="mobile-frame flex items-center justify-center" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame flex items-center justify-center" style={{ background: "#fdefea" }}>
       <div
         className="font-sejong"
         style={{ fontSize: 15, color: "#E35D49", letterSpacing: "-0.43px" }}
@@ -697,6 +697,7 @@ export default function App() {
           heartCount={heartCount}
           todayMission={{
             title: mission?.mission_name || "오늘의 미션",
+            description: mission?.mission_description || mission?.mission_rule || "",
             done: mission?.status === "completed" || mission?.status === "success",
           }}
           onNavigate={navHandler(SCREENS.HOME)}

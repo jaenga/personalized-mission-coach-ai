@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import main2 from "../assets/tomato/home/main2.png";
+import { useEffect, useMemo, useState } from "react";
+// import main2 from "../assets/tomato/home/main2.png";
+import home1 from "../assets/tomato/home/home1.svg";
 import face from "../assets/tomato/home/face.png";
 import danger from "../assets/tomato/home/danger.png";
 import heart from "../assets/tomato/_shared/heart.png";
@@ -28,6 +29,40 @@ function getGreetingName(name) {
 
 function formatTodayKor(date) {
   return `${date.getMonth() + 1}월 ${date.getDate()}일`;
+}
+
+function parseMissionGuideSections(text) {
+  const normalized = String(text || "")
+    .replace(/\\n|\/n/g, "\n")
+    .replace(/\s*(\[[^\]]+\])/g, "\n$1")
+    .trim();
+
+  if (!normalized) return [];
+
+  const parts = normalized
+    .split(/(\[[^\]]+\])/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const sections = [];
+  let current = null;
+
+  parts.forEach((part) => {
+    if (/^\[[^\]]+\]$/.test(part)) {
+      if (current) sections.push(current);
+      current = { label: part, body: "" };
+      return;
+    }
+
+    if (!current) {
+      current = { label: "", body: part };
+      return;
+    }
+
+    current.body = [current.body, part].filter(Boolean).join("\n");
+  });
+
+  if (current) sections.push(current);
+  return sections;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -233,10 +268,10 @@ function WeekStrip({ today, successSet }) {
         const success = successSet.has(key);
         const isToday = key === todayKey;
         return (
-          <div key={key} className="flex flex-col items-center" style={{ width: 36 }}>
+          <div key={key} className="flex flex-col items-center" style={{ width: 36, minHeight: 66 }}>
             <span
               className="font-sejong"
-              style={{ fontSize: 13, color: "#000", letterSpacing: "-0.43px" }}
+              style={{ fontSize: 12, fontWeight: 700, color: "#000", letterSpacing: "-0.43px" }}
             >
               {WEEK_LABELS_MON[(d.getDay() + 6) % 7]}
             </span>
@@ -251,14 +286,14 @@ function WeekStrip({ today, successSet }) {
               }}
             >
               {success ? (
-                <img src={face} alt="" style={{ width: 26, height: 26, objectFit: "contain" }} />
+                <img src={face} alt="" style={{ width: 25, height: 25, objectFit: "contain" }} />
               ) : (
                 <span
                   style={{
-                    width: 22,
-                    height: 22,
+                    width: 31,
+                    height: 31,
                     borderRadius: "50%",
-                    background: "#FFE9D2",
+                    background: isToday ? "#FFE9D2" : "rgba(255, 233, 210, 0.78)",
                     display: "inline-block",
                   }}
                 />
@@ -267,7 +302,7 @@ function WeekStrip({ today, successSet }) {
             {isToday && (
               <span
                 className="font-sejong mt-1"
-                style={{ fontSize: 10, color: "#E35D49", letterSpacing: "-0.43px" }}
+                style={{ fontSize: 10, fontWeight: 700, color: "#E35D49", letterSpacing: "-0.43px" }}
               >
                 오늘
               </span>
@@ -401,13 +436,14 @@ export default function Home({
   streakDays = 0,
   ticketCount = 2,
   heartCount = 4,
-  todayMission = { title: "15분 책 읽기", done: false },
+  todayMission = { title: "15분 책 읽기", description: "", done: false },
   successDates = [],
   onNavigate,
 }) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("home");
   const [expOpen, setExpOpen] = useState(false);
+  const [missionFlipped, setMissionFlipped] = useState(false);
   const today = useMemo(() => new Date(), []);
   const [viewYM, setViewYM] = useState(() => ({ year: today.getFullYear(), month: today.getMonth() }));
   const greetingName = getGreetingName(studentName);
@@ -429,6 +465,17 @@ export default function Home({
   const successSet = useMemo(() => new Set(successDates), [successDates]);
 
   const missionPct = todayMission.done ? 1 : 0;
+  const missionGuide =
+    todayMission.description?.trim() ||
+    "미션 설명을 아직 불러오지 못했어. 잠시 후 다시 확인해줘!";
+  const missionGuideSections = useMemo(
+    () => parseMissionGuideSections(missionGuide),
+    [missionGuide],
+  );
+
+  useEffect(() => {
+    setMissionFlipped(false);
+  }, [todayMission.title, todayMission.description]);
 
   function handleNav(key) {
     setActiveTab(key);
@@ -438,7 +485,7 @@ export default function Home({
   return (
     <div
       className="mobile-frame"
-      style={{ background: "#FFF3E7" }}
+      style={{ background: "#fdefea" }}
     >
       <div
         className="absolute inset-0 overflow-y-auto"
@@ -598,6 +645,7 @@ export default function Home({
         {/* 메인 캐릭터 + 스파클 */}
         <div className="relative mx-auto mt-4" style={{ width: 340, height: 290 }}>
           <SparkleField />
+          {/*
           <img
             src={main2}
             alt="토미"
@@ -611,12 +659,26 @@ export default function Home({
               objectFit: "contain",
             }}
           />
+          */}
+          <img
+            src={home1}
+            alt="토미"
+            draggable="false"
+            className="absolute select-none pointer-events-none"
+            style={{
+              left: 20,
+              top: 10,
+              width: 280,
+              height: 260,
+              objectFit: "contain",
+            }}
+          />
           <div
             aria-hidden="true"
             className="absolute"
             style={{
               left: "50%",
-              top: 232,
+              top: 240,
               transform: "translateX(-50%)",
               width: 170,
               height: 24,
@@ -629,85 +691,180 @@ export default function Home({
         </div>
 
         {/* 오늘의 미션 카드 */}
-        <div
-          className="mx-auto mt-5"
+        <button
+          type="button"
+          className="mx-auto mt-5 block text-left transition-transform active:scale-[0.99]"
+          onClick={() => setMissionFlipped((v) => !v)}
+          aria-pressed={missionFlipped}
+          aria-label={missionFlipped ? "오늘의 미션 보기" : "오늘의 미션 수행 방법 보기"}
           style={{
             width: 315,
-            borderRadius: 28,
-            background: "rgba(255, 255, 255, 0.62)",
-            border: "1.2px solid rgba(227, 93, 73, 0.45)",
-            padding: "17px 20px 18px",
+            height: 135,
+            border: "none",
+            padding: 0,
+            background: "transparent",
+            perspective: 1000,
+            cursor: "pointer",
           }}
         >
-          <div className="flex items-baseline justify-between">
-            <span
-              className="font-sejong"
-              style={{ fontSize: 14, color: "#75726e", letterSpacing: "-0.43px" }}
-            >
-              오늘의 미션
-            </span>
-            <span
-              className="font-sejong"
-              style={{ fontSize: 12, color: "#75726e", letterSpacing: "-0.43px" }}
-            >
-              {formatTodayKor(today)}
-            </span>
-          </div>
           <div
-            className="mt-3 flex items-start"
-            style={{ gap: 10 }}
-          >
-            <img
-              src={flag}
-              alt=""
-              style={{ width: 25, height: 25, objectFit: "contain", flexShrink: 0, marginTop: 2 }}
-            />
-            <span
-              style={{
-                fontFamily: '"IM_Hyemin", "SejongGeulggot", sans-serif',
-                flex: 1,
-                minWidth: 0,
-                fontSize: 19,
-                fontWeight: 700,
-                letterSpacing: "-0.43px",
-                lineHeight: "27px",
-                wordBreak: "keep-all",
-                overflowWrap: "normal",
-              }}
-            >
-              {todayMission.title}
-            </span>
-          </div>
-          <div
-            className="mt-3 rounded-full overflow-hidden"
-            style={{ height: 8, background: "#FCE0DA" }}
+            className="relative h-full w-full"
+            style={{
+              transformStyle: "preserve-3d",
+              transition: "transform 0.55s cubic-bezier(0.2, 0.8, 0.2, 1)",
+              transform: missionFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+            }}
           >
             <div
-              className="h-full rounded-full"
+              className="absolute inset-0"
               style={{
-                width: `${missionPct * 100}%`,
-                background: "#E35D49",
-                transition: "width 0.6s ease",
+                borderRadius: 28,
+                background: "rgba(255, 255, 255, 0.62)",
+                border: "1.2px solid rgba(227, 93, 73, 0.45)",
+                padding: "17px 20px 18px",
+                backfaceVisibility: "hidden",
+                WebkitBackfaceVisibility: "hidden",
               }}
-            />
+            >
+              <div className="flex items-baseline justify-between">
+                <span
+                  className="font-sejong"
+                  style={{ fontSize: 14, color: "#E35D49", letterSpacing: "-0.43px" }}
+                >
+                  오늘의 미션
+                </span>
+                <span
+                  className="font-sejong"
+                  style={{ fontSize: 12, color: "#75726e", letterSpacing: "-0.43px" }}
+                >
+                  {formatTodayKor(today)}
+                </span>
+              </div>
+              <div
+                className="mt-3 flex items-start"
+                style={{ gap: 10 }}
+              >
+                <img
+                  src={flag}
+                  alt=""
+                  style={{ width: 25, height: 25, objectFit: "contain", flexShrink: 0, marginTop: 2 }}
+                />
+                <span
+                  style={{
+                    fontFamily: '"IM_Hyemin", "SejongGeulggot", sans-serif',
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 19,
+                    fontWeight: 700,
+                    letterSpacing: "-0.43px",
+                    lineHeight: "27px",
+                    wordBreak: "keep-all",
+                    overflowWrap: "normal",
+                  }}
+                >
+                  {todayMission.title}
+                </span>
+              </div>
+              <div
+                className="mt-3 rounded-full overflow-hidden"
+                style={{ height: 8, background: "#FCE0DA" }}
+              >
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${missionPct * 100}%`,
+                    background: "#E35D49",
+                    transition: "width 0.6s ease",
+                  }}
+                />
+              </div>
+            </div>
+
+            <div
+              className="absolute inset-0"
+              style={{
+                borderRadius: 28,
+                background: "rgba(255, 255, 255, 0.78)",
+                border: "1.2px solid rgba(227, 93, 73, 0.45)",
+                padding: "16px 18px",
+                backfaceVisibility: "hidden",
+                WebkitBackfaceVisibility: "hidden",
+                transform: "rotateY(180deg)",
+                boxShadow: "0 8px 18px rgba(80, 60, 40, 0.04)",
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span
+                  className="font-sejong"
+                  style={{ fontSize: 14, fontWeight: 700, color: "#E35D49", letterSpacing: "-0.43px" }}
+                >
+                  수행 방법
+                </span>
+                <span
+                  className="font-sejong"
+                  style={{ fontSize: 12, color: "#75726e", letterSpacing: "-0.43px" }}
+                >
+                  {formatTodayKor(today)}
+                </span>
+              </div>
+              <div
+                className="font-sejong mt-3"
+                style={{
+                  maxHeight: 80,
+                  overflowY: "auto",
+                  fontSize: 14,
+                  lineHeight: "21px",
+                  color: "#2f2c28",
+                  letterSpacing: "-0.43px",
+                  wordBreak: "keep-all",
+                  overflowWrap: "break-word",
+                }}
+              >
+                {missionGuideSections.map((section, index) => (
+                  <div
+                    key={`${section.label}-${index}`}
+                    style={{ marginBottom: index === missionGuideSections.length - 1 ? 0 : 10 }}
+                  >
+                    {section.label && (
+                      <strong
+                        style={{
+                          display: "block",
+                          marginBottom: 3,
+                          fontWeight: 800,
+                          color: "#2f2c28",
+                        }}
+                      >
+                        {section.label}
+                      </strong>
+                    )}
+                    {section.body && (
+                      <span style={{ display: "block", whiteSpace: "pre-line" }}>
+                        {section.body}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
+        </button>
 
         {/* 이번 주 기록 카드 */}
         <div
           className="mx-auto mt-3"
           style={{
             width: 315,
-            borderRadius: 30,
+            borderRadius: 18,
             background: "rgba(255, 255, 255, 0.5)",
-            border: "1px solid rgba(227, 93, 73, 0.4)",
-            padding: "16px 18px",
+            border: "1px solid rgba(227, 93, 73, 0.22)",
+            padding: "13px 18px 8px",
+            boxShadow: "0 6px 14px rgba(80, 60, 40, 0.04)",
           }}
         >
           <div className="flex items-baseline justify-between">
             <span
               className="font-sejong"
-              style={{ fontSize: 14, color: "#75726e", letterSpacing: "-0.43px" }}
+              style={{ fontSize: 13, fontWeight: 700, color: "#75726e", letterSpacing: "-0.43px" }}
             >
               이번 주 기록
             </span>
@@ -726,30 +883,31 @@ export default function Home({
           <button
             type="button"
             onClick={() => setCalendarOpen((v) => !v)}
-            className="font-sejong mt-3 w-full flex items-center justify-center"
+            aria-label={calendarOpen ? "캘린더 접기" : "캘린더 전체 보기"}
+            className="mt-1 mx-auto flex items-center justify-center transition-transform active:scale-95"
             style={{
-              height: 28,
-              borderRadius: 30,
-              background: "rgba(227, 93, 73, 0.15)",
-              border: "1px solid rgba(227, 93, 73, 0.4)",
-              fontSize: 12,
-              color: "#E35D49",
-              letterSpacing: "-0.43px",
+              width: 20,
+              height: 18,
+              borderRadius: 999,
+              background: "transparent",
+              border: "none",
+              color: "#e79777",
               padding: 0,
-              gap: 4,
+              cursor: "pointer",
             }}
           >
-            캘린더 전체 보기
             <span
               aria-hidden="true"
               style={{
                 display: "inline-block",
-                transform: calendarOpen ? "rotate(90deg)" : "rotate(0deg)",
+                width: 10,
+                height: 10,
+                borderRight: "2px solid currentColor",
+                borderBottom: "2px solid currentColor",
+                transform: calendarOpen ? "rotate(225deg) translate(-2px, -2px)" : "rotate(45deg) translate(-2px, -2px)",
                 transition: "transform 0.3s ease",
               }}
-            >
-              &gt;
-            </span>
+            />
           </button>
 
           {/* 펼쳐지는 월간 캘린더 */}

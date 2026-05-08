@@ -87,25 +87,36 @@ export default function LearnScreen({
   const [activeNav, setActiveNav] = useState("learn");
   // progress[lessonId] = { eduDone, quizDone }. 백엔드 lesson_progress에서 로드.
   const [progress, setProgress] = useState({});
+  const [progressLoaded, setProgressLoaded] = useState(!studentId);
 
   // 진입 시 백엔드에서 진행도 로드
   useEffect(() => {
-    if (!studentId) return;
+    if (!studentId) {
+      setProgressLoaded(true);
+      return;
+    }
     let cancelled = false;
+    setProgressLoaded(false);
     fetchLessonProgress(studentId)
       .then((rows) => {
         if (cancelled) return;
-        const map = {};
-        for (const r of rows) {
-          map[r.lesson_id] = {
-            eduDone: r.edu_done,
-            quizDone: r.quiz_done,
-            completedAt: r.completed_at,
-          };
-        }
-        setProgress(map);
+        setProgress((prev) => {
+          const map = { ...prev };
+          for (const r of rows) {
+            const existing = prev[r.lesson_id] || {};
+            map[r.lesson_id] = {
+              eduDone: Boolean(r.edu_done || existing.eduDone),
+              quizDone: Boolean(r.quiz_done || existing.quizDone),
+              completedAt: existing.completedAt || r.completed_at,
+            };
+          }
+          return map;
+        });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setProgressLoaded(true);
+      });
     return () => { cancelled = true; };
   }, [studentId]);
   const [openLessonId, setOpenLessonId] = useState(null);
@@ -242,6 +253,27 @@ export default function LearnScreen({
         onComplete={() => handleQuizComplete(openLessonId)}
         alreadyCompleted={!!progress[openLessonId]?.quizDone}
       />
+    );
+  }
+
+  if (!progressLoaded) {
+    return (
+      <div
+        className="mobile-frame flex items-center justify-center"
+        style={{ background: "#FFF3E7" }}
+      >
+        <div
+          className="font-sejong"
+          style={{
+            color: "#E35D49",
+            fontSize: 15,
+            fontWeight: 700,
+            letterSpacing: "-0.43px",
+          }}
+        >
+          배움 불러오는 중...
+        </div>
+      </div>
     );
   }
 

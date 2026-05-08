@@ -581,7 +581,7 @@ def assign_demo_mission_on_signup(student_id: int) -> dict | None:
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
                        m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
-                       m.mission_rule, sdm.status
+                       m.mission_rule, m.mission_description, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s
@@ -637,7 +637,7 @@ def assign_demo_mission_on_signup(student_id: int) -> dict | None:
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
                        m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
-                       m.mission_rule, sdm.status
+                       m.mission_rule, m.mission_description, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s
@@ -660,7 +660,7 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
                        m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
-                       m.mission_rule, sdm.status
+                       m.mission_rule, m.mission_description, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s AND sdm.assigned_date = %s
