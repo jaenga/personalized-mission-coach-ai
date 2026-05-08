@@ -174,6 +174,29 @@ function IntroScreen({ onStart, onOpenRanking, bestScore, bestLoaded, heartCount
       }}
     >
       <Sun style={{ right: 30, top: 30 }} />
+      <div
+        className="absolute flex items-center font-sejong"
+        style={{
+          top: 18,
+          left: 18,
+          height: 30,
+          padding: "0 12px",
+          gap: 6,
+          borderRadius: 999,
+          background: "rgba(255, 255, 255, 0.86)",
+          border: "1px solid rgba(227, 93, 73, 0.18)",
+          boxShadow: "0 5px 12px rgba(80, 60, 40, 0.06)",
+          color: "#1f1f1f",
+          fontSize: 13,
+          fontWeight: 800,
+          letterSpacing: "-0.3px",
+          pointerEvents: "none",
+          zIndex: 4,
+        }}
+      >
+        <img src={heartImg} alt="" style={{ width: 15, height: 15, objectFit: "contain" }} />
+        {heartCount}
+      </div>
       <Hill style={{ left: -40, top: 245, opacity: 0.6, transform: "scale(1.05)" }} />
       <Hill style={{ right: -62, top: 278, opacity: 0.45, transform: "scale(0.82)" }} />
       {/* 타이틀 */}
@@ -259,8 +282,9 @@ function IntroScreen({ onStart, onOpenRanking, bestScore, bestLoaded, heartCount
       <div
         className="absolute flex flex-col items-center"
         style={{
-          bottom: 26,
+          bottom: "calc(92px + env(safe-area-inset-bottom))",
           left: 0, right: 0,
+          zIndex: 9,
         }}
       >
         {!canStart && (
@@ -285,16 +309,24 @@ function IntroScreen({ onStart, onOpenRanking, bestScore, bestLoaded, heartCount
         )}
         {canStart && (
           <span
-            className="font-sejong"
+            className="font-sejong inline-flex items-center tap-hint"
             style={{
+              height: 38,
+              padding: "0 16px",
+              gap: 7,
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.9)",
+              border: "1px solid rgba(227, 93, 73, 0.18)",
+              boxShadow: "0 6px 14px rgba(80, 60, 40, 0.08)",
               fontSize: 14,
-              fontWeight: 600,
-              color: "#444",
+              fontWeight: 800,
+              color: "#E35D49",
               letterSpacing: "-0.43px",
               marginTop: 4,
             }}
           >
-            화면을 눌러 시작하기
+            <span aria-hidden="true" style={{ fontSize: 18, lineHeight: 1 }}>☝</span>
+            탭하여 시작
           </span>
         )}
       </div>

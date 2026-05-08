@@ -4,7 +4,8 @@ import { LESSONS } from "../data/lessons.js";
 import { completeLessonQuiz, fetchLessonProgress, updateLessonProgress } from "../api.js";
 import EducationScreen from "./EducationScreen.jsx";
 import QuizScreen from "./QuizScreen.jsx";
-import gachaImg from "../assets/tomato/draw/gacha.png";
+import AppLoadingScreen from "./AppLoadingScreen.jsx";
+import gachaImg from "../assets/tomato/_shared/gacha.svg";
 import readingTomato from "../assets/read.png";
 import bookIconImg from "../assets/book.png";
 import starIconImg from "../assets/star.png";
@@ -258,22 +259,11 @@ export default function LearnScreen({
 
   if (!progressLoaded) {
     return (
-      <div
-        className="mobile-frame flex items-center justify-center"
-        style={{ background: "#FFF3E7" }}
-      >
-        <div
-          className="font-sejong"
-          style={{
-            color: "#E35D49",
-            fontSize: 15,
-            fontWeight: 700,
-            letterSpacing: "-0.43px",
-          }}
-        >
-          배움 불러오는 중...
-        </div>
-      </div>
+      <AppLoadingScreen
+        active="learn"
+        message="불러오는 중 ..."
+        onNavigate={onNavigate}
+      />
     );
   }
 
@@ -407,7 +397,7 @@ export default function LearnScreen({
         type="button"
         onClick={() => onNavigate?.("draw")}
         aria-label="뽑기 화면으로 이동"
-        className="absolute transition-transform active:scale-95"
+        className="gacha-hover-shake absolute transition-transform active:scale-95"
         style={{
           right: 14, bottom: 84,
           width: 78, height: 78,

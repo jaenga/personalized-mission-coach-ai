@@ -13,6 +13,7 @@ import LevelUp from "./components/LevelUp.jsx";
 import Ranking from "./components/Ranking.jsx";
 import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
+import AppLoadingScreen from "./components/AppLoadingScreen.jsx";
 
 // ── 화면 상수 ──────────────────────────────────────────────────────────────
 const SCREENS = {
@@ -102,19 +103,6 @@ function normalizeHealthNote(note) {
 
 // 신규 가입자 기본값 — Lv1, 0 EXP, 뽑기권 0, 하트 1
 const FRESH_STATS = { level: 1, currentXp: 0, ticketCount: 0, heartCount: 1 };
-
-function LoadingScreen() {
-  return (
-    <div className="mobile-frame flex items-center justify-center" style={{ background: "#fdefea" }}>
-      <div
-        className="font-sejong"
-        style={{ fontSize: 15, color: "#E35D49", letterSpacing: "-0.43px" }}
-      >
-        불러오는 중...
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   // ── 화면 상태 ────────────────────────────────────────────────────────────
@@ -684,7 +672,7 @@ export default function App() {
 
     case SCREENS.HOME:
       if (profile && (!appStateLoaded || !missionLoaded)) {
-        return <LoadingScreen />;
+        return <AppLoadingScreen active="home" onNavigate={navHandler(SCREENS.HOME)} />;
       }
       return (
         <Home

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BottomNav } from "./Home.jsx";
+import AppLoadingScreen from "./AppLoadingScreen.jsx";
 import { fetchXpRanking } from "../api.js";
 import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.png";
 import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.png";
@@ -432,6 +433,16 @@ export default function Ranking({ studentId, onNavigate }) {
   function handleNav(key) {
     setActiveNav(key);
     onNavigate?.(key);
+  }
+
+  if (loading) {
+    return (
+      <AppLoadingScreen
+        active="rank"
+        message="불러오는 중 ..."
+        onNavigate={onNavigate}
+      />
+    );
   }
 
   return (
