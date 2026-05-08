@@ -29,7 +29,13 @@ from database import (
     update_mission_ui_action_payload,
     upsert_user_memory,
 )
-from activity_matcher import is_direct_condition_change_request, match_activity_keys, select_replacement_mission
+from activity_matcher import (
+    extract_negative_activity_keys,
+    is_direct_condition_change_request,
+    is_negative_activity_request,
+    match_activity_keys,
+    select_replacement_mission,
+)
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_adjustment, execute_submit
 from memory_service import extract_and_save_memory
 from mission_ui_action_service import (
@@ -263,6 +269,76 @@ def is_accepting_mission_suggestion(message: str) -> bool:
     ]
 
     return text in accept_exact_words
+
+
+def _is_bare_replacement_acceptance(message: str | None) -> bool:
+    text = (message or "").replace(" ", "").strip()
+    if not text:
+        return False
+    accept_phrases = {
+        "응",
+        "좋아",
+        "응좋아",
+        "그래",
+        "그래좋아",
+        "네",
+        "ㅇㅇ",
+        "오케이",
+        "오키",
+        "ok",
+        "okay",
+        "엉",
+        "어좋아",
+        "음좋아",
+        "아좋아",
+        "응맘에들어",
+        "응마음에들어",
+        "맘에들어",
+        "마음에들어",
+        "좋은데",
+        "괜찮아",
+    }
+    return text in accept_phrases
+
+
+def _is_mission_dislike_try_today_acceptance(message: str | None) -> bool:
+    text = (message or "").replace(" ", "").strip()
+    if not text:
+        return False
+    if _is_bare_replacement_acceptance(message):
+        return True
+    return bool(re.search(r"도전|해볼게|해볼래|해볼께|해볼|해보자|할게|할께", text))
+
+
+_CURRENT_MISSION_STATUS_RE = re.compile(
+    r"(?:"
+    r"미션.{0,8}(?:바뀐|바꾼).{0,6}(?:거야|거니|맞아|맞니|맞지|건가|거임)"
+    r"|(?:바뀐|바꾼).{0,6}(?:거야|거니|맞아|맞니|맞지|건가|거임)"
+    r"|(?:지금|현재|오늘|오늘의).{0,4}미션.{0,6}(?:뭐|무엇|뭔|알려|궁금)"
+    r"|미션.{0,4}(?:뭐야|뭔데|뭔지|무엇)"
+    r")"
+)
+
+
+def _is_current_mission_status_question(message: str | None) -> bool:
+    text = _compact_ko(message)
+    if not text:
+        return False
+    return bool(_CURRENT_MISSION_STATUS_RE.search(text))
+
+
+def _current_mission_status_message(mission_row: dict | None, *, changed_question: bool = False) -> str:
+    mission_name = (mission_row or {}).get("mission_name")
+    if not mission_name:
+        return "지금 오늘 미션을 아직 불러오지 못했어. 잠시 뒤에 다시 확인해줘!"
+    if changed_question:
+        return f'아직 말로만 나온 미션으로 바뀐 건 아니야. 지금 오늘 미션은 "{mission_name}"야.'
+    return f'지금 오늘 미션은 "{mission_name}"야.'
+
+
+def _is_mission_changed_question(message: str | None) -> bool:
+    text = _compact_ko(message)
+    return bool(text and re.search(r"(?:미션)?(?:바뀐|바꾼).{0,6}(?:거야|거니|맞아|맞니|맞지|건가|거임)", text))
 
 
 def _is_meaningless_mission_candidate(candidate: str | None) -> bool:
@@ -773,6 +849,73 @@ def _detect_condition_adjustment(text: str) -> str | None:
     return None
 
 
+def _compact_ko(text: str | None) -> str:
+    return re.sub(r"\s+", "", text or "").lower()
+
+
+def _has_any(text: str, patterns: list[str]) -> bool:
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def classify_mission_change_shortcut(message: str) -> str | None:
+    """Classify natural mission-change complaints before Qwen/Gemma routing."""
+    compact = _compact_ko(message)
+    raw = message or ""
+    if not compact:
+        return None
+    if _MISSION_CHANGE_NEGATION_RE.search(compact) or _CANCEL_REQUEST_RE.search(compact):
+        return None
+
+    too_hard_patterns = [
+        r"너무어려",
+        r"미션이어렵",
+        r"미션어려",
+        r"미션어렵",
+        r"어려운미션",
+        r"이미션힘들",
+        r"미션힘들",
+        r"못하겠",
+        r"쉬운.*미션.*바꿔",
+        r"쉬운.*걸로.*바꿔",
+        r"쉬운걸로",
+        r"쉬운.*미션.*줘",
+        r"더쉬운.*(거|걸|미션).*줘",
+        r"쉽게.*바꿔",
+    ]
+    if _has_any(compact, too_hard_patterns):
+        return "too_hard"
+
+    dislike_patterns = [
+        r"노잼",
+        r"재미없",
+        r"미션싫",
+        r"이미션싫",
+        r"오늘미션싫",
+        r"싫어$",
+        r"싫다$",
+    ]
+    if _has_any(compact, dislike_patterns):
+        return "dislike"
+
+    cant_do_patterns = [
+        r"못해$",
+        r"못함$",
+        r"할수없",
+        r"할수없는상황",
+        r"밖에못나가",
+        r"비.*와서.*못",
+        r"장소가없",
+        r"장소없",
+        r"불가능",
+        r"빼고",
+        r"제외",
+    ]
+    if _has_any(compact, cant_do_patterns) or _has_any(raw, [r"못\s+해"]):
+        return "cant_do"
+
+    return None
+
+
 def _action_payload(active_ui: dict | None) -> dict:
     if not active_ui:
         return {}
@@ -906,6 +1049,267 @@ async def _handle_direct_activity_replacement(
     return fallback_result
 
 
+async def _handle_mission_change_shortcut(
+    student_id: int,
+    session_id: str,
+    user_message: str,
+    mission_row: dict,
+    shortcut_type: str,
+) -> dict | None:
+    payload = {
+        "mission_id": mission_row.get("mission_id"),
+        "mission_name": mission_row.get("mission_name"),
+        "mission_rule": mission_row.get("mission_rule"),
+        "activity_key": mission_row.get("activity_key"),
+        "reason_type": shortcut_type,
+        "original_user_message": user_message,
+    }
+
+    if shortcut_type == "too_hard":
+        log_row = await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "too_hard")
+        activity_key = mission_row.get("activity_key") or (log_row or {}).get("activity_key")
+        memory = None
+        if activity_key:
+            memory = await run_in_threadpool(upsert_user_memory, student_id, activity_key, "difficulty")
+        exec_results = ExecResults()
+        exec_results.adjustment = await run_in_threadpool(execute_adjustment, student_id, {"adjustment_type": "easier"})
+        if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
+            await _cleanup_completed_mission_change(student_id, session_id)
+        ack = build_action_ack(exec_results)
+        response = ack.message if ack else "쉬운 미션으로 바꾸려고 했는데 지금은 바꿀 수 있는 미션을 찾지 못했어."
+        return {
+            "response": response,
+            "mission_completed": False,
+            "detected_function": "request_mission_adjustment",
+            "sources": [],
+            "ui_action": None,
+            "debug": {
+                "intent": "MISSION_CHANGE_SHORTCUT",
+                "shortcut_type": shortcut_type,
+                "adjustment_status": exec_results.adjustment.status.value if exec_results.adjustment else None,
+                "memory_saved": bool(memory),
+            },
+        }
+
+    if shortcut_type == "dislike":
+        await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "dislike")
+        memory = await _save_dislike_memory(student_id, mission_row.get("activity_key"))
+        ui_action = await create_mission_dislike_confirm_action(student_id, session_id, payload)
+        hint = _mission_dislike_hint(
+            mission_row.get("mission_name", "오늘 미션"),
+            mission_row.get("mission_rule", ""),
+        )
+        ai_message, call1_ms = await _generate_hint_response(hint)
+        return {
+            "response": ai_message,
+            "mission_completed": False,
+            "detected_function": "mission_dislike_confirm",
+            "sources": [],
+            "ui_action": ui_action,
+            "debug": {
+                "intent": "MISSION_CHANGE_SHORTCUT",
+                "shortcut_type": shortcut_type,
+                "ui_action_id": ui_action.get("action_id"),
+                "memory_saved": bool(memory),
+                "llm_ms": call1_ms,
+            },
+        }
+
+    if shortcut_type == "cant_do":
+        await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), "cant_do")
+        ui_action = await create_replacement_mission_input_action(
+            student_id,
+            session_id,
+            {**payload, "source_reason": "cant_do"},
+        )
+        return {
+            "response": "그럼 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘.",
+            "mission_completed": False,
+            "detected_function": "awaiting_replacement_mission",
+            "sources": [],
+            "ui_action": ui_action,
+            "debug": {
+                "intent": "MISSION_CHANGE_SHORTCUT",
+                "shortcut_type": shortcut_type,
+                "next_ui_action_type": "awaiting_replacement_mission",
+                "ui_action_id": ui_action.get("action_id"),
+            },
+        }
+
+    return None
+
+
+async def _save_negative_activity_memories(student_id: int, activity_keys: list[str]) -> list[dict]:
+    saved: list[dict] = []
+    for activity_key in activity_keys:
+        try:
+            memory = await run_in_threadpool(upsert_user_memory, student_id, activity_key, "preference", -1)
+            if memory:
+                saved.append(memory)
+        except Exception as e:
+            print(f"[NegativeActivity] memory upsert failed key={activity_key}: {type(e).__name__}: {e}")
+    return saved
+
+
+async def _handle_current_mission_status_question(
+    student_id: int,
+    session_id: str,
+    user_message: str,
+    mission_row: dict | None,
+) -> dict | None:
+    if not _is_current_mission_status_question(user_message):
+        return None
+
+    current = mission_row or await run_in_threadpool(get_student_mission_db, student_id, _kst_today())
+    response = _current_mission_status_message(
+        current,
+        changed_question=_is_mission_changed_question(user_message),
+    )
+    await run_in_threadpool(_save_message_safe, session_id, "user", user_message, "get_mission_info")
+    await run_in_threadpool(_save_message_safe, session_id, "assistant", response)
+    return {
+        "response": response,
+        "mission_completed": False,
+        "detected_function": "get_mission_info",
+        "sources": [],
+        "ui_action": None,
+        "debug": {
+            "intent": "CURRENT_MISSION_STATUS_GUARD",
+            "mission_id": (current or {}).get("mission_id"),
+        },
+    }
+
+
+async def _handle_orphan_mission_acceptance(
+    student_id: int,
+    session_id: str,
+    user_message: str,
+    mission_row: dict | None,
+) -> dict | None:
+    if not _is_bare_replacement_acceptance(user_message):
+        return None
+
+    pending_suggestion = await run_in_threadpool(get_pending_mission_suggestion, student_id)
+    if pending_suggestion:
+        return None
+
+    response = "좋아! 오늘 미션으로 같이 해보자 😊"
+    await run_in_threadpool(_save_message_safe, session_id, "user", user_message)
+    await run_in_threadpool(_save_message_safe, session_id, "assistant", response)
+    return {
+        "response": response,
+        "mission_completed": False,
+        "detected_function": None,
+        "sources": [],
+        "ui_action": None,
+        "debug": {
+            "intent": "BARE_ACCEPTANCE_ACK",
+            "mission_id": (mission_row or {}).get("mission_id"),
+        },
+    }
+
+
+async def _handle_mission_dislike_confirm_acceptance(
+    student_id: int,
+    session_id: str,
+    user_message: str,
+    active_ui: dict,
+) -> dict | None:
+    if not _is_mission_dislike_try_today_acceptance(user_message):
+        return None
+
+    action_id = active_ui.get("action_id")
+    if action_id:
+        await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+    response = "좋아! 오늘은 지금 미션으로 같이 도전해보자 😊"
+    await run_in_threadpool(_save_message_safe, session_id, "user", user_message, "mission_dislike_confirm")
+    await run_in_threadpool(_save_message_safe, session_id, "assistant", response)
+    return {
+        "response": response,
+        "mission_completed": False,
+        "detected_function": "mission_dislike_confirm",
+        "sources": [],
+        "ui_action": None,
+        "debug": {
+            "intent": "MISSION_DISLIKE_CONFIRM_ACCEPTED",
+            "ui_action_id": action_id,
+        },
+    }
+
+
+async def _cleanup_completed_mission_change(student_id: int | None, session_id: str) -> None:
+    if not student_id:
+        return
+    try:
+        pending = await run_in_threadpool(get_pending_mission_suggestion, student_id)
+        if pending:
+            await run_in_threadpool(resolve_pending_mission_suggestion, pending["suggestion_id"], "cancelled")
+    except Exception as e:
+        print(f"[MissionChangeCleanup] pending suggestion cleanup failed: {type(e).__name__}: {e}")
+
+    try:
+        active = await get_active_ui_action(student_id, session_id)
+        if active and active.get("action_type") in {
+            "mission_change_reason",
+            "mission_dislike_confirm",
+            "awaiting_replacement_mission",
+        }:
+            await run_in_threadpool(
+                resolve_mission_ui_action,
+                active.get("action_id"),
+                student_id,
+                session_id,
+                "resolved",
+            )
+    except Exception as e:
+        print(f"[MissionChangeCleanup] ui action cleanup failed: {type(e).__name__}: {e}")
+
+
+async def _handle_negative_activity_request(
+    student_id: int,
+    session_id: str,
+    user_message: str,
+    mission_row: dict,
+) -> dict | None:
+    if not is_negative_activity_request(user_message):
+        return None
+
+    activity_keys = extract_negative_activity_keys(user_message)
+    if not activity_keys:
+        return None
+
+    reason_type = "cant_do" if re.search(r"못\s*해|못하|못\s*하|못\s*나가|못나가|불가능|할\s*수\s*없|빼고|제외", user_message) else "dislike"
+    await run_in_threadpool(save_mission_change_log, student_id, mission_row.get("mission_id"), reason_type)
+    memories = await _save_negative_activity_memories(student_id, activity_keys)
+    payload = {
+        "mission_id": mission_row.get("mission_id"),
+        "mission_name": mission_row.get("mission_name"),
+        "mission_rule": mission_row.get("mission_rule"),
+        "activity_key": mission_row.get("activity_key"),
+        "excluded_activity_keys": activity_keys,
+        "source_reason": "negative_activity",
+        "reason_type": reason_type,
+        "original_user_message": user_message,
+    }
+    ui_action = await create_replacement_mission_input_action(student_id, session_id, payload)
+    excluded_label = activity_keys[0]
+    response = f"{excluded_label}는 빼고 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘."
+    return {
+        "response": response,
+        "mission_completed": False,
+        "detected_function": "awaiting_replacement_mission",
+        "sources": [],
+        "ui_action": ui_action,
+        "debug": {
+            "intent": "NEGATIVE_ACTIVITY_GUARD",
+            "negative_activity_keys": activity_keys,
+            "next_ui_action_type": "awaiting_replacement_mission",
+            "ui_action_id": ui_action.get("action_id"),
+            "memory_saved": bool(memories),
+        },
+    }
+
+
 async def _handle_replacement_mission_input(
     student_id: int,
     session_id: str,
@@ -919,19 +1323,126 @@ async def _handle_replacement_mission_input(
     payload = _action_payload(active_ui)
 
     candidate = extract_mission_candidate_text(user_message) or user_message.strip()
-    activity_keys = match_activity_keys(candidate)
+    if is_negative_activity_request(candidate):
+        negative_keys = extract_negative_activity_keys(candidate)
+        if negative_keys:
+            memories = await _save_negative_activity_memories(student_id, negative_keys)
+            updated_payload = {
+                **payload,
+                "excluded_activity_keys": sorted(set(payload.get("excluded_activity_keys") or []) | set(negative_keys)),
+                "last_negative_input": user_message,
+            }
+            updated_action = await run_in_threadpool(
+                update_mission_ui_action_payload,
+                action_id,
+                student_id,
+                session_id,
+                updated_payload,
+            )
+            active_for_payload = updated_action or {**active_ui, "payload": updated_payload}
+            excluded_label = negative_keys[0]
+            return {
+                "response": f"{excluded_label}는 빼고 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘.",
+                "mission_completed": False,
+                "detected_function": "awaiting_replacement_mission",
+                "sources": [],
+                "ui_action": rebuild_ui_action_payload(active_for_payload),
+                "debug": {
+                    "intent": "REPLACEMENT_MISSION",
+                    "method": "negative_activity_retry",
+                    "negative_activity_keys": negative_keys,
+                    "memory_saved": bool(memories),
+                },
+            }
+
+    retry_count = int(payload.get("retry_count") or 0) + 1
+    if _is_bare_replacement_acceptance(user_message):
+        updated_payload = {
+            **payload,
+            "retry_count": retry_count,
+            "last_bare_acceptance_input": user_message,
+        }
+        updated_action = await run_in_threadpool(
+            update_mission_ui_action_payload,
+            action_id,
+            student_id,
+            session_id,
+            updated_payload,
+        )
+        active_for_payload = updated_action or {**active_ui, "payload": updated_payload}
+        return {
+            "response": "좋아! 그럼 원하는 미션을 조금만 더 말해줘. 예를 들면 '실내 미션', '물 마시는 미션'처럼 말하면 돼!",
+            "mission_completed": False,
+            "detected_function": "awaiting_replacement_mission",
+            "sources": [],
+            "ui_action": rebuild_ui_action_payload(active_for_payload),
+            "debug": {
+                "intent": "REPLACEMENT_MISSION",
+                "method": "bare_acceptance",
+                "retry_count": retry_count,
+            },
+        }
+
+    excluded_keys = set(payload.get("excluded_activity_keys") or [])
+    raw_activity_keys = match_activity_keys(candidate)
+    activity_keys = [key for key in raw_activity_keys if key not in excluded_keys]
+    if raw_activity_keys and not activity_keys and excluded_keys:
+        excluded_label = sorted(excluded_keys)[0]
+        return {
+            "response": f"{excluded_label}는 빼기로 했어. 다른 미션이나 조건을 말해줘!",
+            "mission_completed": False,
+            "detected_function": "awaiting_replacement_mission",
+            "sources": [],
+            "ui_action": rebuild_ui_action_payload(active_ui),
+            "debug": {
+                "intent": "REPLACEMENT_MISSION",
+                "method": "excluded_activity_blocked",
+                "activity_keys": raw_activity_keys,
+                "excluded_activity_keys": sorted(excluded_keys),
+            },
+        }
     if activity_keys:
         result = await _apply_activity_replacement(student_id, activity_keys)
         if result:
             await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+            if result.get("detected_function") == "request_mission_adjustment":
+                await _cleanup_completed_mission_change(student_id, session_id)
             return result
 
     # 1. 조건형 키워드 감지 ("쉬운 걸로", "아무거나" 등)
     adjustment_type = _detect_condition_adjustment(user_message)
     if adjustment_type:
+        if excluded_keys:
+            updated_payload = {
+                **payload,
+                "last_condition_input": user_message,
+            }
+            updated_action = await run_in_threadpool(
+                update_mission_ui_action_payload,
+                action_id,
+                student_id,
+                session_id,
+                updated_payload,
+            )
+            active_for_payload = updated_action or {**active_ui, "payload": updated_payload}
+            excluded_label = sorted(excluded_keys)[0]
+            return {
+                "response": f"{excluded_label}는 빼둘게. 예를 들면 '실내 미션', '물 마시는 미션'처럼 원하는 조건을 조금만 더 말해줘!",
+                "mission_completed": False,
+                "detected_function": "awaiting_replacement_mission",
+                "sources": [],
+                "ui_action": rebuild_ui_action_payload(active_for_payload),
+                "debug": {
+                    "intent": "REPLACEMENT_MISSION",
+                    "method": "condition_blocked_by_exclusion",
+                    "adjustment_type": adjustment_type,
+                    "excluded_activity_keys": sorted(excluded_keys),
+                },
+            }
         result = await run_in_threadpool(execute_adjustment, student_id, {"adjustment_type": adjustment_type})
         if result.status is AdjustmentStatus.CHANGED:
             await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+            await _cleanup_completed_mission_change(student_id, session_id)
             return {
                 "response": f'좋아! 오늘 미션을 "{result.new_mission_name}"로 바꿨어. 같이 해보자! 💪',
                 "mission_completed": False,
@@ -970,6 +1481,7 @@ async def _handle_replacement_mission_input(
                     }
                 await run_in_threadpool(save_mission_adjustment, student_id, current["mission_id"], exact["mission_id"])
                 await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+                await _cleanup_completed_mission_change(student_id, session_id)
                 return {
                     "response": _changed_response(exact["mission_name"]),
                     "mission_completed": False,
@@ -995,13 +1507,14 @@ async def _handle_replacement_mission_input(
                     "debug": {"intent": "REPLACEMENT_MISSION", "method": "similar_match", "mission": similar["mission_name"]},
                 }
 
-    retry_count = int(payload.get("retry_count") or 0) + 1
     if retry_count >= 2:
         fallback_result, _ = await _random_replacement_response(
             student_id,
             prefix="일치하는 미션을 찾지 못했어. 대신 랜덤 미션으로 바꿔줄게!",
         )
         await run_in_threadpool(resolve_mission_ui_action, action_id, student_id, session_id, "resolved")
+        if fallback_result.get("detected_function") == "request_mission_adjustment":
+            await _cleanup_completed_mission_change(student_id, session_id)
         fallback_result["debug"]["retry_count"] = retry_count
         return fallback_result
 
@@ -1073,10 +1586,30 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             mission_title = mission_row.get("mission_name") or mission_title
 
     if not is_greet and student_id:
+        status_result = await _handle_current_mission_status_question(
+            student_id,
+            body.session_id,
+            body.message,
+            mission_row,
+        )
+        if status_result:
+            return status_result
+
+    if not is_greet and student_id:
         active_ui = await get_active_ui_action(student_id, body.session_id)
         if active_ui:
             action_type = active_ui.get("action_type")
             ui_action_payload = rebuild_ui_action_payload(active_ui)
+
+            if action_type == "mission_dislike_confirm":
+                accepted_result = await _handle_mission_dislike_confirm_acceptance(
+                    student_id,
+                    body.session_id,
+                    body.message,
+                    active_ui,
+                )
+                if accepted_result:
+                    return accepted_result
 
             if action_type in ("mission_change_reason", "mission_dislike_confirm"):
                 # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
@@ -1130,6 +1663,43 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "debug": _pending_debug(pending_outcome, call1_ms, ai_message),
             }
 
+    if not is_greet and student_id:
+        orphan_acceptance = await _handle_orphan_mission_acceptance(
+            student_id,
+            body.session_id,
+            body.message,
+            mission_row,
+        )
+        if orphan_acceptance:
+            return orphan_acceptance
+
+    if not is_greet and student_id and mission_row:
+        negative_activity_result = await _handle_negative_activity_request(
+            student_id,
+            body.session_id,
+            body.message,
+            mission_row,
+        )
+        if negative_activity_result:
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", negative_activity_result["response"])
+            return negative_activity_result
+
+    if not is_greet and student_id and mission_row:
+        shortcut_type = classify_mission_change_shortcut(body.message)
+        if shortcut_type:
+            shortcut_result = await _handle_mission_change_shortcut(
+                student_id,
+                body.session_id,
+                body.message,
+                mission_row,
+                shortcut_type,
+            )
+            if shortcut_result:
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, shortcut_result.get("detected_function"))
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", shortcut_result["response"])
+                return shortcut_result
+
     if not is_greet and student_id and mission_row:
         if await classify_mission_dislike(body.message, mission_title):
             payload = {
@@ -1166,6 +1736,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             if is_direct_condition_change_request(body.message):
                 direct_result = await _handle_direct_activity_replacement(student_id, body.message, mission_row)
                 if direct_result:
+                    if direct_result.get("detected_function") == "request_mission_adjustment":
+                        await _cleanup_completed_mission_change(student_id, body.session_id)
                     await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "request_mission_adjustment")
                     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", direct_result["response"])
                     return direct_result
@@ -1322,6 +1894,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         fn_calls = [call for call in fn_calls if call[0] != "request_mission_adjustment"]
         combo = classify_multi(fn_calls) if fn_calls else None
     mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
+    if mission_change_guard_result and mission_change_guard_result.get("type") == "adjustment_saved":
+        await _cleanup_completed_mission_change(student_id, body.session_id)
 
     # Recompute combo because the guard may have changed fn_calls.
     combo = classify_multi(fn_calls) if fn_calls else None
@@ -1345,6 +1919,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         print("[DB] skipped: missing student_id")
     if combo == "conflict":
         detected_function = None
+    if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
+        await _cleanup_completed_mission_change(student_id, body.session_id)
 
     system_prompt = await run_in_threadpool(
         step_build_hints,
@@ -1496,10 +2072,36 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 current_mission_title = mission_row.get("mission_name") or current_mission_title
 
         if not is_greet and student_id:
+            status_result = await _handle_current_mission_status_question(
+                student_id,
+                body.session_id,
+                body.message,
+                mission_row,
+            )
+            if status_result:
+                async for event in _fake_stream_template_response(status_result["response"]):
+                    yield event
+                yield _done_sse(status_result.get("ui_action"), status_result.get("debug"))
+                return
+
+        if not is_greet and student_id:
             active_ui = await get_active_ui_action(student_id, body.session_id)
             if active_ui:
                 action_type = active_ui.get("action_type")
                 ui_action_payload = rebuild_ui_action_payload(active_ui)
+
+                if action_type == "mission_dislike_confirm":
+                    accepted_result = await _handle_mission_dislike_confirm_acceptance(
+                        student_id,
+                        body.session_id,
+                        body.message,
+                        active_ui,
+                    )
+                    if accepted_result:
+                        async for event in _fake_stream_template_response(accepted_result["response"]):
+                            yield event
+                        yield _done_sse(accepted_result.get("ui_action"), accepted_result.get("debug"))
+                        return
 
                 if action_type in ("mission_change_reason", "mission_dislike_confirm"):
                     # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
@@ -1558,6 +2160,58 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 )
                 return
 
+        if not is_greet and student_id:
+            orphan_acceptance = await _handle_orphan_mission_acceptance(
+                student_id,
+                body.session_id,
+                body.message,
+                mission_row,
+            )
+            if orphan_acceptance:
+                async for event in _fake_stream_template_response(orphan_acceptance["response"]):
+                    yield event
+                yield _done_sse(orphan_acceptance.get("ui_action"), orphan_acceptance.get("debug"))
+                return
+
+        if not is_greet and student_id and mission_row:
+            negative_started = time.perf_counter()
+            negative_activity_result = await _handle_negative_activity_request(
+                student_id,
+                body.session_id,
+                body.message,
+                mission_row,
+            )
+            if negative_activity_result:
+                await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "awaiting_replacement_mission")
+                await run_in_threadpool(_save_message_safe, body.session_id, "assistant", negative_activity_result["response"])
+                async for event in _fake_stream_template_response(negative_activity_result["response"]):
+                    yield event
+                debug_payload = negative_activity_result.get("debug") or {}
+                debug_payload.setdefault("timing", {})["total_ms"] = round((time.perf_counter() - negative_started) * 1000)
+                yield _done_sse(negative_activity_result.get("ui_action"), debug_payload)
+                return
+
+        if not is_greet and student_id and mission_row:
+            shortcut_started = time.perf_counter()
+            shortcut_type = classify_mission_change_shortcut(body.message)
+            if shortcut_type:
+                shortcut_result = await _handle_mission_change_shortcut(
+                    student_id,
+                    body.session_id,
+                    body.message,
+                    mission_row,
+                    shortcut_type,
+                )
+                if shortcut_result:
+                    await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, shortcut_result.get("detected_function"))
+                    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", shortcut_result["response"])
+                    async for event in _fake_stream_template_response(shortcut_result["response"]):
+                        yield event
+                    debug_payload = shortcut_result.get("debug") or {}
+                    debug_payload.setdefault("timing", {})["total_ms"] = round((time.perf_counter() - shortcut_started) * 1000)
+                    yield _done_sse(shortcut_result.get("ui_action"), debug_payload)
+                    return
+
         if not is_greet and student_id and mission_row:
             dislike_started = time.perf_counter()
             if await classify_mission_dislike(body.message, current_mission_title):
@@ -1593,6 +2247,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 if is_direct_condition_change_request(body.message):
                     direct_result = await _handle_direct_activity_replacement(student_id, body.message, mission_row)
                     if direct_result:
+                        if direct_result.get("detected_function") == "request_mission_adjustment":
+                            await _cleanup_completed_mission_change(student_id, body.session_id)
                         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "request_mission_adjustment")
                         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", direct_result["response"])
                         async for event in _fake_stream_template_response(direct_result["response"]):
@@ -1761,6 +2417,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             fn_calls = [call for call in fn_calls if call[0] != "request_mission_adjustment"]
             combo = classify_multi(fn_calls) if fn_calls else None
         mission_change_guard_result, fn_calls = _prepare_mission_change_guard(student_id, body.message, fn_calls)
+        if mission_change_guard_result and mission_change_guard_result.get("type") == "adjustment_saved":
+            await _cleanup_completed_mission_change(student_id, body.session_id)
 
         # Recompute combo because the guard may have changed fn_calls.
         combo = classify_multi(fn_calls) if fn_calls else None
@@ -1784,6 +2442,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             print("[DB] skipped: missing student_id")
         if combo == "conflict":
             detected_function = None
+        if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
+            await _cleanup_completed_mission_change(student_id, body.session_id)
 
         system_prompt = await run_in_threadpool(
             step_build_hints,

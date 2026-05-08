@@ -109,6 +109,42 @@ NEGATED_OUTDOOR_RE = re.compile(
 )
 
 
+NEGATIVE_ACTIVITY_RE = re.compile(
+    r"싫|싫어|노잼|재미없|못\s*해|못하|못\s*하|못\s*나가|못나가|빼고|제외|하지\s*마|하지\s*말|안\s*하고|안하고|불가능|할\s*수\s*없"
+)
+
+
+def is_negative_activity_request(text: str | None) -> bool:
+    """Return True when mentioned activities are being rejected, not requested."""
+    return bool(NEGATIVE_ACTIVITY_RE.search(text or ""))
+
+
+def extract_negative_activity_keys(text: str | None) -> list[str]:
+    """Return activity keys mentioned in a negative request without treating them as desired keys."""
+    if not is_negative_activity_request(text):
+        return []
+
+    compact_text = _compact(text)
+    if not compact_text:
+        return []
+
+    matches: list[tuple[int, int, str]] = []
+    for key in sorted(VALID_ACTIVITY_KEYS, key=len, reverse=True):
+        compact_key = _compact(key)
+        idx = compact_text.find(compact_key)
+        if compact_key and idx >= 0:
+            matches.append((idx, 0, key))
+
+    for order, (alias, key) in enumerate(ACTIVITY_KEY_ALIASES.items(), start=1):
+        compact_alias = _compact(alias)
+        idx = compact_text.find(compact_alias)
+        if compact_alias and idx >= 0:
+            matches.append((idx, order, key))
+
+    matches.sort(key=lambda item: (item[0], item[1]))
+    return _unique_valid([key for _, _, key in matches])
+
+
 def parse_llm_activity_keys(raw_response: str | dict | None) -> list[str]:
     """Validate LLM fallback output and discard hallucinated keys."""
     if raw_response is None:
@@ -165,6 +201,9 @@ def match_activity_keys(
     llm_fallback: Callable[[str, list[str]], str | dict | None] | None = None,
 ) -> list[str]:
     """Match user text to allowed activity_keys. Rule-based matching always runs first."""
+    if is_negative_activity_request(text):
+        return []
+
     rule_based = _rule_based_activity_keys(text)
     if rule_based:
         return rule_based
@@ -183,11 +222,13 @@ def normalize_activity_request(text: str) -> list[str]:
     return match_activity_keys(text)
 
 
-DIRECT_CHANGE_RE = re.compile(r"미션|바꿔|바꾸|변경|다른|걸로|거로")
+DIRECT_CHANGE_RE = re.compile(r"바꿔|바꾸|변경|다른|걸로|거로")
 
 
 def is_direct_condition_change_request(text: str) -> bool:
     if not text or not DIRECT_CHANGE_RE.search(text):
+        return False
+    if is_negative_activity_request(text):
         return False
     return bool(match_activity_keys(text))
 
