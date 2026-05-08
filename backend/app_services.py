@@ -112,6 +112,12 @@ def get_today_mission(student_id: int | None = None):
     today = _kst_today()
     if student_id:
         mission = get_student_mission_db(student_id, today)
+        if not mission:
+            if DEMO_MODE:
+                mission = assign_demo_mission_on_signup(student_id)
+            else:
+                assign_daily_missions()
+                mission = get_student_mission_db(student_id, today)
         if mission:
             return attach_mission_message(mission)
     return {

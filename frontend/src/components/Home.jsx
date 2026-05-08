@@ -1,14 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 // import main2 from "../assets/tomato/home/main2.png";
 import home1 from "../assets/tomato/home/home1.svg";
+import home2 from "../assets/tomato/home/home2.svg";
 import gachaTomi from "../assets/tomato/home/gacha_tomi.svg";
 import homeTomiRun from "../assets/tomato/home/home_tomirun.svg";
 import face from "../assets/tomato/home/face.png";
 import danger from "../assets/tomato/home/danger.png";
+import missionTomato from "../assets/tomato/home/tomato.svg";
+import missionTomato2 from "../assets/tomato/home/tomato2.svg";
 import heart from "../assets/tomato/_shared/heart.png";
 import ticket from "../assets/tomato/_shared/ticket.png";
 import check from "../assets/tomato/home/check.png";
 import flag from "../assets/tomato/home/flag.png";
+
+const TOMI_HOME_LINES = [
+  "오늘도 한 걸음만 같이 가보자!",
+  "좋아! 토미가 옆에서 응원할게.",
+  "지금 충분히 잘하고 있어!",
+  "작게 시작해도 멋진 시작이야.",
+];
 
 /* ─────────────────────────────────────────────────────────
    호격 조사 (받침 있으면 "아", 없으면 "야")
@@ -447,6 +457,14 @@ export default function Home({
   const [activeTab, setActiveTab] = useState("home");
   const [expOpen, setExpOpen] = useState(false);
   const [missionFlipped, setMissionFlipped] = useState(false);
+  const [tomiFaceAlt, setTomiFaceAlt] = useState(false);
+  const [tomiFacePressed, setTomiFacePressed] = useState(false);
+  const [tomiSpeechVisible, setTomiSpeechVisible] = useState(false);
+  const [tomiSpeechText, setTomiSpeechText] = useState("");
+  const tomiFacePressTimerRef = useRef(null);
+  const tomiFaceTalkTimerRef = useRef(null);
+  const tomiSpeechTypeTimerRef = useRef(null);
+  const tomiSpeechHideTimerRef = useRef(null);
   const today = useMemo(() => new Date(), []);
   const [viewYM, setViewYM] = useState(() => ({ year: today.getFullYear(), month: today.getMonth() }));
   const greetingName = getGreetingName(studentName);
@@ -480,9 +498,61 @@ export default function Home({
     setMissionFlipped(false);
   }, [todayMission.title, todayMission.description]);
 
+  useEffect(() => {
+    return () => {
+      if (tomiFacePressTimerRef.current) clearTimeout(tomiFacePressTimerRef.current);
+      if (tomiFaceTalkTimerRef.current) clearInterval(tomiFaceTalkTimerRef.current);
+      if (tomiSpeechTypeTimerRef.current) clearInterval(tomiSpeechTypeTimerRef.current);
+      if (tomiSpeechHideTimerRef.current) clearTimeout(tomiSpeechHideTimerRef.current);
+    };
+  }, []);
+
   function handleNav(key) {
     setActiveTab(key);
     onNavigate?.(key);
+  }
+
+  function handleTomiFaceClick() {
+    if (tomiFacePressTimerRef.current) clearTimeout(tomiFacePressTimerRef.current);
+    if (tomiFaceTalkTimerRef.current) clearInterval(tomiFaceTalkTimerRef.current);
+    if (tomiSpeechTypeTimerRef.current) clearInterval(tomiSpeechTypeTimerRef.current);
+    if (tomiSpeechHideTimerRef.current) clearTimeout(tomiSpeechHideTimerRef.current);
+
+    const line = TOMI_HOME_LINES[Math.floor(Math.random() * TOMI_HOME_LINES.length)];
+    setTomiFacePressed(true);
+    setTomiFaceAlt(true);
+    setTomiSpeechVisible(true);
+    setTomiSpeechText("");
+
+    tomiFacePressTimerRef.current = setTimeout(() => {
+      setTomiFacePressed(false);
+      tomiFacePressTimerRef.current = null;
+    }, 140);
+
+    tomiFaceTalkTimerRef.current = setInterval(() => {
+      setTomiFaceAlt((v) => !v);
+    }, 130);
+
+    let index = 0;
+    tomiSpeechTypeTimerRef.current = setInterval(() => {
+      index += 1;
+      setTomiSpeechText(line.slice(0, index));
+      if (index >= line.length) {
+        clearInterval(tomiSpeechTypeTimerRef.current);
+        tomiSpeechTypeTimerRef.current = null;
+        if (tomiFaceTalkTimerRef.current) {
+          clearInterval(tomiFaceTalkTimerRef.current);
+          tomiFaceTalkTimerRef.current = null;
+        }
+        setTomiFaceAlt(false);
+        tomiSpeechHideTimerRef.current = setTimeout(() => {
+          setTomiSpeechVisible(false);
+          setTomiSpeechText("");
+          setTomiFaceAlt(false);
+          tomiSpeechHideTimerRef.current = null;
+        }, 2300);
+      }
+    }, 55);
   }
 
   return (
@@ -648,6 +718,44 @@ export default function Home({
         {/* 메인 캐릭터 + 스파클 */}
         <div className="relative mx-auto mt-4" style={{ width: 340, height: 290 }}>
           <SparkleField />
+          {tomiSpeechVisible && (
+            <div
+              className="absolute font-sejong"
+              style={{
+                left: 18,
+                top: 0,
+                maxWidth: 238,
+                minHeight: 54,
+                padding: "15px 12px",
+                borderRadius: 22,
+                background: "#FFFFFF",
+                border: "1px solid rgba(227, 93, 73, 0.18)",
+                boxShadow: "0 8px 20px rgba(184, 72, 56, 0.12), 0 2px 6px rgba(0,0,0,0.05)",
+                color: "#1a1a1a",
+                fontSize: 14,
+                fontWeight: 700,
+                lineHeight: "20px",
+                zIndex: 2,
+                pointerEvents: "none",
+              }}
+            >
+              {tomiSpeechText}
+              <span
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  left: 58,
+                  bottom: -9,
+                  width: 18,
+                  height: 18,
+                  background: "#FFFFFF",
+                  borderRight: "1px solid rgba(227, 93, 73, 0.18)",
+                  borderBottom: "1px solid rgba(227, 93, 73, 0.18)",
+                  transform: "rotate(45deg)",
+                }}
+              />
+            </div>
+          )}
           {/*
           <img
             src={main2}
@@ -663,19 +771,38 @@ export default function Home({
             }}
           />
           */}
-          <img
-            src={home1}
-            alt="토미"
-            draggable="false"
-            className="absolute select-none pointer-events-none"
+          <button
+            type="button"
+            onClick={handleTomiFaceClick}
+            aria-label="토미 표정 바꾸기"
+            className="tomi-face-button absolute"
             style={{
               left: 20,
               top: 10,
               width: 280,
               height: 260,
-              objectFit: "contain",
+              padding: 0,
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              opacity: 1,
+              transform: tomiFacePressed ? "scale(0.94)" : "scale(1)",
+              transition: "transform 0.16s cubic-bezier(0.2, 0.9, 0.25, 1.2)",
             }}
-          />
+          >
+            <img
+              src={tomiFaceAlt ? home2 : home1}
+              alt="토미"
+              draggable="false"
+              className="select-none pointer-events-none"
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "block",
+                objectFit: "contain",
+              }}
+            />
+          </button>
           <div
             aria-hidden="true"
             className="absolute"
@@ -730,6 +857,37 @@ export default function Home({
                 boxShadow: "0 6px 14px rgba(80, 60, 40, 0.04)",
               }}
             >
+              <img
+                src={missionTomato}
+                alt=""
+                aria-hidden="true"
+                draggable="false"
+                className="absolute select-none pointer-events-none"
+                style={{
+                  top: 94,
+                  right: -10,
+                  width: 50,
+                  height: 50,
+                  objectFit: "contain",
+                  zIndex: 1,
+                }}
+              />
+              <img
+                src={missionTomato2}
+                alt=""
+                aria-hidden="true"
+                draggable="false"
+                className="absolute select-none pointer-events-none"
+                style={{
+                  top: -30,
+                  left: -12,
+                  width: 54,
+                  height: 54,
+                  objectFit: "contain",
+                  clipPath: "inset(3px)",
+                  zIndex: 1,
+                }}
+              />
               <div className="flex items-baseline justify-between">
                 <span
                   className="font-sejong"

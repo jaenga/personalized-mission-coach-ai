@@ -497,6 +497,14 @@ button {
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button:not(:disabled):hover { opacity: 0.85; }
 
+.tomi-face-button,
+.tomi-face-button:not(:disabled):hover,
+.tomi-face-button:focus,
+.tomi-face-button:active {
+  background: transparent;
+  opacity: 1;
+}
+
 /* ── 디버그 패널 ───────────────────────────────────────────────────────────── */
 
 .debug-panel {

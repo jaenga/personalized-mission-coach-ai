@@ -322,7 +322,7 @@ export default function ChatScreen({
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, loading, missionOpen]);
+  }, [messages, loading]);
 
   useEffect(() => {
     saveMissionHeaderOpen(missionOpen);
@@ -435,13 +435,12 @@ export default function ChatScreen({
         ref={scrollRef}
         className="absolute left-0 right-0 overflow-y-auto"
         style={{
-          top: missionOpen ? 124 : 56,
+          top: 56,
           bottom: "calc(76px + env(safe-area-inset-bottom))",
           padding: "16px 16px 8px",
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          transition: "top 0.24s ease",
         }}
       >
         {messages.map((m) =>
