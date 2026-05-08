@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BottomNav } from "./Home.jsx";
 import AppLoadingScreen from "./AppLoadingScreen.jsx";
 import { fetchXpRanking } from "../api.js";
-import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.png";
-import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.png";
-import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.png";
-import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.png";
-import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.png";
+import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.svg";
+import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.svg";
+import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.svg";
+import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.svg";
+import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.svg";
 import lv1Full from "../assets/tomato/_shared/Level/LV1.png";
 import lv2Full from "../assets/tomato/_shared/Level/LV2.png";
 import lv3Full from "../assets/tomato/_shared/Level/LV3.png";
@@ -17,9 +17,9 @@ import leaf from "../assets/tomato/_shared/leaf.png";
 const LEVEL_FACES = { 1: lv1Face, 2: lv2Face, 3: lv3Face, 4: lv4Face, 5: lv5Face };
 const LEVEL_FULLS = { 1: lv1Full, 2: lv2Full, 3: lv3Full, 4: lv4Full, 5: lv5Full };
 
-// face PNG마다 캐릭터 크기/여백이 달라서 컨텍스트별로 개별 조정 가능하게
-const LIST_FACE_SIZE = { 1: 28, 2: 32, 3: 35, 4: 32, 5: 32 };
-const ME_FACE_SIZE   = { 1: 36, 2: 40, 3: 43, 4: 40, 5: 40 };
+// face 이미지마다 캐릭터 크기/여백이 달라서 컨텍스트별로 개별 조정 가능하게
+const LIST_FACE_SIZE = { 1: 45, 2: 45, 3: 45, 4: 45, 5: 45 };
+const ME_FACE_SIZE   = { 1: 45, 2: 45, 3: 45, 4: 45, 5: 45 };
 
 function levelFace(lv) {
   return LEVEL_FACES[Math.min(5, Math.max(1, lv))];

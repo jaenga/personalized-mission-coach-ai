@@ -6,11 +6,11 @@ import jumpImg from "../assets/tomato/jump.png";
 import fallImg from "../assets/tomato/fall.png";
 import exerciseImg from "../assets/tomato/exercise.png";
 import stoneImg from "../assets/tomato/stone.png";
-import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.png";
-import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.png";
-import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.png";
-import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.png";
-import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.png";
+import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.svg";
+import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.svg";
+import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.svg";
+import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.svg";
+import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.svg";
 import heartImg from "../assets/tomato/_shared/heart.png";
 
 const LEVEL_FACES = { 1: lv1Face, 2: lv2Face, 3: lv3Face, 4: lv4Face, 5: lv5Face };

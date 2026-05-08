@@ -7,11 +7,11 @@ import fireImg from "../assets/tomato/settings/fire.png";
 import healthNoteImg from "../assets/tomato/settings/health_note.png";
 import outImg from "../assets/tomato/settings/out.png";
 import warningImg from "../assets/tomato/settings/warning.png";
-import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.png";
-import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.png";
-import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.png";
-import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.png";
-import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.png";
+import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.svg";
+import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.svg";
+import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.svg";
+import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.svg";
+import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.svg";
 
 const LEVEL_FACES = {
   1: lv1Face,
