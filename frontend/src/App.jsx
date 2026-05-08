@@ -39,6 +39,7 @@ const NAV_KEY_TO_SCREEN = {
   coach: SCREENS.CHAT,
   learn: SCREENS.LEARN,
   draw: SCREENS.DRAW,
+  game: SCREENS.GAME,
   settings: SCREENS.SETTINGS,
   rank: SCREENS.RANKING,
 };

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 // import main2 from "../assets/tomato/home/main2.png";
 import home1 from "../assets/tomato/home/home1.svg";
+import gachaTomi from "../assets/tomato/home/gacha_tomi.svg";
+import homeTomiRun from "../assets/tomato/home/home_tomirun.svg";
 import face from "../assets/tomato/home/face.png";
 import danger from "../assets/tomato/home/danger.png";
 import heart from "../assets/tomato/_shared/heart.png";
@@ -383,6 +385,7 @@ export function BottomNav({ active = "home", onChange }) {
       className="absolute left-0 right-0 flex items-center justify-around"
       style={{
         bottom: 0,
+        zIndex: 40,
         height: "calc(72px + env(safe-area-inset-bottom))",
         paddingBottom: "env(safe-area-inset-bottom)",
         background: "rgba(255, 255, 255, 0.95)",
@@ -718,12 +721,13 @@ export default function Home({
             <div
               className="absolute inset-0"
               style={{
-                borderRadius: 28,
-                background: "rgba(255, 255, 255, 0.62)",
-                border: "1.2px solid rgba(227, 93, 73, 0.45)",
+                borderRadius: 20,
+                background: "rgba(255, 255, 255, 0.5)",
+                border: "1px solid rgba(227, 93, 73, 0.22)",
                 padding: "17px 20px 18px",
                 backfaceVisibility: "hidden",
                 WebkitBackfaceVisibility: "hidden",
+                boxShadow: "0 6px 14px rgba(80, 60, 40, 0.04)",
               }}
             >
               <div className="flex items-baseline justify-between">
@@ -783,14 +787,14 @@ export default function Home({
             <div
               className="absolute inset-0"
               style={{
-                borderRadius: 28,
-                background: "rgba(255, 255, 255, 0.78)",
-                border: "1.2px solid rgba(227, 93, 73, 0.45)",
+                borderRadius: 20,
+                background: "rgba(255, 255, 255, 0.5)",
+                border: "1px solid rgba(227, 93, 73, 0.22)",
                 padding: "16px 18px",
                 backfaceVisibility: "hidden",
                 WebkitBackfaceVisibility: "hidden",
                 transform: "rotateY(180deg)",
-                boxShadow: "0 8px 18px rgba(80, 60, 40, 0.04)",
+                boxShadow: "0 6px 14px rgba(80, 60, 40, 0.04)",
               }}
             >
               <div className="flex items-center justify-between">
@@ -864,7 +868,7 @@ export default function Home({
           <div className="flex items-baseline justify-between">
             <span
               className="font-sejong"
-              style={{ fontSize: 13, fontWeight: 700, color: "#75726e", letterSpacing: "-0.43px" }}
+              style={{ fontSize: 13, fontWeight: 700, color: "#E35D49", letterSpacing: "-0.43px" }}
             >
               이번 주 기록
             </span>
@@ -974,6 +978,142 @@ export default function Home({
             </div>
           </div>
         </div>
+
+        {/* 뽑기 바로가기 배너 */}
+        <button
+          type="button"
+          onClick={() => onNavigate?.("draw")}
+          aria-label="뽑기 화면으로 이동"
+          className="mx-auto mt-3 block text-left transition-transform active:scale-[0.99]"
+          style={{
+            position: "relative",
+            width: 315,
+            minHeight: 126,
+            overflow: "hidden",
+            borderRadius: 22,
+            border: "1px solid rgba(227, 93, 73, 0.22)",
+            background: "rgba(255, 255, 255, 0.5)",
+            boxShadow: "0 6px 14px rgba(80, 60, 40, 0.04)",
+            padding: "16px 17px 14px",
+            cursor: "pointer",
+          }}
+        >
+          <div className="relative" style={{ minHeight: 96 }}>
+            <div style={{ width: 170, position: "relative", zIndex: 2 }}>
+              <h2
+                style={{
+                  fontFamily: '"IM_Hyemin", "SejongGeulggot", sans-serif',
+                  fontSize: 20,
+                  fontWeight: 700,
+                  lineHeight: "27px",
+                  color: "#1f1f1f",
+                  letterSpacing: "-0.43px",
+                  wordBreak: "keep-all",
+                }}
+              >
+                토미와 함께
+                <br />
+                오늘의 뽑기!
+              </h2>
+              <p
+                className="font-sejong mt-1"
+                style={{
+                  color: "#75726e",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  lineHeight: "17px",
+                  letterSpacing: "-0.43px",
+                  wordBreak: "keep-all",
+                }}
+              >
+                작은 습관을 모아
+                <br />
+                선물을 뽑아보세요!
+              </p>
+            </div>
+            <img
+              src={gachaTomi}
+              alt=""
+              draggable="false"
+              className="absolute select-none pointer-events-none"
+              style={{
+                right: -11,
+                bottom: -7,
+                width: 118,
+                height: 96,
+                objectFit: "contain",
+              }}
+            />
+          </div>
+
+        </button>
+
+        {/* 게임 바로가기 배너 */}
+        <button
+          type="button"
+          onClick={() => onNavigate?.("game")}
+          aria-label="토미랑 달리기 게임으로 이동"
+          className="mx-auto mt-3 block text-left transition-transform active:scale-[0.99]"
+          style={{
+            position: "relative",
+            width: 315,
+            height: 126,
+            overflow: "hidden",
+            borderRadius: 20,
+            border: "1px solid rgba(227, 93, 73, 0.22)",
+            background: "rgba(255, 255, 255, 0.5)",
+            boxShadow: "0 6px 14px rgba(80, 60, 40, 0.04)",
+            padding: 0,
+            cursor: "pointer",
+          }}
+        >
+          <img
+            src={homeTomiRun}
+            alt=""
+            draggable="false"
+            className="absolute inset-0 h-full w-full select-none pointer-events-none"
+            style={{
+              objectFit: "cover",
+              objectPosition: "62% center",
+            }}
+          />
+          <div
+            className="relative"
+            style={{
+              zIndex: 2,
+              padding: "30px 18px",
+              width: 166,
+            }}
+          >
+            <h2
+              style={{
+                fontFamily: '"IM_Hyemin", "SejongGeulggot", sans-serif',
+                fontSize: 21,
+                fontWeight: 700,
+                lineHeight: "26px",
+                color: "#1f1f1f",
+                letterSpacing: "-0.43px",
+                wordBreak: "keep-all",
+                whiteSpace: "nowrap",
+              }}
+            >
+              토미랑 달리기
+            </h2>
+            <p
+              className="font-sejong mt-2"
+              style={{
+                color: "#5f5a55",
+                fontSize: 12,
+                fontWeight: 700,
+                lineHeight: "17px",
+                letterSpacing: "-0.43px",
+                wordBreak: "keep-all",
+              }}
+            >
+              돌을 피해 더 멀리 달려보세요!
+            </p>
+          </div>
+        </button>
       </div>
 
       <BottomNav active={activeTab} onChange={handleNav} />

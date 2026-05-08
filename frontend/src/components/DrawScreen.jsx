@@ -322,7 +322,6 @@ export default function DrawScreen({
   function handleNav(key) {
     setActiveTab(key);
     onNavigate?.(key);
-    if (key === "home") onBack?.();
   }
 
   const isResult = phase === "result";
