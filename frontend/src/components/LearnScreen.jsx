@@ -17,9 +17,9 @@ import heartImg from "../assets/tomato/_shared/heart.png";
    하루치 플랜 — day별 단원 2개 (다른 주제) → 4노드 (교육-퀴즈-교육-퀴즈)
    ───────────────────────────────────────────────────────── */
 const DAILY_PLAN = [
-  { day: 1, title: "건강한 하루의 시작",     lessonIds: ["sugar-snacks", "hand-washing"] },
-  { day: 2, title: "잘 먹고 잘 닦기",        lessonIds: ["rainbow-vegetables", "tooth-care"] },
-  { day: 3, title: "영양과 면역",            lessonIds: ["nutrition-label", "immunity-vaccine"] },
+  { day: 1, title: "건강한 하루의 시작",     lessonIds: ["sugar-snacks", "rainbow-vegetables"] },
+  { day: 2, title: "잘 먹고 잘 닦기",        lessonIds: ["nutrition-label", "tooth-care"] },
+  { day: 3, title: "영양과 면역",            lessonIds: ["hand-washing", "immunity-vaccine"] },
   { day: 4, title: "물과 잠의 비밀",         lessonIds: ["water-habit", "sleep-golden-time"] },
   { day: 5, title: "바른 자세, 신나는 운동", lessonIds: ["posture-spine", "exercise-muscle"] },
   { day: 6, title: "눈 보호와 안전",         lessonIds: ["eye-health", "outdoor-safety"] },

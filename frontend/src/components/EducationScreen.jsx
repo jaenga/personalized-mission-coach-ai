@@ -1,6 +1,39 @@
 import { useEffect, useRef, useState } from "react";
 import chatTomato from "../assets/tomato/chat/chat.png";
 
+const lessonImages = import.meta.glob("../assets/tomato/lessons/**/*.png", { eager: true });
+
+function ImageModal({ src, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.82)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 999,
+        padding: 24,
+      }}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable="false"
+        onClick={onClose}
+        style={{
+          maxWidth: "100%",
+          maxHeight: "80vh",
+          borderRadius: 16,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        }}
+      />
+    </div>
+  );
+}
+
 const COACH_MESSAGE_INITIAL_DELAY = 1200;
 const COACH_MESSAGE_INTERVAL = 2500;
 
@@ -30,6 +63,12 @@ function expandStep(step) {
     return [{ role: "coach", kind: "summary", step }];
   }
 
+  const messages = [];
+
+  if (step.image) {
+    messages.push({ role: "coach", kind: "image", src: step.image });
+  }
+
   // \n\n 으로 문단 분리 후, 각 문단을 문장 단위로 추가 분할
   const paragraphs = (step.body || "")
     .split(/\n\s*\n/)
@@ -38,17 +77,22 @@ function expandStep(step) {
 
   const chunks = paragraphs.flatMap((p) => chunkParagraph(p));
 
-  return chunks.map((c, i) => ({
-    role: "coach",
-    kind: "para",
-    text: c,
-    heading: i === 0 ? step.heading : undefined,
-  }));
+  chunks.forEach((c, i) => {
+    messages.push({
+      role: "coach",
+      kind: "para",
+      text: c,
+      heading: i === 0 ? step.heading : undefined,
+    });
+  });
+
+  return messages;
 }
 
 export default function EducationScreen({ lesson, onBack, onFinish }) {
   // messages: [{ role: "coach", kind, ...} | { role: "user", text }]
   const [messages, setMessages] = useState([]);
+  const [modalSrc, setModalSrc] = useState(null);
   const [stepIdx, setStepIdx] = useState(0);
   const [isTyping, setIsTyping] = useState(true); // 처음엔 코치가 등장 중
   const scrollRef = useRef(null);
@@ -202,10 +246,11 @@ export default function EducationScreen({ lesson, onBack, onFinish }) {
           if (m.role === "user") {
             return <UserBubble key={i} text={m.text} animate={isLast} />;
           }
-          return <CoachBubble key={i} message={m} animate={isLast} />;
+          return <CoachBubble key={i} message={m} animate={isLast} onImageClick={setModalSrc} />;
         })}
         {isTyping && <TypingBubble />}
       </div>
+      {modalSrc && <ImageModal src={modalSrc} onClose={() => setModalSrc(null)} />}
 
       {/* 하단 CTA */}
       <div
@@ -313,8 +358,9 @@ function TypingBubble() {
   );
 }
 
-function CoachBubble({ message, animate }) {
+function CoachBubble({ message, animate, onImageClick }) {
   const isSummary = message.kind === "summary";
+  const isImage = message.kind === "image";
   const step = message.step;
   return (
     <div
@@ -333,6 +379,22 @@ function CoachBubble({ message, animate }) {
         className="select-none pointer-events-none flex-shrink-0"
         style={{ width: 32, height: 32, objectFit: "contain", marginTop: 4 }}
       />
+      {isImage ? (
+        <img
+          src={lessonImages[message.src.replace("/src/", "../")]?.default ?? message.src}
+          alt=""
+          draggable="false"
+          onClick={() => onImageClick(lessonImages[message.src.replace("/src/", "../")]?.default ?? message.src)}
+          style={{
+            width: 270,
+            maxWidth: "100%",
+            borderRadius: "18px 18px 18px 4px",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+            display: "block",
+            cursor: "pointer",
+          }}
+        />
+      ) : (
       <div
         className="font-sejong"
         style={{
@@ -388,6 +450,7 @@ function CoachBubble({ message, animate }) {
           <div>{message.text}</div>
         )}
       </div>
+      )}
 
       <style>{`
         @keyframes fadeIn {
