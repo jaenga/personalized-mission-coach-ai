@@ -838,7 +838,16 @@ export default function App() {
         </>
       );
 
-    case SCREENS.DRAW:
+    case SCREENS.DRAW: {
+      const SCREEN_TO_TAB = {
+        [SCREENS.HOME]: "home",
+        [SCREENS.CHAT]: "coach",
+        [SCREENS.LEARN]: "learn",
+        [SCREENS.RANKING]: "rank",
+        [SCREENS.GAME]: "game",
+      };
+      const prevScreen = screenHistory[screenHistory.length - 1];
+      const drawSourceTab = SCREEN_TO_TAB[prevScreen] ?? "rank";
       return (
         <DrawScreen
           level={level}
@@ -849,8 +858,10 @@ export default function App() {
           onDraw={handleDraw}
           onBack={() => goBack(SCREENS.HOME)}
           onNavigate={navHandler(SCREENS.DRAW)}
+          sourceTab={drawSourceTab}
         />
       );
+    }
 
     case SCREENS.SETTINGS:
       return (

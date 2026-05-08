@@ -157,20 +157,20 @@ function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
       className="mx-auto"
       style={{
         width: "min(336px, calc(100vw - 40px))",
-        borderRadius: 30,
+        borderRadius: 24,
         background: "rgba(255, 255, 255, 0.85)",
         border: "1px solid rgba(227, 93, 73, 0.4)",
-        padding: "16px 20px 18px",
+        padding: "12px 16px 14px",
         textAlign: "center",
       }}
     >
       <div className="flex items-center justify-center gap-2">
         {reward.heart > 0 && (
           <>
-            <img src={heartImg} alt="" style={{ width: 32, height: 32 }} />
+            <img src={heartImg} alt="" style={{ width: 26, height: 26 }} />
             <span
               className="font-sejong"
-              style={{ fontSize: 26, color: "#E35D49", fontWeight: 700, letterSpacing: "-0.43px" }}
+              style={{ fontSize: 22, color: "#E35D49", fontWeight: 700, letterSpacing: "-0.43px" }}
             >
               +{reward.heart}
             </span>
@@ -178,11 +178,11 @@ function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
         )}
         {reward.exp > 0 && (
           <>
-            {reward.heart > 0 && <span style={{ width: 12 }} />}
-            <img src={pointerImg} alt="" style={{ width: 28, height: 28 }} />
+            {reward.heart > 0 && <span style={{ width: 10 }} />}
+            <img src={pointerImg} alt="" style={{ width: 24, height: 24 }} />
             <span
               className="font-sejong"
-              style={{ fontSize: 26, color: "#FFBD2C", fontWeight: 700, letterSpacing: "-0.43px" }}
+              style={{ fontSize: 22, color: "#FFBD2C", fontWeight: 700, letterSpacing: "-0.43px" }}
             >
               +{reward.exp} EXP
             </span>
@@ -197,16 +197,16 @@ function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
         {reward.type === "exp" && "경험치를 얻었어! 레벨업까지 한 걸음 더~"}
         {reward.type === "both" && "레어 보상! 하트 + 경험치 모두 획득!"}
       </p>
-      <div className="mt-4 flex flex-col gap-2">
+      <div className="mt-3 flex flex-col gap-1.5">
         <button
           type="button"
           onClick={onConfirm}
           className="signup-submit w-full font-sejong text-white shadow-md flex items-center justify-center transition-all duration-200"
           style={{
-            height: 45,
+            height: 40,
             borderRadius: 50,
             background: "#E35D49",
-            fontSize: 16,
+            fontSize: 15,
             fontWeight: 400,
             letterSpacing: "-0.43px",
             border: "none",
@@ -223,10 +223,10 @@ function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
               onClick={onDrawAgain}
               className="w-full font-sejong text-white flex items-center justify-center transition-all duration-200"
               style={{
-                height: 45,
+                height: 40,
                 borderRadius: 50,
                 background: "#92B774",
-                fontSize: 15,
+                fontSize: 14,
                 fontWeight: 400,
                 letterSpacing: "-0.43px",
                 border: "none",
@@ -239,10 +239,10 @@ function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
             <p
               className="font-sejong"
               style={{
-                fontSize: 12,
+                fontSize: 11,
                 color: "#8A8580",
                 letterSpacing: "-0.43px",
-                lineHeight: "16px",
+                lineHeight: "15px",
               }}
             >
               남은 티켓 수량: {ticketCount}
@@ -252,11 +252,11 @@ function RewardCard({ reward, ticketCount, onConfirm, onDrawAgain }) {
           <div
             className="w-full font-sejong flex items-center justify-center"
             style={{
-              height: 45,
+              height: 40,
               borderRadius: 50,
               background: "#E5E1DC",
               color: "#8A8580",
-              fontSize: 14,
+              fontSize: 13,
               fontWeight: 400,
               letterSpacing: "-0.43px",
             }}
@@ -281,11 +281,12 @@ export default function DrawScreen({
   onDraw,
   onNavigate,
   onBack,
+  sourceTab = "rank",
 }) {
   // phase: idle | drawing | result
   const [phase, setPhase] = useState("idle");
   const [reward, setReward] = useState(null);
-  const [activeTab, setActiveTab] = useState("rank"); // 뽑기는 일단 랭킹 탭에 매핑
+  const [activeTab, setActiveTab] = useState(sourceTab);
   const [expOpen, setExpOpen] = useState(false);
 
   const canDraw = ticketCount > 0 && phase === "idle";
@@ -395,13 +396,13 @@ export default function DrawScreen({
         className="flex-1 overflow-y-auto"
         style={{
           padding: isResult
-            ? "18px 20px calc(96px + env(safe-area-inset-bottom))"
+            ? "10px 20px calc(88px + env(safe-area-inset-bottom))"
             : "10px 20px calc(112px + env(safe-area-inset-bottom))",
         }}
       >
         {!isResult ? (
           <div className="flex min-h-full flex-col">
-            <div style={{ paddingLeft: 6, paddingTop: 4 }}>
+            <div style={{ paddingLeft: 6, paddingTop: 0 }}>
               <p
                 className="font-noto"
                 style={{
@@ -427,7 +428,7 @@ export default function DrawScreen({
               </h1>
             </div>
 
-            <div className="mx-auto mt-8" style={{ width: 164, height: 51 }}>
+            <div className="mx-auto mt-4" style={{ width: 164, height: 51 }}>
               <div
                 className="flex items-center justify-center font-sejong"
                 style={{
@@ -466,7 +467,7 @@ export default function DrawScreen({
                 alt="가챠"
                 draggable="false"
                 className={`select-none pointer-events-none ${isDrawing ? "gacha-shake" : "gacha-idle"}`}
-                style={{ width: "min(320px, 82vw)", height: "auto", maxHeight: 395, objectFit: "contain" }}
+                style={{ width: "min(250px, 68vw)", height: "auto", maxHeight: 290, objectFit: "contain" }}
               />
             </div>
 
@@ -531,7 +532,7 @@ export default function DrawScreen({
 
             <div
               className="flex flex-shrink-0 items-center justify-center"
-              style={{ height: "clamp(250px, 38dvh, 332px)", marginTop: 4 }}
+              style={{ height: "clamp(190px, 30dvh, 260px)", marginTop: 0 }}
             >
               <RewardBurst compact>
                 <img
@@ -545,7 +546,7 @@ export default function DrawScreen({
             </div>
 
             {reward && (
-              <div className="w-full flex-shrink-0">
+              <div className="w-full flex-shrink-0" style={{ marginTop: 48 }}>
                 <RewardCard
                   reward={reward}
                   ticketCount={ticketCount}
