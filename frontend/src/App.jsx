@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, fetchHealthNote, saveHealthNoteDb, deleteHealthNote } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import InfoInput from "./components/InfoInput.jsx";
@@ -14,6 +14,8 @@ import Ranking from "./components/Ranking.jsx";
 import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
 import AppLoadingScreen from "./components/AppLoadingScreen.jsx";
+import MissionReviewModal from "./components/MissionReviewModal.jsx";
+import OnboardingPreferences from "./components/OnboardingPreferences.jsx";
 
 // ── 화면 상수 ──────────────────────────────────────────────────────────────
 const SCREENS = {
@@ -145,6 +147,13 @@ export default function App() {
   const [leveledUpTo, setLeveledUpTo] = useState(null);
   const [pendingSignup, setPendingSignup] = useState(null);
   const [signupFarewell, setSignupFarewell] = useState(false);
+  const [showOnboardingPreferences, setShowOnboardingPreferences] = useState(false);
+  const [onboardingSaving, setOnboardingSaving] = useState(false);
+  const [onboardingError, setOnboardingError] = useState("");
+  const [reviewModal, setReviewModal] = useState(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
 
   // ── 핵심 데이터 상태 ─────────────────────────────────────────────────────
   const [routeHash, setRouteHash] = useState(() =>
@@ -182,6 +191,22 @@ export default function App() {
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
+
+  useEffect(() => {
+    if (!profile?.student_id) {
+      setShowOnboardingPreferences(false);
+      return;
+    }
+    const key = `onboarding_preferences_done:${profile.student_id}`;
+    setShowOnboardingPreferences(localStorage.getItem(key) !== "true");
+    setOnboardingError("");
+  }, [profile?.student_id]);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => setToastMessage(""), 1800);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   // ── 스탯 변경 헬퍼 ───────────────────────────────────────────────────────
   // 미션 성공/가챠 보상에 따른 XP/하트 증가는 백엔드가 단독으로 결정함.
@@ -452,7 +477,68 @@ export default function App() {
     setHeartCount(FRESH_STATS.heartCount);
     setAppStateLoaded(false);
     setMissionLoaded(false);
+    setShowOnboardingPreferences(false);
+    setReviewModal(null);
+    setToastMessage("");
     resetTo(SCREENS.LOGIN);
+  }
+
+  async function handleSaveOnboardingPreferences(values) {
+    if (!profile?.student_id) return;
+    setOnboardingSaving(true);
+    setOnboardingError("");
+    try {
+      await saveOnboardingPreferences({
+        session_id: sessionId,
+        preferred_activity_keys: values.preferred_activity_keys,
+        disliked_activity_keys: values.disliked_activity_keys,
+        restrictions: values.restrictions,
+      });
+      localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
+      setShowOnboardingPreferences(false);
+      setToastMessage("선호 정보가 저장됐어요!");
+    } catch (err) {
+      setOnboardingError(err.message);
+    } finally {
+      setOnboardingSaving(false);
+    }
+  }
+
+  function handleSkipOnboardingPreferences() {
+    if (profile?.student_id) {
+      localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
+    }
+    setShowOnboardingPreferences(false);
+    setOnboardingError("");
+  }
+
+  async function handleSaveMissionReview({ rating, comment }) {
+    const missionId = reviewModal?.missionId ?? mission?.mission_id;
+    if (!missionId) {
+      setReviewError("미션 정보를 찾지 못했어요. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    setReviewSaving(true);
+    setReviewError("");
+    try {
+      await saveMissionReview({
+        session_id: sessionId,
+        mission_id: missionId,
+        rating,
+        comment,
+      });
+      setReviewModal(null);
+      setToastMessage("평가가 저장됐어요!");
+    } catch (err) {
+      setReviewError(err.message);
+    } finally {
+      setReviewSaving(false);
+    }
+  }
+
+  function handleSkipMissionReview() {
+    setReviewModal(null);
+    setReviewError("");
   }
 
   // ── 채팅 핸들러 ──────────────────────────────────────────────────────────
@@ -527,7 +613,7 @@ export default function App() {
               )
             );
           },
-          onDone: (debug) => {
+          onDone: (debug, _uiAction, doneInfo) => {
             if (debug) {
               // 백엔드가 미션 성공 시 XP/티켓 지급 후 새 app_state를 응답에 포함시킴.
               // 프론트는 그 값을 그대로 반영만 함 — 자체 계산 X.
@@ -544,6 +630,19 @@ export default function App() {
               }
               if (debug.submit_result?.status === "saved" && profile?.student_id) {
                 refreshMissionData();
+              }
+              if (
+                debug.submit_result?.status === "saved" ||
+                doneInfo?.mission_result_submitted === true
+              ) {
+                const reviewMissionId = doneInfo?.mission_id ?? mission?.mission_id;
+                if (reviewMissionId) {
+                  setReviewModal({
+                    missionId: reviewMissionId,
+                    resultType: doneInfo?.mission_result_type ?? debug.submit_result?.result_type,
+                  });
+                  setReviewError("");
+                }
               }
               setDebugMap((prev) => ({
                 ...prev,
@@ -621,6 +720,32 @@ export default function App() {
     );
   }
 
+  function renderGlobalOverlays() {
+    return (
+      <>
+        {showOnboardingPreferences && (
+          <OnboardingPreferences
+            onSubmit={handleSaveOnboardingPreferences}
+            onSkip={handleSkipOnboardingPreferences}
+            loading={onboardingSaving}
+            error={onboardingError}
+          />
+        )}
+        {reviewModal && (
+          <MissionReviewModal
+            open={!!reviewModal}
+            resultType={reviewModal.resultType}
+            onSave={handleSaveMissionReview}
+            onSkip={handleSkipMissionReview}
+            loading={reviewSaving}
+            error={reviewError}
+          />
+        )}
+        {toastMessage && <div className="toast-message">{toastMessage}</div>}
+      </>
+    );
+  }
+
   // ── 레벨업 오버레이 (다른 화면보다 우선) ─────────────────────────────────
   if (leveledUpTo) {
     return (
@@ -675,36 +800,42 @@ export default function App() {
         return <AppLoadingScreen active="home" onNavigate={navHandler(SCREENS.HOME)} />;
       }
       return (
-        <Home
-          studentName={profile?.student_name || "민준"}
-          level={level}
-          currentXp={currentXp}
-          maxXp={maxXp}
-          streakDays={stats.streak_days || 0}
-          successDates={stats.success_dates || []}
-          ticketCount={ticketCount}
-          heartCount={heartCount}
-          todayMission={{
-            title: mission?.mission_name || "오늘의 미션",
-            description: mission?.mission_description || mission?.mission_rule || "",
-            done: mission?.status === "completed" || mission?.status === "success",
-          }}
-          onNavigate={navHandler(SCREENS.HOME)}
-        />
+        <>
+          <Home
+            studentName={profile?.student_name || "민준"}
+            level={level}
+            currentXp={currentXp}
+            maxXp={maxXp}
+            streakDays={stats.streak_days || 0}
+            successDates={stats.success_dates || []}
+            ticketCount={ticketCount}
+            heartCount={heartCount}
+            todayMission={{
+              title: mission?.mission_name || "오늘의 미션",
+              description: mission?.mission_description || mission?.mission_rule || "",
+              done: mission?.status === "completed" || mission?.status === "success",
+            }}
+            onNavigate={navHandler(SCREENS.HOME)}
+          />
+          {renderGlobalOverlays()}
+        </>
       );
 
     case SCREENS.CHAT:
       return (
-        <ChatScreen
-          onBack={() => goBack(SCREENS.HOME)}
-          messages={messages}
-          loading={loading}
-          onSend={handleSend}
-          todayMission={{
-            title: mission?.mission_name || "오늘의 미션",
-            done: mission?.status === "completed" || mission?.status === "success",
-          }}
-        />
+        <>
+          <ChatScreen
+            onBack={() => goBack(SCREENS.HOME)}
+            messages={messages}
+            loading={loading}
+            onSend={handleSend}
+            todayMission={{
+              title: mission?.mission_name || "오늘의 미션",
+              done: mission?.status === "completed" || mission?.status === "success",
+            }}
+          />
+          {renderGlobalOverlays()}
+        </>
       );
 
     case SCREENS.DRAW:

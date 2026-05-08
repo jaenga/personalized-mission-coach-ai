@@ -1,10 +1,14 @@
+import json
 import os
 import random
 import psycopg2
 import psycopg2.extras
 from psycopg2.extras import Json
+import uuid
 from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
+
+from activity_keys import normalize_activity_key
 
 load_dotenv()
 
@@ -42,6 +46,10 @@ def init_db():
                     is_active BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
+            """)
+            cur.execute("""
+                ALTER TABLE missions
+                ADD COLUMN IF NOT EXISTS activity_key TEXT
             """)
             cur.execute("DELETE FROM demo_mission")
             for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
@@ -281,6 +289,148 @@ def init_db():
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_memories (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    subject TEXT NOT NULL,
+                    type TEXT NOT NULL CHECK (type IN ('preference', 'difficulty', 'restriction')),
+                    score INTEGER DEFAULT 0 CHECK (score BETWEEN -3 AND 3),
+                    count INTEGER DEFAULT 0,
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (student_id, subject, type)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pending_actions (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    action_type TEXT NOT NULL CHECK (
+                        action_type IN (
+                            'submit_confirmation',
+                            'natural_language_confirmation',
+                            'mission_change_reason',
+                            'mission_dislike_confirm'
+                        )
+                    ),
+                    payload JSONB NOT NULL,
+                    retry_count INTEGER DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    resolved_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                DO $$
+                DECLARE
+                    action_type_constraint_name TEXT;
+                BEGIN
+                    SELECT conname
+                      INTO action_type_constraint_name
+                      FROM pg_constraint
+                     WHERE conrelid = 'pending_actions'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%action_type%'
+                     LIMIT 1;
+
+                    IF action_type_constraint_name IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE pending_actions DROP CONSTRAINT %I',
+                            action_type_constraint_name
+                        );
+                    END IF;
+
+                    ALTER TABLE pending_actions
+                    ADD CONSTRAINT pending_actions_action_type_check
+                    CHECK (
+                        action_type IN (
+                            'submit_confirmation',
+                            'natural_language_confirmation',
+                            'mission_change_reason',
+                            'mission_dislike_confirm'
+                        )
+                    );
+                END $$;
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_actions_one_pending_per_student
+                ON pending_actions (student_id)
+                WHERE status = 'pending'
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mission_change_logs (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    activity_key TEXT,
+                    reason_type TEXT NOT NULL CHECK (
+                        reason_type IN (
+                            'too_easy',
+                            'too_hard',
+                            'dislike',
+                            'cant_do',
+                            'just_change'
+                        )
+                    ),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                ALTER TABLE mission_change_logs
+                ADD COLUMN IF NOT EXISTS activity_key TEXT
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mission_reviews (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    review_date DATE NOT NULL,
+                    activity_key TEXT,
+                    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+                    comment TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (student_id, review_date)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS generated_missions (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER REFERENCES students(student_id),
+                    mission_name TEXT NOT NULL,
+                    mission_rule TEXT,
+                    activity_keys TEXT[],
+                    difficulty TEXT,
+                    source_reason TEXT,
+                    status TEXT DEFAULT 'draft',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mission_ui_actions (
+                    action_id TEXT PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    session_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL CHECK (
+                        action_type IN (
+                            'mission_change_reason',
+                            'mission_dislike_confirm',
+                            'awaiting_replacement_mission'
+                        )
+                    ),
+                    payload JSONB NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'pending_input', 'resolved', 'cancelled', 'expired')),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    resolved_at TIMESTAMPTZ,
+                    expires_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mission_ui_actions_active
+                ON mission_ui_actions (student_id, session_id, status, created_at DESC)
+                WHERE status IN ('pending', 'pending_input')
+            """)
         conn.commit()
 
 
@@ -438,16 +588,37 @@ def save_message(session_id: str, role: str, content: str, detected_function: st
     return row_id
 
 
-def fetch_messages(session_id: str) -> list[dict]:
+def fetch_messages(session_id: str, limit: int | None = None) -> list[dict]:
     profile = fetch_profile(session_id)
     if not profile:
         return []
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT speaker, message_text, created_at FROM chat_messages WHERE session_id = %s ORDER BY message_id",
-                (profile["db_session_id"],),
-            )
+            if limit and limit > 0:
+                cur.execute(
+                    """
+                    SELECT speaker, message_text, created_at
+                    FROM (
+                        SELECT message_id, speaker, message_text, created_at
+                        FROM chat_messages
+                        WHERE session_id = %s
+                        ORDER BY message_id DESC
+                        LIMIT %s
+                    ) recent
+                    ORDER BY message_id
+                    """,
+                    (profile["db_session_id"], limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT speaker, message_text, created_at
+                    FROM chat_messages
+                    WHERE session_id = %s
+                    ORDER BY message_id
+                    """,
+                    (profile["db_session_id"],),
+                )
             rows = cur.fetchall()
     return [
         {
@@ -660,7 +831,7 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
                        m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
-                       m.mission_rule, m.mission_description, sdm.status
+                       m.mission_rule, m.mission_description, m.activity_key, sdm.status
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s AND sdm.assigned_date = %s
@@ -1773,10 +1944,30 @@ def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission
                         AND assigned_date >= %s::date - INTERVAL '7 days'
                         AND assigned_date < %s::date
                   )
+                  AND mission_id NOT IN (
+                      SELECT old_mission_id FROM mission_changes
+                      WHERE student_id = %s
+                        AND change_date = %s::date
+                      UNION
+                      SELECT new_mission_id FROM mission_changes
+                      WHERE student_id = %s
+                        AND change_date = %s::date
+                  )
                 ORDER BY RANDOM()
                 LIMIT 1
                 """,
-                (main_category, target_difficulty, current_mission_id, student_id, today, today),
+                (
+                    main_category,
+                    target_difficulty,
+                    current_mission_id,
+                    student_id,
+                    today,
+                    today,
+                    student_id,
+                    today,
+                    student_id,
+                    today,
+                ),
             )
             row = cur.fetchone()
     return dict(row) if row else None
@@ -1904,3 +2095,486 @@ def get_last_action_type(student_id: int) -> str | None:
     if submit_time and (not change_time or submit_time >= change_time):
         return "submit"
     return "adjustment"
+
+
+# ── 장기기억 (user_memories) ─────────────────────────────────────────────────
+
+def save_mission_review(
+    student_id: int,
+    mission_id: int,
+    rating: int,
+    comment: str | None = None,
+    review_date: str | None = None,
+) -> dict | None:
+    """Save or update one daily mission review. activity_key is always read from missions."""
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not mission_id:
+        raise ValueError("mission_id is required")
+    if rating < 1 or rating > 5:
+        raise ValueError("rating must be between 1 and 5")
+
+    target_date = review_date or _kst_today()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT mission_id, activity_key
+                FROM missions
+                WHERE mission_id = %s
+                """,
+                (mission_id,),
+            )
+            mission = cur.fetchone()
+            if not mission:
+                return None
+            activity_key = normalize_activity_key(mission.get("activity_key"))
+            if mission.get("activity_key") and not activity_key:
+                print(
+                    "[MissionReview] invalid activity_key ignored "
+                    f"mission_id={mission_id} activity_key={mission.get('activity_key')!r}"
+                )
+
+            cur.execute(
+                """
+                INSERT INTO mission_reviews (
+                    student_id,
+                    mission_id,
+                    review_date,
+                    activity_key,
+                    rating,
+                    comment
+                )
+                VALUES (%s, %s, %s::date, %s, %s, %s)
+                ON CONFLICT (student_id, review_date)
+                DO UPDATE SET
+                    mission_id = EXCLUDED.mission_id,
+                    activity_key = EXCLUDED.activity_key,
+                    rating = EXCLUDED.rating,
+                    comment = EXCLUDED.comment
+                RETURNING *
+                """,
+                (
+                    student_id,
+                    mission["mission_id"],
+                    target_date,
+                    activity_key,
+                    rating,
+                    comment or "",
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def upsert_user_memory(
+    student_id: int,
+    subject: str,
+    memory_type: str,
+    polarity: int | None = None,
+) -> dict | None:
+    """
+    사용자 장기기억을 저장/갱신한다.
+    DB 컬럼명은 type이지만, Python 내장 type과 구분하려고 memory_type을 사용한다.
+    """
+    if memory_type not in {"preference", "difficulty", "restriction"}:
+        return None
+    subject = (subject or "").strip()
+    if not student_id or not subject:
+        return None
+    if memory_type in {"preference", "difficulty"}:
+        subject = normalize_activity_key(subject) or ""
+        if not subject:
+            return None
+
+    if memory_type == "preference":
+        delta = 1 if polarity == 1 else -1 if polarity == -1 else 0
+        if delta == 0:
+            return None
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                    VALUES (%s, %s, 'preference', %s, 0, NOW())
+                    ON CONFLICT (student_id, subject, type)
+                    DO UPDATE SET
+                        score = GREATEST(-3, LEAST(3, user_memories.score + EXCLUDED.score)),
+                        updated_at = NOW()
+                    RETURNING *
+                """, (student_id, subject, delta))
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    if memory_type == "difficulty":
+        today = _kst_today()
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                    VALUES (%s, %s, 'difficulty', 0, 1, NOW())
+                    ON CONFLICT (student_id, subject, type)
+                    DO UPDATE SET
+                        count = CASE
+                            WHEN (user_memories.updated_at AT TIME ZONE 'Asia/Seoul')::date < %s::date
+                            THEN user_memories.count + 1
+                            ELSE user_memories.count
+                        END,
+                        updated_at = CASE
+                            WHEN (user_memories.updated_at AT TIME ZONE 'Asia/Seoul')::date < %s::date
+                            THEN NOW()
+                            ELSE user_memories.updated_at
+                        END
+                    RETURNING *
+                """, (student_id, subject, today, today))
+                row = cur.fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                VALUES (%s, %s, 'restriction', 0, 0, NOW())
+                ON CONFLICT (student_id, subject, type)
+                DO UPDATE SET updated_at = NOW()
+                RETURNING *
+            """, (student_id, subject))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def get_relevant_user_memories(student_id: int) -> list[dict]:
+    """
+    추후 미션 배정/필터링에서 쓸 핵심 기억만 조회한다.
+    preference는 |score| >= 2, difficulty는 count >= 2, restriction은 전체 반환.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, student_id, subject, type, score, count, updated_at
+                FROM user_memories
+                WHERE student_id = %s
+                  AND (
+                    (type = 'preference' AND ABS(score) >= 2)
+                    OR (type = 'difficulty' AND count >= 2)
+                    OR type = 'restriction'
+                  )
+                ORDER BY updated_at DESC, id DESC
+            """, (student_id,))
+            rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+# ── 멀티턴 pending actions ───────────────────────────────────────────────────
+
+VALID_PENDING_ACTION_TYPES = {
+    "submit_confirmation",
+    "natural_language_confirmation",
+    "mission_change_reason",
+    "mission_dislike_confirm",
+}
+
+CREATABLE_PENDING_ACTION_TYPES = {
+    "submit_confirmation",
+    "natural_language_confirmation",
+}
+
+VALID_RESOLVE_STATUSES = {
+    "accepted",
+    "rejected",
+    "cancelled",
+}
+
+VALID_MISSION_CHANGE_REASON_TYPES = {
+    "too_easy",
+    "too_hard",
+    "dislike",
+    "cant_do",
+    "just_change",
+}
+
+
+def save_pending_action(student_id: int, action_type: str, payload: dict) -> dict:
+    """기존 pending을 취소하고 새 pending action을 저장한다."""
+    if action_type not in CREATABLE_PENDING_ACTION_TYPES:
+        raise ValueError(f"Invalid action_type: {action_type}")
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dict")
+
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE pending_actions
+                SET status = 'cancelled',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND status = 'pending'
+            """, (student_id,))
+            cur.execute("""
+                INSERT INTO pending_actions (
+                    student_id,
+                    action_type,
+                    payload,
+                    retry_count,
+                    status
+                )
+                VALUES (%s, %s, %s::jsonb, 0, 'pending')
+                RETURNING *
+            """, (student_id, action_type, payload_json))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def get_pending_action(student_id: int) -> dict | None:
+    """학생의 현재 pending action 1개를 조회한다."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, student_id, action_type, payload, retry_count, status, created_at, resolved_at
+                FROM pending_actions
+                WHERE student_id = %s
+                  AND status = 'pending'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            """, (student_id,))
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def resolve_pending(pending_id: int, status: str) -> dict | None:
+    """pending action을 accepted/rejected/cancelled 중 하나로 종료한다."""
+    if status not in VALID_RESOLVE_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE pending_actions
+                SET status = %s,
+                    resolved_at = NOW()
+                WHERE id = %s
+                RETURNING *
+            """, (status, pending_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def increment_pending_retry(pending_id: int) -> dict | None:
+    """pending action의 retry_count를 1 증가시킨다."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE pending_actions
+                SET retry_count = retry_count + 1
+                WHERE id = %s
+                  AND status = 'pending'
+                RETURNING *
+            """, (pending_id,))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) -> dict | None:
+    """미션 변경 이유 로그를 저장한다. activity_key는 mission_id로 백엔드에서 조회한다."""
+    if reason_type not in VALID_MISSION_CHANGE_REASON_TYPES:
+        raise ValueError(f"Invalid reason_type: {reason_type}")
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not mission_id:
+        raise ValueError("mission_id is required")
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT activity_key FROM missions WHERE mission_id = %s",
+                (mission_id,),
+            )
+            mission = cur.fetchone()
+            if not mission:
+                return None
+            activity_key = normalize_activity_key(mission.get("activity_key"))
+            if mission.get("activity_key") and not activity_key:
+                print(
+                    "[MissionChangeLog] invalid activity_key ignored "
+                    f"mission_id={mission_id} activity_key={mission.get('activity_key')!r}"
+                )
+            cur.execute("""
+                INSERT INTO mission_change_logs (
+                    student_id,
+                    mission_id,
+                    activity_key,
+                    reason_type
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+            """, (student_id, mission_id, activity_key, reason_type))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+# ── 버튼/명시적 UI 액션 ───────────────────────────────────────────────────────
+
+VALID_MISSION_UI_ACTION_TYPES = {
+    "mission_change_reason",
+    "mission_dislike_confirm",
+    "awaiting_replacement_mission",
+}
+
+VALID_MISSION_UI_ACTION_STATUSES = {
+    "pending",
+    "pending_input",
+    "resolved",
+    "cancelled",
+    "expired",
+}
+
+ACTIVE_MISSION_UI_ACTION_STATUSES = {"pending", "pending_input"}
+
+
+def save_mission_ui_action(
+    student_id: int,
+    session_id: str,
+    action_type: str,
+    payload: dict,
+    status: str = "pending",
+    ttl_minutes: int = 15,
+) -> dict:
+    """버튼/명시적 UI 액션을 1회성 action_id로 저장한다."""
+    if not student_id:
+        raise ValueError("student_id is required")
+    if not session_id:
+        raise ValueError("session_id is required")
+    if action_type not in VALID_MISSION_UI_ACTION_TYPES:
+        raise ValueError(f"Invalid action_type: {action_type}")
+    if status not in ACTIVE_MISSION_UI_ACTION_STATUSES:
+        raise ValueError(f"Invalid active status: {status}")
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a dict")
+
+    action_id = str(uuid.uuid4())
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET status = 'cancelled',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+            """, (student_id, session_id))
+            cur.execute("""
+                INSERT INTO mission_ui_actions (
+                    action_id,
+                    student_id,
+                    session_id,
+                    action_type,
+                    payload,
+                    status,
+                    expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, NOW() + (%s || ' minutes')::interval)
+                RETURNING *
+            """, (action_id, student_id, session_id, action_type, payload_json, status, ttl_minutes))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def get_pending_mission_ui_action(student_id: int, session_id: str) -> dict | None:
+    """현재 세션에서 대기 중인 UI 액션 1개를 조회한다. 만료된 액션은 expired 처리한다."""
+    if not student_id or not session_id:
+        return None
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET status = 'expired',
+                    resolved_at = NOW()
+                WHERE student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                  AND expires_at IS NOT NULL
+                  AND expires_at < NOW()
+            """, (student_id, session_id))
+            cur.execute("""
+                SELECT action_id, student_id, session_id, action_type, payload,
+                       status, created_at, resolved_at, expires_at
+                FROM mission_ui_actions
+                WHERE student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (student_id, session_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def update_mission_ui_action_payload(
+    action_id: str,
+    student_id: int,
+    session_id: str,
+    payload: dict,
+) -> dict | None:
+    """대기 중인 UI action의 payload만 갱신한다."""
+    if not action_id or not student_id or not session_id or not isinstance(payload, dict):
+        return None
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET payload = %s::jsonb
+                WHERE action_id = %s
+                  AND student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                  AND (expires_at IS NULL OR expires_at >= NOW())
+                RETURNING *
+            """, (payload_json, action_id, student_id, session_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def resolve_mission_ui_action(
+    action_id: str,
+    student_id: int,
+    session_id: str,
+    status: str = "resolved",
+) -> dict | None:
+    """대기 중인 UI 액션을 1회만 종료한다."""
+    if status not in {"resolved", "cancelled", "expired"}:
+        raise ValueError(f"Invalid resolve status: {status}")
+    if not action_id or not student_id or not session_id:
+        return None
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE mission_ui_actions
+                SET status = CASE
+                        WHEN expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired'
+                        ELSE %s
+                    END,
+                    resolved_at = NOW()
+                WHERE action_id = %s
+                  AND student_id = %s
+                  AND session_id = %s
+                  AND status IN ('pending', 'pending_input')
+                RETURNING *
+            """, (status, action_id, student_id, session_id))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None

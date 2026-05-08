@@ -40,7 +40,7 @@ _B_COMMAND_RE = re.compile(
     r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
 )
 _EASIER_RE = re.compile(r"쉬운 걸로|쉽게\s*(?:바꿔|해줘|변경)|쉬운\s*미션")
-_TOO_DIFFICULT_RE = re.compile(r"너무 어려워|어려워서|힘들어|못하겠")
+_TOO_DIFFICULT_RE = re.compile(r"너무 어려워|어려워서|어려워|어려움|어렵|힘들어|못하겠")
 _HARDER_RE = re.compile(r"어려운 걸로|너무 쉬워|너무 쉬움|쉬워서|쉬움")
 _CHANGE_RE = re.compile(r"바꿔|변경|다른 미션|다른 걸로")
 _QUESTION_RE = re.compile(

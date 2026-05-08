@@ -8,6 +8,7 @@ from app_services import (
     complete_student_lesson_quiz,
     delete_chat_messages,
     generate_daily,
+    get_active_mission_ui_action,
     get_chat_messages,
     get_game_ranking_for,
     get_student_health_note,
@@ -19,6 +20,9 @@ from app_services import (
     get_xp_ranking_for,
     record_student_game_run,
     register_demo_student,
+    resolve_mission_ui_action,
+    save_mission_review,
+    save_onboarding_preferences,
     save_user_profile,
     save_student_health_note,
     startup_tasks,
@@ -37,6 +41,9 @@ from schemas import (
     HealthNoteRequest,
     LessonProgressRequest,
     LessonQuizCompleteRequest,
+    MissionReviewRequest,
+    MissionUiActionResolveRequest,
+    OnboardingPreferencesRequest,
     ProfileRequest,
     VerifyRequest,
 )
@@ -159,6 +166,16 @@ def delete_health_note_route(student_id: int):
     return delete_student_health_note(student_id)
 
 
+@app.post("/mission-review")
+def post_mission_review(body: MissionReviewRequest, background_tasks: BackgroundTasks):
+    return save_mission_review(body, background_tasks)
+
+
+@app.post("/onboarding-preferences")
+def post_onboarding_preferences(body: OnboardingPreferencesRequest):
+    return save_onboarding_preferences(body)
+
+
 @app.post("/chat")
 async def post_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     return await process_chat(body, background_tasks)
@@ -177,6 +194,16 @@ def get_chat(session_id: str):
 @app.delete("/chat/{session_id}")
 def delete_chat(session_id: str):
     return delete_chat_messages(session_id)
+
+
+@app.get("/mission-ui-actions/active")
+async def get_active_ui_action(session_id: str):
+    return await get_active_mission_ui_action(session_id)
+
+
+@app.post("/mission-ui-actions/{action_id}/resolve")
+async def post_mission_ui_action_resolve(action_id: str, body: MissionUiActionResolveRequest):
+    return await resolve_mission_ui_action(action_id, body)
 
 
 @app.post("/admin/generate-daily")

@@ -1,27 +1,32 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const backend = "http://localhost:8000";
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     proxy: {
-      "/mission": "http://localhost:8000",
-      "/feedback": "http://localhost:8000",
-      "/logs": "http://localhost:8000",
-      "/chat": "http://localhost:8000",
-      "/analysis": "http://localhost:8000",
-      "/app-state": "http://localhost:8000",
-      "/attendance": "http://localhost:8000",
-      "/draw": "http://localhost:8000",
-      "/game": "http://localhost:8000",
-      "/health-note": "http://localhost:8000",
-      "/lessons": "http://localhost:8000",
-      "/ranking": "http://localhost:8000",
-      "/profile": "http://localhost:8000",
-      "/stats": "http://localhost:8000",
-      "/verify-student": "http://localhost:8000",
-      "/demo-register-student": "http://localhost:8000",
+      "/mission": backend,
+      "/feedback": backend,
+      "/logs": backend,
+      "/chat": backend,
+      "/analysis": backend,
+      "/app-state": backend,
+      "/attendance": backend,
+      "/draw": backend,
+      "/game": backend,
+      "/health-note": backend,
+      "/lessons": backend,
+      "/ranking": backend,
+      "/profile": backend,
+      "/stats": backend,
+      "/verify-student": backend,
+      "/demo-register-student": backend,
+      "/onboarding-preferences": backend,
+      "/mission-review": backend,
+      "/mission-ui-actions": backend,
     },
   },
 });

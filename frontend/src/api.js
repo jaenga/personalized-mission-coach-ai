@@ -65,7 +65,11 @@ export async function sendMessageStream(message, sessionId, mission = null, { on
         } else if (data.type === "token") {
           onToken?.(data.content);
         } else if (data.type === "done") {
-          onDone?.(data.debug);
+          onDone?.(data.debug, data.ui_action ?? null, {
+            mission_result_submitted: data.mission_result_submitted === true,
+            mission_result_type: data.mission_result_type ?? null,
+            mission_id: data.mission_id ?? null,
+          });
         }
       } catch {}
     }
@@ -320,7 +324,67 @@ export async function saveProfile(sessionId, studentId, studentName) {
   return res.json();
 }
 
+/** 현재 세션의 active UI action 조회 (새로고침 후 버튼 복구용). */
+export async function fetchActiveUiAction(sessionId) {
+  const res = await fetch(`/mission-ui-actions/active?session_id=${sessionId}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.ui_action ?? null;
+}
+
+/** 미션 UI 액션 버튼 resolve. */
+export async function resolveMissionUiAction(actionId, sessionId, value) {
+  const res = await fetch(`/mission-ui-actions/${actionId}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, value }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const error = new Error(err.detail?.reason ?? "버튼 처리 실패");
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
 /** 학생 미션 조회. */
+export async function saveMissionReview({ session_id, mission_id, rating, comment }) {
+  const res = await fetch("/mission-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id, mission_id, rating, comment }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "미션 평가 저장에 실패했어요");
+  }
+  return res.json();
+}
+
+export async function saveOnboardingPreferences({
+  session_id,
+  preferred_activity_keys,
+  disliked_activity_keys,
+  restrictions,
+}) {
+  const res = await fetch("/onboarding-preferences", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id,
+      preferred_activity_keys,
+      disliked_activity_keys,
+      restrictions,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "선호 정보 저장에 실패했어요");
+  }
+  return res.json();
+}
+
 export async function fetchMissionByStudent(studentId) {
   const res = await fetch(`/mission?student_id=${studentId}`);
   if (!res.ok) throw new Error("미션 불러오기 실패");

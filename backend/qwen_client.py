@@ -21,6 +21,8 @@ _FUNCTION_NAME_ALIASES = {
     "cancel_mission": "cancel_mission_action",
 }
 
+_CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
+
 AVAILABLE_FUNCTIONS: list[dict] = [
     {
         "name": "submit_mission_result",
@@ -283,7 +285,13 @@ def _coerce_function_calls(
         calls = [submit_report_call]
         return calls
     calls = _coerce_history_call(user_message, calls)
-    return [_coerce_function_call(user_message, call) for call in calls]
+    coerced = [_coerce_function_call(user_message, call) for call in calls]
+    if not _CANCEL_REQUEST_RE.search(user_message or ""):
+        before = len(coerced)
+        coerced = [call for call in coerced if call[0] != "cancel_mission_action"]
+        if before != len(coerced):
+            print("[Function] dropped cancel call without cancel expression")
+    return coerced
 
 
 def _coerce_function_call(
@@ -340,9 +348,20 @@ def _coerce_mission_info_call(
     return fn, args
 
 
+_MISSION_INFO_RE = re.compile(
+    r"(미션|mission).{0,10}(뭐|뭔|무엇|어떤|알려|알고|알아|있어|있냐|있니|뭐야|뭔지|뭔데|뭔디|뭐냐|뭐예요|뭐에요|뭐임|뭐죠|뭐요|뭔가요|뭐니|궁금)",
+    re.IGNORECASE,
+)
+
+
 def detect_mission_info_call(user_message: str) -> tuple[str, dict] | None:
     text = user_message or ""
     compact = text.replace(" ", "")
+    if any(word in compact for word in ("마감", "기한", "언제까지", "몇시까지", "몇시까지야")):
+        return ("get_mission_info", {"query_type": "deadline"})
+    if any(word in compact for word in ("인증", "인정", "제출규칙", "판정", "성공기준", "실패기준")):
+        return ("get_mission_info", {"query_type": "general_rule"})
+
     has_date = (
         "오늘" in text
         or "어제" in text
@@ -355,8 +374,22 @@ def detect_mission_info_call(user_message: str) -> tuple[str, dict] | None:
     ) or any(word in compact for word in ("뭐해야", "해야했어", "해야했", "뭘해야"))
     asks_history = any(word in text for word in ("기록", "요약", "성공", "실패", "완료", "제출"))
 
-    if has_date and asks_assigned_mission and not asks_history:
-        return ("get_mission_info", {"query_type": "today"})
+    has_mission = "미션" in text or "mission" in text.lower()
+    asks_what = any(word in compact for word in [
+        "뭐야", "뭔지", "뭔데", "뭔디", "뭐냐고", "뭐냐", "뭐예요", "뭐에요",
+        "뭐임", "뭐죠", "뭐요", "뭔가요", "뭐니", "무엇", "알려줘", "알려줄래",
+        "알고싶어", "알아야", "알고싶은데", "알려",
+    ])
+
+    if not asks_history and (_MISSION_INFO_RE.search(compact) or asks_assigned_mission or (has_mission and asks_what)):
+        args = {"query_type": "today"}
+        if "그저께" in text:
+            args["target_date"] = "day_before_yesterday"
+        elif "어제" in text:
+            args["target_date"] = "yesterday"
+        elif "오늘" in text or not has_date:
+            args["target_date"] = "today"
+        return ("get_mission_info", args)
     return None
 
 

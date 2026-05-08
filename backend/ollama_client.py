@@ -79,3 +79,23 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     return ai_message, call1_ms
 
 
+async def generate_json_message(system_prompt: str, user_message: str, timeout: float = 10.0) -> str:
+    """짧은 JSON 전용 호출. background task에서 무한 대기를 피하려고 timeout을 짧게 둔다."""
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": OLLAMA_MODEL,
+        "stream": False,
+        "format": "json",
+        "think": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 96,
+        },
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+    }
+    resp = await _get_client().post(url, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"].strip()

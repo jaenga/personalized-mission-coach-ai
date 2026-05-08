@@ -1,5 +1,6 @@
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
+from activity_keys import normalize_activity_key
 from database import (
     DEMO_MODE,
     _kst_today,
@@ -26,11 +27,16 @@ from database import (
     get_student_mission_db,
     init_db,
     record_game_run,
+    save_mission_review as save_mission_review_db,
     save_profile,
+    upsert_user_memory,
     upsert_health_note,
     upsert_lesson_progress,
 )
 from demo_mission_messages import attach_mission_message
+from memory_service import extract_and_save_memory
+from mission_ui_action_service import get_active_ui_action, rebuild_ui_action_payload, resolve_mission_ui_action_request
+from starlette.concurrency import run_in_threadpool
 from rag import preload_model
 from qwen_client import preload_qwen
 from sheets import generate_daily_status
@@ -40,6 +46,9 @@ from schemas import (
     HealthNoteRequest,
     LessonProgressRequest,
     LessonQuizCompleteRequest,
+    MissionReviewRequest,
+    MissionUiActionResolveRequest,
+    OnboardingPreferencesRequest,
     ProfileRequest,
     VerifyRequest,
 )
@@ -227,6 +236,80 @@ def delete_student_health_note(student_id: int):
     return {"ok": True, "deleted": deleted}
 
 
+def save_mission_review(body: MissionReviewRequest, background_tasks: BackgroundTasks | None = None):
+    profile = fetch_profile(body.session_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    try:
+        review = save_mission_review_db(
+            student_id=profile["student_id"],
+            mission_id=body.mission_id,
+            rating=body.rating,
+            comment=body.comment,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not review:
+        raise HTTPException(status_code=404, detail="mission not found")
+    if background_tasks and body.comment and body.comment.strip():
+        background_tasks.add_task(
+            extract_and_save_memory,
+            profile["student_id"],
+            body.comment.strip(),
+            False,
+        )
+    return {"ok": True, "review": review}
+
+
+def save_onboarding_preferences(body: OnboardingPreferencesRequest):
+    profile = fetch_profile(body.session_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    student_id = profile["student_id"]
+    saved = []
+    skipped = []
+
+    for subject in _clean_subjects(body.preferred_activity_keys):
+        activity_key = normalize_activity_key(subject)
+        if not activity_key:
+            skipped.append({"value": subject, "type": "preference", "reason": "invalid_activity_key"})
+            continue
+        memory = upsert_user_memory(student_id, activity_key, "preference", 1)
+        if memory:
+            saved.append(memory)
+
+    for subject in _clean_subjects(body.disliked_activity_keys):
+        activity_key = normalize_activity_key(subject)
+        if not activity_key:
+            skipped.append({"value": subject, "type": "preference", "reason": "invalid_activity_key"})
+            continue
+        memory = upsert_user_memory(student_id, activity_key, "preference", -1)
+        if memory:
+            saved.append(memory)
+
+    for subject in _clean_subjects(body.restrictions):
+        memory = upsert_user_memory(student_id, subject, "restriction")
+        if memory:
+            saved.append(memory)
+
+    return {"ok": True, "saved_count": len(saved), "skipped": skipped, "memories": saved}
+
+
+def _clean_subjects(values: list[str]) -> list[str]:
+    seen = set()
+    cleaned = []
+    for value in values or []:
+        subject = (value or "").strip()
+        if not subject or subject in seen:
+            continue
+        seen.add(subject)
+        cleaned.append(subject)
+    return cleaned
+
+
 def get_chat_messages(session_id: str):
     return fetch_messages(session_id)
 
@@ -234,6 +317,21 @@ def get_chat_messages(session_id: str):
 def delete_chat_messages(session_id: str):
     count = delete_messages(session_id)
     return {"ok": True, "deleted": count}
+
+
+async def get_active_mission_ui_action(session_id: str):
+    profile = await run_in_threadpool(fetch_profile, session_id)
+    if not profile:
+        return {"ui_action": None}
+    student_id = profile["student_id"]
+    active = await get_active_ui_action(student_id, session_id)
+    if not active:
+        return {"ui_action": None}
+    return {"ui_action": rebuild_ui_action_payload(active)}
+
+
+async def resolve_mission_ui_action(action_id: str, body: MissionUiActionResolveRequest):
+    return await resolve_mission_ui_action_request(action_id, body.session_id, body.value)
 
 
 def generate_daily():

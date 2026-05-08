@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export default function ChatWindow({ messages, onSend, loading, selectedDebugId, onSelectMessage }) {
+export default function ChatWindow({ messages, onSend, loading, lockChat, onMissionUiAction, selectedDebugId, onSelectMessage }) {
   const [input, setInput] = useState("");
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
@@ -38,14 +38,33 @@ export default function ChatWindow({ messages, onSend, loading, selectedDebugId,
         {messages.map((msg, i) => {
           const isClickable = msg.role === "assistant" && !!msg.debugId;
           const isSelected = msg.debugId && msg.debugId === selectedDebugId;
+          const uiAction = msg.ui_action;
+          const hasButtons = uiAction?.buttons?.length > 0;
+          const isResolving = uiAction?.resolving;
           return (
             <div key={i} className={`message-row ${msg.role}`}>
               {msg.role === "assistant" && <div className="avatar">🌟</div>}
-              <div
-                className={`bubble ${msg.role}${isClickable ? " has-debug" : ""}${isSelected ? " debug-selected" : ""}`}
-                onClick={isClickable ? () => onSelectMessage(msg.debugId) : undefined}
-              >
-                {msg.content}
+              <div className="message-col">
+                <div
+                  className={`bubble ${msg.role}${isClickable ? " has-debug" : ""}${isSelected ? " debug-selected" : ""}`}
+                  onClick={isClickable ? () => onSelectMessage(msg.debugId) : undefined}
+                >
+                  {msg.content}
+                </div>
+                {hasButtons && (
+                  <div className="ui-action-buttons">
+                    {uiAction.buttons.map((btn) => (
+                      <button
+                        key={btn.value}
+                        className="ui-action-btn"
+                        disabled={isResolving || loading}
+                        onClick={() => onMissionUiAction?.(uiAction.action_id, btn.value)}
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -72,14 +91,14 @@ export default function ChatWindow({ messages, onSend, loading, selectedDebugId,
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="메시지를 입력하세요..."
+          placeholder={lockChat ? "위 선택지 중 하나를 골라줘!" : "메시지를 입력하세요..."}
           rows={1}
-          disabled={loading}
+          disabled={loading || lockChat}
         />
         <button
           className="send-btn"
           onClick={handleSend}
-          disabled={!input.trim() || loading}
+          disabled={!input.trim() || loading || lockChat}
           aria-label="전송"
         >
           ▶
