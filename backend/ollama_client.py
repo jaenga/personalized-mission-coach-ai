@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import httpx
@@ -27,6 +28,19 @@ async def close_ollama_client() -> None:
     _client = None
 
 
+def strip_markdown(text: str) -> str:
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\*(.+?)\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"_(.+?)_", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    text = re.sub(r"^\s*[-*+]\s", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s", "", text, flags=re.MULTILINE)
+    return text.strip()
+
+
 async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
     """Ollama /api/chat 기본 호출 헬퍼."""
     url = f"{OLLAMA_BASE_URL}/api/chat"
@@ -41,7 +55,7 @@ async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
 
     resp = await _get_client().post(url, json=payload, timeout=60.0)
     resp.raise_for_status()
-    return resp.json()["message"]["content"].strip()
+    return strip_markdown(resp.json()["message"]["content"])
 
 
 async def generate_chat_message_stream(system_prompt: str, messages: list[dict]):

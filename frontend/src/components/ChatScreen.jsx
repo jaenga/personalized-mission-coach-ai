@@ -467,8 +467,23 @@ function TypingDots() {
   );
 }
 
+function stripMarkdown(text) {
+  return String(text || "")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*(.+?)\*\*/gs, "$1")
+    .replace(/\*(.+?)\*/gs, "$1")
+    .replace(/__(.+?)__/gs, "$1")
+    .replace(/_(.+?)_/gs, "$1")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/^\s*[-*+]\s/gm, "")
+    .replace(/^\s*\d+\.\s/gm, "")
+    .trim();
+}
+
 function AssistantMessage({ text, streaming = false }) {
   const showTyping = streaming && !String(text || "").trim();
+  const displayText = stripMarkdown(text);
   return (
     <div className="flex items-end gap-2" style={{ maxWidth: "82%" }}>
       <img
@@ -493,7 +508,7 @@ function AssistantMessage({ text, streaming = false }) {
           wordBreak: "break-word",
         }}
       >
-        {showTyping ? <TypingDots /> : text}
+        {showTyping ? <TypingDots /> : displayText}
       </div>
     </div>
   );
