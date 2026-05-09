@@ -998,6 +998,18 @@ button:not(:disabled):hover { opacity: 0.85; }
   padding: 18px;
 }
 
+.onboarding-preferences-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 18px;
+}
+
+.onboarding-preferences-page .onboarding-card {
+  max-height: calc(100% - 48px);
+  box-shadow: 0 10px 28px rgba(120, 65, 45, 0.14);
+}
+
 .onboarding-hero {
   display: flex;
   gap: 12px;

@@ -2,9 +2,7 @@ import { useEffect, useState } from "react";
 import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
-import InfoInput from "./components/InfoInput.jsx";
 import HealthNote from "./components/HealthNote.jsx";
-import Welcome from "./components/Welcome.jsx";
 import Home from "./components/Home.jsx";
 import ChatScreen from "./components/ChatScreen.jsx";
 import DrawScreen from "./components/DrawScreen.jsx";
@@ -15,7 +13,7 @@ import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
 import AppLoadingScreen from "./components/AppLoadingScreen.jsx";
 import MissionReviewModal from "./components/MissionReviewModal.jsx";
-import OnboardingPreferences from "./components/OnboardingPreferences.jsx";
+import OnboardingFlow from "./components/OnboardingFlow.jsx";
 
 // ── 화면 상수 ──────────────────────────────────────────────────────────────
 const SCREENS = {
@@ -23,6 +21,7 @@ const SCREENS = {
   SIGNUP: "signup",
   SIGNUP_CONFIRM: "signup_confirm",
   SIGNUP_FAREWELL: "signup_farewell",
+  ONBOARDING: "onboarding",
   ONBOARD_INFO: "onboard_info",
   ONBOARD_HEALTH: "onboard_health",
   ONBOARD_WELCOME: "onboard_welcome",
@@ -77,6 +76,16 @@ function getStoredProfile() {
 // 프론트에선 maxXp(progress 바 표시) 계산용으로만 사용 — XP/level 자체는 백엔드 응답을 그대로 반영.
 const LEVEL_THRESHOLDS = { 2: 5, 3: 17, 4: 37, 5: 70, 6: 150 };
 const HEALTH_NOTE_KEY = "health_note";
+const FORCE_ONBOARDING = import.meta.env.VITE_FORCE_ONBOARDING === "true";
+
+function getOnboardingDoneKey(studentId) {
+  return `onboarding_done:${studentId}`;
+}
+
+function shouldShowOnboarding(studentId, completedThisSession = false) {
+  if (!studentId || completedThisSession) return false;
+  return FORCE_ONBOARDING || localStorage.getItem(getOnboardingDoneKey(studentId)) !== "true";
+}
 
 function getStoredHealthNote() {
   try {
@@ -108,9 +117,11 @@ const FRESH_STATS = { level: 1, currentXp: 0, ticketCount: 0, heartCount: 1 };
 
 export default function App() {
   // ── 화면 상태 ────────────────────────────────────────────────────────────
-  const [screen, setScreen] = useState(() =>
-    getStoredProfile() ? SCREENS.HOME : SCREENS.LOGIN
-  );
+  const [screen, setScreen] = useState(() => {
+    const stored = getStoredProfile();
+    if (!stored?.student_id) return SCREENS.LOGIN;
+    return shouldShowOnboarding(stored.student_id) ? SCREENS.ONBOARDING : SCREENS.HOME;
+  });
   const [screenHistory, setScreenHistory] = useState([]);
 
   // 화면 이동 헬퍼
@@ -147,7 +158,6 @@ export default function App() {
   const [leveledUpTo, setLeveledUpTo] = useState(null);
   const [pendingSignup, setPendingSignup] = useState(null);
   const [signupFarewell, setSignupFarewell] = useState(false);
-  const [showOnboardingPreferences, setShowOnboardingPreferences] = useState(false);
   const [onboardingSaving, setOnboardingSaving] = useState(false);
   const [onboardingError, setOnboardingError] = useState("");
   const [reviewModal, setReviewModal] = useState(null);
@@ -174,6 +184,7 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [extraInfo, setExtraInfo] = useState(null);
   const [healthNote, setHealthNote] = useState(() => getStoredHealthNote());
+  const [onboardingCompletedThisSession, setOnboardingCompletedThisSession] = useState(false);
 
   // 레벨/리워드
   const [level, setLevel] = useState(FRESH_STATS.level);
@@ -194,13 +205,13 @@ export default function App() {
 
   useEffect(() => {
     if (!profile?.student_id) {
-      setShowOnboardingPreferences(false);
       return;
     }
-    const key = `onboarding_preferences_done:${profile.student_id}`;
-    setShowOnboardingPreferences(localStorage.getItem(key) !== "true");
+    if (shouldShowOnboarding(profile.student_id, onboardingCompletedThisSession)) {
+      resetTo(SCREENS.ONBOARDING);
+    }
     setOnboardingError("");
-  }, [profile?.student_id]);
+  }, [profile?.student_id, onboardingCompletedThisSession]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -343,7 +354,8 @@ export default function App() {
       setProfile(saved);
       if (assignedMission) setMission(assignedMission);
       // 출석 체크는 profile useEffect에서 claimAttendance로 자동 호출됨.
-      resetTo(SCREENS.HOME);
+      setOnboardingCompletedThisSession(false);
+      resetTo(shouldShowOnboarding(saved.student_id) ? SCREENS.ONBOARDING : SCREENS.HOME);
     } catch (err) {
       if (err.status === 404) {
         setPendingSignup({ name, phone4 });
@@ -372,7 +384,8 @@ export default function App() {
       if (assignedMission) setMission(assignedMission);
       resetUserStats();
       setPendingSignup(null);
-      resetTo(SCREENS.ONBOARD_INFO);
+      setOnboardingCompletedThisSession(false);
+      resetTo(SCREENS.ONBOARDING);
     } catch (err) {
       setLoginError(err.message);
     } finally {
@@ -393,7 +406,6 @@ export default function App() {
 
   function handleInfoSubmit(info) {
     setExtraInfo(info);
-    goTo(SCREENS.ONBOARD_HEALTH);
   }
 
   async function persistHealthNote(note) {
@@ -423,7 +435,6 @@ export default function App() {
     try {
       await persistHealthNote(note);
     } catch {}
-    goTo(SCREENS.ONBOARD_WELCOME);
   }
 
   async function handleHealthSkip() {
@@ -433,11 +444,15 @@ export default function App() {
       setHealthNote(null);
       saveHealthNote(null);
     }
-    goTo(SCREENS.ONBOARD_WELCOME);
   }
 
   function handleWelcomeContinue() {
     // 출석 체크는 profile useEffect에서 claimAttendance로 자동 호출됨 (가입 시 이미 발동).
+    if (profile?.student_id) {
+      localStorage.setItem(getOnboardingDoneKey(profile.student_id), "true");
+      localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
+    }
+    setOnboardingCompletedThisSession(true);
     resetTo(SCREENS.HOME);
   }
 
@@ -477,7 +492,7 @@ export default function App() {
     setHeartCount(FRESH_STATS.heartCount);
     setAppStateLoaded(false);
     setMissionLoaded(false);
-    setShowOnboardingPreferences(false);
+    setOnboardingCompletedThisSession(false);
     setReviewModal(null);
     setToastMessage("");
     resetTo(SCREENS.LOGIN);
@@ -495,10 +510,10 @@ export default function App() {
         restrictions: values.restrictions,
       });
       localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
-      setShowOnboardingPreferences(false);
-      setToastMessage("선호 정보가 저장됐어요!");
+      return true;
     } catch (err) {
       setOnboardingError(err.message);
+      return false;
     } finally {
       setOnboardingSaving(false);
     }
@@ -508,7 +523,6 @@ export default function App() {
     if (profile?.student_id) {
       localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
     }
-    setShowOnboardingPreferences(false);
     setOnboardingError("");
   }
 
@@ -723,14 +737,6 @@ export default function App() {
   function renderGlobalOverlays() {
     return (
       <>
-        {showOnboardingPreferences && (
-          <OnboardingPreferences
-            onSubmit={handleSaveOnboardingPreferences}
-            onSkip={handleSkipOnboardingPreferences}
-            loading={onboardingSaving}
-            error={onboardingError}
-          />
-        )}
         {reviewModal && (
           <MissionReviewModal
             open={!!reviewModal}
@@ -779,21 +785,57 @@ export default function App() {
         />
       );
 
+    case SCREENS.ONBOARDING:
+      return (
+        <OnboardingFlow
+          onInfoSubmit={handleInfoSubmit}
+          onHealthSubmit={handleHealthSubmit}
+          onHealthSkip={handleHealthSkip}
+          onPreferencesSubmit={handleSaveOnboardingPreferences}
+          onComplete={handleWelcomeContinue}
+          preferencesLoading={onboardingSaving}
+          preferencesError={onboardingError}
+        />
+      );
+
     case SCREENS.ONBOARD_INFO:
-      return <InfoInput onSubmit={handleInfoSubmit} loading={false} error="" />;
+      return (
+        <OnboardingFlow
+          onInfoSubmit={handleInfoSubmit}
+          onHealthSubmit={handleHealthSubmit}
+          onHealthSkip={handleHealthSkip}
+          onPreferencesSubmit={handleSaveOnboardingPreferences}
+          onComplete={handleWelcomeContinue}
+          preferencesLoading={onboardingSaving}
+          preferencesError={onboardingError}
+        />
+      );
 
     case SCREENS.ONBOARD_HEALTH:
       return (
-        <HealthNote
-          onSubmit={handleHealthSubmit}
-          onSkip={handleHealthSkip}
-          onBack={handleHealthBack}
-          loading={false}
+        <OnboardingFlow
+          onInfoSubmit={handleInfoSubmit}
+          onHealthSubmit={handleHealthSubmit}
+          onHealthSkip={handleHealthSkip}
+          onPreferencesSubmit={handleSaveOnboardingPreferences}
+          onComplete={handleWelcomeContinue}
+          preferencesLoading={onboardingSaving}
+          preferencesError={onboardingError}
         />
       );
 
     case SCREENS.ONBOARD_WELCOME:
-      return <Welcome onContinue={handleWelcomeContinue} />;
+      return (
+        <OnboardingFlow
+          onInfoSubmit={handleInfoSubmit}
+          onHealthSubmit={handleHealthSubmit}
+          onHealthSkip={handleHealthSkip}
+          onPreferencesSubmit={handleSaveOnboardingPreferences}
+          onComplete={handleWelcomeContinue}
+          preferencesLoading={onboardingSaving}
+          preferencesError={onboardingError}
+        />
+      );
 
     case SCREENS.HOME:
       if (profile && (!appStateLoaded || !missionLoaded)) {

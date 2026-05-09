@@ -49,7 +49,7 @@ function PreferenceSection({ title, description, selected, onToggle, variant = "
   );
 }
 
-export default function OnboardingPreferences({ onSubmit, onSkip, loading, error }) {
+export default function OnboardingPreferences({ onSubmit, onSkip, loading, error, embedded = false }) {
   const [preferred, setPreferred] = useState([]);
   const [disliked, setDisliked] = useState([]);
   const [restrictionText, setRestrictionText] = useState("");
@@ -72,8 +72,7 @@ export default function OnboardingPreferences({ onSubmit, onSkip, loading, error
     });
   }
 
-  return (
-    <div className="modal-backdrop soft">
+  const content = (
       <form className="onboarding-card" onSubmit={handleSubmit}>
         <div className="onboarding-hero">
           <div>
@@ -136,6 +135,19 @@ export default function OnboardingPreferences({ onSubmit, onSkip, loading, error
           </button>
         </div>
       </form>
+  );
+
+  if (embedded) {
+    return (
+      <div className="mobile-frame onboarding-preferences-page" style={{ background: "#FFF3E7" }}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div className="modal-backdrop soft">
+      {content}
     </div>
   );
 }

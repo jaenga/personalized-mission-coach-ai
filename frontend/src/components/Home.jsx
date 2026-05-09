@@ -823,7 +823,7 @@ export default function Home({
         {/* 오늘의 미션 카드 */}
         <button
           type="button"
-          className="mx-auto mt-5 block text-left transition-transform active:scale-[0.99]"
+          className="mx-auto mt-2 block text-left transition-transform active:scale-[0.99]"
           onClick={() => setMissionFlipped((v) => !v)}
           aria-pressed={missionFlipped}
           aria-label={missionFlipped ? "오늘의 미션 보기" : "오늘의 미션 수행 방법 보기"}
@@ -1013,7 +1013,7 @@ export default function Home({
 
         {/* 이번 주 기록 카드 */}
         <div
-          className="mx-auto mt-3"
+          className="mx-auto mt-5"
           style={{
             width: 315,
             borderRadius: 18,
