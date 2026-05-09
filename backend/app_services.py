@@ -13,6 +13,7 @@ from database import (
     create_chat_session,
     create_demo_student,
     delete_messages,
+    delete_student_completely,
     fetch_messages,
     get_app_state,
     get_game_ranking,
@@ -317,6 +318,13 @@ def get_chat_messages(session_id: str):
 def delete_chat_messages(session_id: str):
     count = delete_messages(session_id)
     return {"ok": True, "deleted": count}
+
+
+def delete_student_account(student_id: int):
+    deleted = delete_student_completely(student_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="student not found")
+    return {"ok": True, "deleted": True}
 
 
 async def get_active_mission_ui_action(session_id: str):

@@ -459,6 +459,59 @@ def _ensure_student_app_state(cur, student_id: int) -> None:
     """, (student_id,))
 
 
+def delete_student_completely(student_id: int) -> bool:
+    """탈퇴 처리: 학생과 학생을 참조하는 모든 데이터를 한 트랜잭션에서 삭제.
+
+    FK 의존성 순서로 삭제하며, students 행이 존재하지 않으면 False 반환.
+    """
+    if not student_id:
+        return False
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM students WHERE student_id = %s", (student_id,))
+            if cur.fetchone() is None:
+                return False
+
+            # chat_messages는 chat_sessions.session_id를 참조하므로 먼저 삭제.
+            cur.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE session_id IN (
+                    SELECT session_id FROM chat_sessions WHERE student_id = %s
+                )
+                """,
+                (student_id,),
+            )
+            cur.execute("DELETE FROM chat_sessions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM session_profiles WHERE student_id = %s", (student_id,))
+
+            # xp_history는 draw_runs(draw_id)를 참조하므로 draw_runs보다 먼저.
+            cur.execute("DELETE FROM xp_history WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM draw_runs WHERE student_id = %s", (student_id,))
+
+            cur.execute("DELETE FROM attendance_log WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM game_runs WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM lesson_progress WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM user_memories WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM pending_actions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM pending_mission_suggestions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM mission_change_logs WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM mission_reviews WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM mission_ui_actions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM generated_missions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM mission_changes WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM checkin_log WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM student_daily_missions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM student_app_state WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM student_health_notes WHERE student_id = %s", (student_id,))
+
+            cur.execute("DELETE FROM students WHERE student_id = %s", (student_id,))
+        conn.commit()
+
+    return True
+
+
 # ── 채팅 세션 (chat_sessions 테이블) ──────────────────────────────────────────
 
 def create_demo_student(student_name: str, phone_last4: str) -> dict:

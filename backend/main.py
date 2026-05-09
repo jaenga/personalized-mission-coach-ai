@@ -7,6 +7,7 @@ from app_services import (
     claim_student_draw_reward,
     complete_student_lesson_quiz,
     delete_chat_messages,
+    delete_student_account,
     generate_daily,
     get_active_mission_ui_action,
     get_chat_messages,
@@ -194,6 +195,11 @@ def get_chat(session_id: str):
 @app.delete("/chat/{session_id}")
 def delete_chat(session_id: str):
     return delete_chat_messages(session_id)
+
+
+@app.delete("/students/{student_id}")
+def delete_student_route(student_id: int):
+    return delete_student_account(student_id)
 
 
 @app.get("/mission-ui-actions/active")

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import HealthNote from "./components/HealthNote.jsx";
@@ -522,10 +522,14 @@ export default function App() {
   }
 
   async function handleWithdraw() {
-    try {
-      await clearChatHistory(sessionId);
-    } catch {
-      // 삭제 실패해도 탈퇴 흐름은 진행
+    const studentId = profile?.student_id;
+    if (studentId) {
+      try {
+        await deleteStudentAccount(studentId);
+      } catch {
+        setToastMessage("탈퇴 처리에 실패했어요. 잠시 후 다시 시도해 주세요.");
+        return;
+      }
     }
     resetLocalSession();
   }

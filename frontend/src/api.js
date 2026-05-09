@@ -90,6 +90,13 @@ export async function clearChatHistory(sessionId) {
   return res.json();
 }
 
+/** 탈퇴: 학생 본인과 학생을 참조하는 모든 데이터 삭제. */
+export async function deleteStudentAccount(studentId) {
+  const res = await fetch(`/students/${studentId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("탈퇴 처리 실패");
+  return res.json();
+}
+
 /** 이름 + 전화번호 뒷 4자리로 학생 본인 확인. */
 export async function verifyStudent(studentName, phoneLast4) {
   const res = await fetch("/verify-student", {
