@@ -2,11 +2,12 @@ import { useState } from "react";
 import InfoInput from "./InfoInput.jsx";
 import HealthNote from "./HealthNote.jsx";
 import OnboardingPreferences from "./OnboardingPreferences.jsx";
+import OnboardingTutorial from "./OnboardingTutorial.jsx";
 import Welcome from "./Welcome.jsx";
 
 const STEPS = {
-  APP_INTRO: "app_intro",
   FEATURE_INTRO: "feature_intro",
+  TUTORIAL: "tutorial",
   INFO: "info",
   HEALTH: "health",
   PREFERENCES: "preferences",
@@ -86,6 +87,7 @@ export default function OnboardingFlow({
   preferencesError,
 }) {
   const [step, setStep] = useState(STEPS.INFO);
+  const [tutorialInitialStep, setTutorialInitialStep] = useState(0);
 
   async function handleHealthSubmit(note) {
     await onHealthSubmit?.(note);
@@ -108,12 +110,18 @@ export default function OnboardingFlow({
     setStep(STEPS.START);
   }
 
-  if (step === STEPS.APP_INTRO) {
-    return <PlaceholderStep title="앱 설명" onNext={() => setStep(STEPS.FEATURE_INTRO)} />;
-  }
-
   if (step === STEPS.FEATURE_INTRO) {
     return <PlaceholderStep title="기능 소개" onNext={() => setStep(STEPS.HEALTH)} />;
+  }
+
+  if (step === STEPS.TUTORIAL) {
+    return (
+      <OnboardingTutorial
+        onComplete={() => setStep(STEPS.HEALTH)}
+        initialStep={tutorialInitialStep}
+        onBack={() => setStep(STEPS.INFO)}
+      />
+    );
   }
 
   if (step === STEPS.INFO) {
@@ -121,7 +129,7 @@ export default function OnboardingFlow({
       <InfoInput
         onSubmit={(info) => {
           onInfoSubmit?.(info);
-          setStep(STEPS.APP_INTRO);
+          setStep(STEPS.TUTORIAL);
         }}
         onBack={onInfoBack}
         loading={false}
@@ -135,7 +143,7 @@ export default function OnboardingFlow({
       <HealthNote
         onSubmit={handleHealthSubmit}
         onSkip={handleHealthSkip}
-        onBack={() => setStep(STEPS.FEATURE_INTRO)}
+        onBack={() => { setTutorialInitialStep(8); setStep(STEPS.TUTORIAL); }}
         loading={false}
       />
     );
@@ -146,6 +154,7 @@ export default function OnboardingFlow({
       <OnboardingPreferences
         onSubmit={handlePreferencesSubmit}
         onSkip={handlePreferencesSkip}
+        onBack={() => setStep(STEPS.HEALTH)}
         loading={preferencesLoading}
         error={preferencesError}
         embedded

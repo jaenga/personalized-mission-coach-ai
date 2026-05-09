@@ -814,6 +814,7 @@ export default function ChatScreen({
         >
           <button
             type="button"
+            data-tutorial-target="chat-plus-btn"
             onClick={() => setFaqOpen(true)}
             aria-label="토미 기능 안내"
             className="flex items-center justify-center transition-transform active:scale-95"

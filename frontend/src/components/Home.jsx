@@ -451,9 +451,10 @@ export default function Home({
   heartCount = 4,
   todayMission = { title: "15분 책 읽기", description: "", done: false },
   successDates = [],
+  initialCalendarOpen = false,
   onNavigate,
 }) {
-  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(initialCalendarOpen);
   const [activeTab, setActiveTab] = useState("home");
   const [expOpen, setExpOpen] = useState(false);
   const [missionFlipped, setMissionFlipped] = useState(false);
@@ -823,6 +824,7 @@ export default function Home({
         {/* 오늘의 미션 카드 */}
         <button
           type="button"
+          data-tutorial-target="home-mission-card"
           className="mx-auto mt-0 block text-left transition-transform active:scale-[0.99]"
           onClick={() => setMissionFlipped((v) => !v)}
           aria-pressed={missionFlipped}
@@ -862,6 +864,7 @@ export default function Home({
                 alt=""
                 aria-hidden="true"
                 draggable="false"
+                data-tutorial-accent
                 className="absolute select-none pointer-events-none"
                 style={{
                   top: 94,
@@ -877,6 +880,7 @@ export default function Home({
                 alt=""
                 aria-hidden="true"
                 draggable="false"
+                data-tutorial-accent
                 className="absolute select-none pointer-events-none"
                 style={{
                   top: -30,
@@ -1013,6 +1017,7 @@ export default function Home({
 
         {/* 이번 주 기록 카드 */}
         <div
+          data-tutorial-target="home-calendar-card"
           className="mx-auto mt-5"
           style={{
             width: 315,

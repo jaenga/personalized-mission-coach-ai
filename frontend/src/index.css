@@ -222,57 +222,83 @@ body {
 }
 
 @media (max-height: 760px) {
+  /* 카드: top/bottom 고정으로 버튼 포함 */
   .welcome-card-bg {
-    top: 28px !important;
-    height: calc(100dvh - 82px) !important;
+    top: 24px !important;
+    bottom: 16px !important;
+    height: auto !important;
   }
 
   .welcome-leaf {
-    top: 62px !important;
+    top: 60px !important;
   }
 
   .welcome-title {
-    top: 78px !important;
+    top: 74px !important;
     font-size: 42px !important;
     line-height: 48px !important;
   }
 
   .welcome-subtitle {
-    top: 130px !important;
+    top: 126px !important;
     font-size: 17px !important;
   }
 
   .welcome-hero {
-    top: 207px !important;
-    left: 101px !important;
-    width: 200px !important;
-    height: 200px !important;
+    top: 185px !important;
+    left: 88px !important;
+    width: 226px !important;
+    height: 226px !important;
   }
 
   .welcome-shadow {
-    top: 394px !important;
+    top: 396px !important;
+    width: 180px !important;
+    left: 107px !important;
   }
 
-  .welcome-gift-label {
-    top: 440px !important;
-  }
+  /* 하단 기준으로 배치 — 버튼과 간격 일정하게 유지 */
 
-  .welcome-gift-card {
-    top: 468px !important;
-    height: 108px !important;
-  }
-
-  .welcome-heart {
-    top: 490px !important;
-  }
-
-  .welcome-plus {
-    top: 535px !important;
-  }
-
+  /* 홈으로 가기: 카드 bottom(16) + 패딩(14) */
   .welcome-home-button {
     top: auto !important;
-    bottom: max(18px, env(safe-area-inset-bottom)) !important;
+    left: 68px !important;
+    width: 266px !important;
+    height: 42px !important;
+    font-size: 17px !important;
+    bottom: 30px !important;
+  }
+
+  /* 분홍 박스: 버튼(42) + 갭(14) + bottom(30) = 86 / height 74 (여백 14px 위아래 동일) */
+  .welcome-gift-card {
+    top: auto !important;
+    bottom: 86px !important;
+    left: 68px !important;
+    width: 266px !important;
+    height: 74px !important;
+  }
+
+  /* 하트: 박스top(160) - 위여백(14) - 하트(24) = bottom 122 */
+  .welcome-heart {
+    top: auto !important;
+    bottom: 122px !important;
+    left: 188px !important;
+    width: 24px !important;
+    height: 24px !important;
+  }
+
+  /* +1: 하트아래(4px) → bottom 122-24-4 = 94, +1 height 18 → bottom여백=94-86=8... 14맞추려면 bottom 100 */
+  .welcome-plus {
+    top: auto !important;
+    bottom: 100px !important;
+    font-size: 18px !important;
+  }
+
+  /* 가입 기념 선물 텍스트: 박스 위(86+74=160) + 갭(8) = 168 */
+  .welcome-gift-label {
+    top: auto !important;
+    bottom: 170px !important;
+    font-size: 13px !important;
   }
 }
 
@@ -1008,6 +1034,55 @@ button:not(:disabled):hover { opacity: 0.85; }
 .onboarding-preferences-page .onboarding-card {
   max-height: calc(100% - 48px);
   box-shadow: 0 10px 28px rgba(120, 65, 45, 0.14);
+}
+
+.onboarding-tutorial-shell {
+  width: 402px;
+  height: min(874px, 100dvh);
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.onboarding-tutorial-preview {
+  pointer-events: none;
+  overflow: hidden;
+  height: 100%;
+}
+
+@keyframes onboarding-tutorial-target-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 16px 7px rgba(255, 213, 107, 0.5),
+      0 0 34px 13px rgba(255, 213, 107, 0.24);
+  }
+  50% {
+    box-shadow:
+      0 0 24px 9px rgba(255, 226, 119, 0.7),
+      0 0 48px 18px rgba(255, 213, 107, 0.3);
+  }
+}
+
+.onboarding-tutorial-active-target {
+  position: relative !important;
+  z-index: 1002 !important;
+  animation: onboarding-tutorial-target-pulse 1.45s ease-in-out infinite;
+}
+
+@keyframes onboarding-tutorial-accent-pulse {
+  0%, 100% {
+    filter:
+      drop-shadow(0 0 8px rgba(255, 213, 107, 0.5))
+      drop-shadow(0 0 18px rgba(255, 213, 107, 0.24));
+  }
+  50% {
+    filter:
+      drop-shadow(0 0 12px rgba(255, 226, 119, 0.7))
+      drop-shadow(0 0 26px rgba(255, 213, 107, 0.3));
+  }
+}
+
+.onboarding-tutorial-active-target [data-tutorial-accent] {
+  animation: onboarding-tutorial-accent-pulse 1.45s ease-in-out infinite;
 }
 
 .onboarding-hero {

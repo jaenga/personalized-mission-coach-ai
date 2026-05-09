@@ -84,6 +84,7 @@ export default function LearnScreen({
   ticketCount = 2,
   heartCount = 4,
   onAppStateUpdate,
+  disablePulse = false,
 }) {
   const [activeNav, setActiveNav] = useState("learn");
   // progress[lessonId] = { eduDone, quizDone }. 백엔드 lesson_progress에서 로드.
@@ -279,6 +280,7 @@ export default function LearnScreen({
       >
         <button
           type="button"
+          data-tutorial-target="learn-level"
           onClick={() => setExpOpen((v) => !v)}
           aria-expanded={expOpen}
           aria-label={`레벨 ${level} EXP ${currentXp}/${maxXp}`}
@@ -290,6 +292,7 @@ export default function LearnScreen({
         <div className="flex gap-1.5">
           <button
             type="button"
+            data-tutorial-target="learn-ticket"
             onClick={() => onNavigate?.("draw")}
             className="flex items-center gap-1 font-sejong transition-transform active:scale-95"
             style={{
@@ -307,6 +310,7 @@ export default function LearnScreen({
           </button>
           <button
             type="button"
+            data-tutorial-target="learn-heart"
             onClick={() => { window.location.hash = "#game"; }}
             aria-label={`하트 ${heartCount}개 — 토미랑 달리기 게임으로`}
             className="flex items-center gap-1 font-sejong"
@@ -389,7 +393,7 @@ export default function LearnScreen({
         <MissionBanner mission={todayMission} day={currentDay} />
 
         {/* 패스 (오늘 + 잠긴 다음 날들 연결) */}
-        <Path nodes={nodes} states={states} activeIdx={activeIdx} onClick={handleNodeClick} />
+        <Path nodes={nodes} states={states} activeIdx={activeIdx} onClick={handleNodeClick} disablePulse={disablePulse} />
       </div>
 
       {/* 가챠 플로팅 버튼 */}
@@ -500,7 +504,7 @@ function MissionBanner({ mission }) {
 /* ─────────────────────────────────────────────────────────
    곡선 패스 + 노드
    ───────────────────────────────────────────────────────── */
-function Path({ nodes, states, activeIdx, onClick }) {
+function Path({ nodes, states, activeIdx, onClick, disablePulse }) {
   const positions = nodes.map((_, i) => ({
     x: PATH_WIDTH / 2 + (i % 2 === 0 ? -52 : 52),
     y: 82 + i * NODE_GAP,
@@ -576,6 +580,7 @@ function Path({ nodes, states, activeIdx, onClick }) {
             x={pos.x}
             y={pos.y}
             onClick={() => onClick(node, state)}
+            disablePulse={disablePulse}
           />
         );
       })}
@@ -629,7 +634,7 @@ function DayMarker({ day, y }) {
   );
 }
 
-function PathNode({ node, state, isCurrent, x, y, onClick }) {
+function PathNode({ node, state, isCurrent, x, y, onClick, disablePulse }) {
   const isLockedDay = node.kind === "lockedDay";
   const isEdu = node.kind === "education";
   // 교육=메인 레드 / 퀴즈=노랑 / 잠금=쿨 그레이
@@ -669,7 +674,7 @@ function PathNode({ node, state, isCurrent, x, y, onClick }) {
           opacity: state === "locked" ? 0.85 : 1,
         }}
       >
-        {isCurrent && state === "active" && (
+        {!disablePulse && isCurrent && state === "active" && (
           <span
             aria-hidden="true"
             style={{

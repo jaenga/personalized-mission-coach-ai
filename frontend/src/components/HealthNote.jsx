@@ -71,7 +71,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
         </span>
         <div className="flex-1 min-w-0" style={{ paddingTop: 2 }}>
           <h3
-            className="font-noto"
+            className="font-sejong"
             style={{
               fontSize: 16,
               fontWeight: 500,
@@ -119,14 +119,14 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                 <path d="M6 2 L6 10 M2 6 L10 6" />
               </svg>
             </span>
-            <span className="font-noto text-gray-700" style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.43px" }}>
+            <span className="font-sejong text-gray-700" style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.43px" }}>
               {addLabel}
             </span>
           </span>
           <span className="flex items-center gap-2">
             {selected.length > 0 && (
               <span
-                className="font-noto"
+                className="font-sejong"
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
@@ -171,7 +171,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                   icon
                 )}
               </span>
-              <span className="font-noto" style={{ fontSize: 15, fontWeight: 500, color: "#1a1a1a", letterSpacing: "-0.43px" }}>
+              <span className="font-sejong" style={{ fontSize: 15, fontWeight: 500, color: "#1a1a1a", letterSpacing: "-0.43px" }}>
                 {sectionTitle}
               </span>
             </div>
@@ -199,7 +199,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={placeholder}
-              className="w-full font-noto outline-none"
+              className="w-full font-sejong outline-none"
               style={{
                 height: 36,
                 borderRadius: 999,
@@ -215,14 +215,14 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
           </div>
 
           <div className="flex items-center justify-end gap-2 mb-3">
-            <span className="font-noto text-gray-500" style={{ fontSize: 11 }}>
+            <span className="font-sejong text-gray-500" style={{ fontSize: 11 }}>
               찾는 항목이 없나요?
             </span>
             {!customMode ? (
               <button
                 type="button"
                 onClick={() => setCustomMode(true)}
-                className="font-noto transition active:scale-[0.97]"
+                className="font-sejong transition active:scale-[0.97]"
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
@@ -252,7 +252,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                     }
                   }}
                   placeholder="직접 입력"
-                  className="font-noto outline-none"
+                  className="font-sejong outline-none"
                   style={{
                     fontSize: 11,
                     padding: "4px 10px",
@@ -264,7 +264,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                 <button
                   type="button"
                   onClick={commitCustom}
-                  className="font-noto"
+                  className="font-sejong"
                   style={{
                     fontSize: 11,
                     fontWeight: 600,
@@ -280,7 +280,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
             )}
           </div>
 
-          <p className="font-noto text-gray-700 mb-2" style={{ fontSize: 12, fontWeight: 500 }}>
+          <p className="font-sejong text-gray-700 mb-2" style={{ fontSize: 12, fontWeight: 500 }}>
             추천 {sectionTitle.includes("알레르기") ? "알레르기" : "음식"}
           </p>
           <div className="flex flex-wrap gap-1.5 mb-3">
@@ -291,7 +291,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                   key={opt}
                   type="button"
                   onClick={() => onToggle(opt)}
-                  className="font-noto transition active:scale-[0.97]"
+                  className="font-sejong transition active:scale-[0.97]"
                   style={{
                     fontSize: 12,
                     padding: "5px 12px",
@@ -307,7 +307,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
               );
             })}
             {filtered.length === 0 && (
-              <span className="font-noto text-gray-400" style={{ fontSize: 12 }}>
+              <span className="font-sejong text-gray-400" style={{ fontSize: 12 }}>
                 검색 결과 없음
               </span>
             )}
@@ -315,7 +315,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
 
           {selected.length > 0 && (
             <>
-              <p className="font-noto text-gray-700 mb-2" style={{ fontSize: 12, fontWeight: 500 }}>
+              <p className="font-sejong text-gray-700 mb-2" style={{ fontSize: 12, fontWeight: 500 }}>
                 선택한 {sectionTitle.includes("알레르기") ? "알레르기" : "음식"}
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -324,7 +324,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                     key={s}
                     type="button"
                     onClick={() => onToggle(s)}
-                    className="font-noto inline-flex items-center gap-1 transition"
+                    className="font-sejong inline-flex items-center gap-1 transition"
                     style={{
                       fontSize: 12,
                       padding: "5px 8px 5px 12px",
@@ -352,7 +352,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
           {selected.map((s) => (
             <span
               key={s}
-              className="font-noto inline-flex items-center"
+              className="font-sejong inline-flex items-center"
               style={{
                 fontSize: 11,
                 padding: "3px 10px",
@@ -442,7 +442,7 @@ export default function HealthNote({
           <div className="flex items-center justify-between h-full gap-3">
             <div className="flex-1 min-w-0 self-center">
               <h2
-                className="font-noto text-gray-900"
+                className="font-sejong text-gray-900"
                 style={{
                   fontSize: 16,
                   fontWeight: 500,
@@ -517,7 +517,7 @@ export default function HealthNote({
         <button
           type="button"
           onClick={onSkip}
-          className="block mx-auto font-noto text-gray-500 hover:text-gray-700 transition pt-1"
+          className="block mx-auto font-sejong text-gray-500 hover:text-gray-700 transition pt-1"
           style={{ fontSize: 12, fontWeight: 300, letterSpacing: "-0.43px" }}
         >
           건너뛰고 나중에 설정할래요

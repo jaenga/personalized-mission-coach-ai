@@ -51,7 +51,7 @@ export default function Welcome({ onContinue }) {
           left: 17,
           top: 54,
           width: 363,
-          height: 671,
+          height: 0,
           borderRadius: 30,
           background: "rgba(255, 255, 255, 0.5)",
           border: "1px solid rgba(227, 93, 73, 0.5)",
@@ -160,10 +160,10 @@ export default function Welcome({ onContinue }) {
         className="welcome-gift-label absolute font-sejong"
         style={{
           left: 106,
-          top: 533,
+          top: 590,
           width: 190,
           height: 22,
-          color: "#000000",
+          color: "#4e4949",
           fontSize: 15,
           fontWeight: 500,
           textAlign: "center",
@@ -180,10 +180,10 @@ export default function Welcome({ onContinue }) {
         className="welcome-gift-card absolute"
         style={{
           left: 57,
-          top: 565,
+          top: 500,
           width: 288,
-          height: 133,
-          borderRadius: 30,
+          height: 85,
+          borderRadius: 24,
           background: "rgba(227, 93, 73, 0.2)",
           border: "1px solid rgba(227, 93, 73, 0.5)",
         }}
@@ -195,7 +195,7 @@ export default function Welcome({ onContinue }) {
         alt=""
         draggable="false"
         className="welcome-heart absolute select-none pointer-events-none"
-        style={{ left: 181, top: 596, width: 36, height: 36, objectFit: "contain" }}
+        style={{ left: 181, top: 560, width: 32, height: 32, objectFit: "contain" }}
       />
 
       {/* +1 */}
@@ -203,7 +203,7 @@ export default function Welcome({ onContinue }) {
         className="welcome-plus absolute font-sejong"
         style={{
           left: 184,
-          top: 643,
+          top: 597,
           width: 29,
           height: 22,
           color: "#E35D49",
@@ -227,7 +227,7 @@ export default function Welcome({ onContinue }) {
         className="welcome-home-button signup-submit absolute font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
         style={{
           left: 56,
-          top: 747,
+          top: 660,
           width: 290,
           height: 45,
           borderRadius: 50,
