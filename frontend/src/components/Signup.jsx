@@ -30,20 +30,19 @@ export default function Signup({
         aria-label="처음 화면으로 돌아가기"
         className="absolute flex items-center justify-center"
         style={{
-          left: 18,
-          top: 24,
-          width: 38,
-          height: 38,
-          borderRadius: "50%",
+          left: 8,
+          top: 18,
           border: "none",
-          background: "rgba(255, 255, 255, 0.65)",
-          color: "#E35D49",
+          background: "transparent",
+          color: "rgba(180, 80, 60, 0.5)",
+          fontSize: 48,
           cursor: "pointer",
+          lineHeight: 1,
+          userSelect: "none",
+          padding: 0,
         }}
       >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M15 6 L9 12 L15 18" />
-        </svg>
+        ‹
       </button>
 
       <div

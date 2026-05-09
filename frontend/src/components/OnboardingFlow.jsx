@@ -88,6 +88,7 @@ export default function OnboardingFlow({
 }) {
   const [step, setStep] = useState(STEPS.INFO);
   const [tutorialInitialStep, setTutorialInitialStep] = useState(0);
+  const [savedInfo, setSavedInfo] = useState({ birth: "", gender: "", isPrivate: false });
 
   async function handleHealthSubmit(note) {
     await onHealthSubmit?.(note);
@@ -128,12 +129,16 @@ export default function OnboardingFlow({
     return (
       <InfoInput
         onSubmit={(info) => {
+          setSavedInfo(info);
           onInfoSubmit?.(info);
           setStep(STEPS.TUTORIAL);
         }}
         onBack={onInfoBack}
         loading={false}
         error=""
+        defaultBirth={savedInfo.birth}
+        defaultGender={savedInfo.gender}
+        defaultIsPrivate={savedInfo.isPrivate}
       />
     );
   }

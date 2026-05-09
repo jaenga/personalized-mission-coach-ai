@@ -529,21 +529,6 @@ export default function OnboardingTutorial({ onComplete, onBack, initialStep = 0
         );
       })()}
 
-      {/* 첫 페이지 ← 뒤로가기 버튼 */}
-      {index === 0 && onBack && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onBack(); }}
-          style={{
-            position: "absolute", top: 16, left: 16, zIndex: 1005,
-            background: "rgba(255,255,255,0.25)", border: "none",
-            borderRadius: 999, padding: "6px 12px",
-            color: "#fff", fontSize: 18, cursor: "pointer", lineHeight: 1,
-          }}
-        >
-          ←
-        </button>
-      )}
 
       {/* 좌우 넘기기 힌트 */}
       <div

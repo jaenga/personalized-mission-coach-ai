@@ -773,6 +773,7 @@ export default function App() {
           <MissionReviewModal
             open={!!reviewModal}
             resultType={reviewModal.resultType}
+            missionTitle={mission?.mission_name}
             onSave={handleSaveMissionReview}
             onSkip={handleSkipMissionReview}
             loading={reviewSaving}
@@ -879,7 +880,7 @@ export default function App() {
         return <AppLoadingScreen active="home" onNavigate={navHandler(SCREENS.HOME)} />;
       }
       return (
-        <>
+        <div style={{ position: "relative" }}>
           <Home
             studentName={profile?.student_name || "민준"}
             level={level}
@@ -897,12 +898,12 @@ export default function App() {
             onNavigate={navHandler(SCREENS.HOME)}
           />
           {renderGlobalOverlays()}
-        </>
+        </div>
       );
 
     case SCREENS.CHAT:
       return (
-        <>
+        <div style={{ position: "relative" }}>
           <ChatScreen
             onBack={() => goBack(SCREENS.HOME)}
             messages={messages}
@@ -914,7 +915,7 @@ export default function App() {
             }}
           />
           {renderGlobalOverlays()}
-        </>
+        </div>
       );
 
     case SCREENS.DRAW: {
