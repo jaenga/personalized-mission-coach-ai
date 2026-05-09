@@ -84,7 +84,7 @@ export default function OnboardingFlow({
   preferencesLoading,
   preferencesError,
 }) {
-  const [step, setStep] = useState(STEPS.APP_INTRO);
+  const [step, setStep] = useState(STEPS.INFO);
 
   async function handleHealthSubmit(note) {
     await onHealthSubmit?.(note);
@@ -112,7 +112,7 @@ export default function OnboardingFlow({
   }
 
   if (step === STEPS.FEATURE_INTRO) {
-    return <PlaceholderStep title="기능 소개" onNext={() => setStep(STEPS.INFO)} />;
+    return <PlaceholderStep title="기능 소개" onNext={() => setStep(STEPS.HEALTH)} />;
   }
 
   if (step === STEPS.INFO) {
@@ -120,7 +120,7 @@ export default function OnboardingFlow({
       <InfoInput
         onSubmit={(info) => {
           onInfoSubmit?.(info);
-          setStep(STEPS.HEALTH);
+          setStep(STEPS.APP_INTRO);
         }}
         loading={false}
         error=""
@@ -133,7 +133,7 @@ export default function OnboardingFlow({
       <HealthNote
         onSubmit={handleHealthSubmit}
         onSkip={handleHealthSkip}
-        onBack={() => setStep(STEPS.INFO)}
+        onBack={() => setStep(STEPS.FEATURE_INTRO)}
         loading={false}
       />
     );
