@@ -18,12 +18,12 @@ import heartImg from "../assets/tomato/_shared/heart.png";
    ───────────────────────────────────────────────────────── */
 const DAILY_PLAN = [
   { day: 1, title: "건강한 하루의 시작",     lessonIds: ["sugar-snacks", "rainbow-vegetables"] },
-  { day: 2, title: "잘 먹고 잘 닦기",        lessonIds: ["nutrition-label", "tooth-care"] },
+  { day: 2, title: "눈 건강과 응급처치",      lessonIds: ["eye-health", "first-aid"] },
   { day: 3, title: "영양과 면역",            lessonIds: ["hand-washing", "immunity-vaccine"] },
   { day: 4, title: "물과 잠의 비밀",         lessonIds: ["water-habit", "sleep-golden-time"] },
-  { day: 5, title: "바른 자세, 신나는 운동", lessonIds: ["posture-spine", "exercise-muscle"] },
-  { day: 6, title: "눈 보호와 안전",         lessonIds: ["eye-health", "outdoor-safety"] },
-  { day: 7, title: "응급처치와 마음 건강",   lessonIds: ["first-aid", "emotion-stress"] },
+  { day: 5, title: "잘 먹고 잘 닦기",        lessonIds: ["nutrition-label", "tooth-care"] },
+  { day: 6, title: "바른 자세, 신나는 운동", lessonIds: ["posture-spine", "exercise-muscle"] },
+  { day: 7, title: "눈 보호와 안전",         lessonIds: ["outdoor-safety", "emotion-stress"] },
 ];
 
 const NODE_GAP = 100;
@@ -64,10 +64,9 @@ function isDayCompleteBeforeToday(plan, progress, todayKey) {
 
 function getUnlockedDay(progress) {
   let unlockedDay = 1;
-  const todayKey = toLocalDateKey(new Date());
   for (const plan of DAILY_PLAN) {
     if (plan.day > unlockedDay) break;
-    if (!isDayCompleteBeforeToday(plan, progress, todayKey)) break;
+    if (!isDayComplete(plan, progress)) break;
     unlockedDay = Math.min(plan.day + 1, DAILY_PLAN.length);
   }
   return unlockedDay;

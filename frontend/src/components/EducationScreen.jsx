@@ -83,6 +83,7 @@ function expandStep(step) {
       kind: "para",
       text: c,
       heading: i === 0 ? step.heading : undefined,
+      highlights: step.highlights,
     });
   });
 
@@ -358,6 +359,40 @@ function TypingBubble() {
   );
 }
 
+function renderHighlighted(text, keywords) {
+  if (!keywords?.length) return text;
+  // 문자열이면 기본 스타일로 정규화
+  const normalized = keywords.map((k) =>
+    typeof k === "string" ? { text: k, color: "#E35D49", bold: true } : k
+  );
+  const sorted = [...normalized].sort((a, b) => b.text.length - a.text.length);
+  const regex = new RegExp(
+    `(${sorted.map((k) => k.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "g"
+  );
+  const parts = text.split(regex);
+  return parts.map((part, i) => {
+    const match = normalized.find((k) => k.text === part);
+    if (!match) return part;
+    return (
+      <span
+        key={i}
+        style={{
+          color: match.color || undefined,
+          fontWeight: match.bold !== false ? 700 : undefined,
+          ...(match.bg && {
+            background: match.bg,
+            borderRadius: 4,
+            padding: "1px 5px",
+          }),
+        }}
+      >
+        {part}
+      </span>
+    );
+  });
+}
+
 function CoachBubble({ message, animate, onImageClick }) {
   const isSummary = message.kind === "summary";
   const isImage = message.kind === "image";
@@ -447,7 +482,7 @@ function CoachBubble({ message, animate, onImageClick }) {
             </ul>
           </>
         ) : (
-          <div>{message.text}</div>
+          <div>{renderHighlighted(message.text, message.highlights)}</div>
         )}
       </div>
       )}
