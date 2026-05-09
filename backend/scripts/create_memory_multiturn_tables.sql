@@ -77,7 +77,10 @@ CREATE TABLE IF NOT EXISTS mission_change_logs (
             'too_hard',
             'dislike',
             'cant_do',
-            'just_change'
+            'just_change',
+            'onboarding_auto_replace',
+            'personalized_change',
+            'generated_change'
         )
     ),
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -91,6 +94,7 @@ CREATE TABLE IF NOT EXISTS mission_ui_actions (
         action_type IN (
             'mission_change_reason',
             'mission_dislike_confirm',
+            'mission_change_method',
             'awaiting_replacement_mission'
         )
     ),

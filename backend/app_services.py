@@ -36,6 +36,7 @@ from database import (
 )
 from demo_mission_messages import attach_mission_message
 from memory_service import extract_and_save_memory
+from mission_personalization import replace_current_mission_after_onboarding
 from mission_ui_action_service import get_active_ui_action, rebuild_ui_action_payload, resolve_mission_ui_action_request
 from starlette.concurrency import run_in_threadpool
 from rag import preload_model
@@ -272,6 +273,7 @@ def save_onboarding_preferences(body: OnboardingPreferencesRequest):
     student_id = profile["student_id"]
     saved = []
     skipped = []
+    disliked_activity_keys = []
 
     for subject in _clean_subjects(body.preferred_activity_keys):
         activity_key = normalize_activity_key(subject)
@@ -290,13 +292,45 @@ def save_onboarding_preferences(body: OnboardingPreferencesRequest):
         memory = upsert_user_memory(student_id, activity_key, "preference", -1)
         if memory:
             saved.append(memory)
+            disliked_activity_keys.append(activity_key)
 
     for subject in _clean_subjects(body.restrictions):
         memory = upsert_user_memory(student_id, subject, "restriction")
         if memory:
             saved.append(memory)
 
-    return {"ok": True, "saved_count": len(saved), "skipped": skipped, "memories": saved}
+    replacement = {
+        "mission_changed": False,
+        "replace_reason": None,
+        "new_mission": None,
+    }
+    try:
+        replacement = replace_current_mission_after_onboarding(student_id, disliked_activity_keys)
+    except Exception as e:
+        print(f"[Onboarding] auto replacement failed: {type(e).__name__}: {e}")
+        replacement = {
+            "mission_changed": False,
+            "replace_reason": None,
+            "new_mission": None,
+            "warning": "onboarding_auto_replace_failed",
+        }
+
+    return {
+        "ok": True,
+        "saved_count": len(saved),
+        "skipped": skipped,
+        "memories": saved,
+        "mission_changed": bool(replacement.get("mission_changed")),
+        "replace_reason": replacement.get("replace_reason"),
+        "new_mission": replacement.get("new_mission"),
+        "replace_check": {
+            "should_replace": replacement.get("should_replace", False),
+            "reason": replacement.get("reason"),
+            "current_mission_id": replacement.get("current_mission_id"),
+            "current_activity_key": replacement.get("current_activity_key"),
+            "warning": replacement.get("warning"),
+        },
+    }
 
 
 def _clean_subjects(values: list[str]) -> list[str]:

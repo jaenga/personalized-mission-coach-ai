@@ -370,11 +370,50 @@ def init_db():
                             'too_hard',
                             'dislike',
                             'cant_do',
-                            'just_change'
+                            'just_change',
+                            'onboarding_auto_replace',
+                            'personalized_change',
+                            'generated_change'
                         )
                     ),
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
+            """)
+            cur.execute("""
+                DO $$
+                DECLARE
+                    constraint_name TEXT;
+                BEGIN
+                    SELECT conname
+                      INTO constraint_name
+                      FROM pg_constraint
+                     WHERE conrelid = 'mission_change_logs'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%reason_type%'
+                     LIMIT 1;
+
+                    IF constraint_name IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE mission_change_logs DROP CONSTRAINT %I',
+                            constraint_name
+                        );
+                    END IF;
+
+                    ALTER TABLE mission_change_logs
+                    ADD CONSTRAINT mission_change_logs_reason_type_check
+                    CHECK (
+                        reason_type IN (
+                            'too_easy',
+                            'too_hard',
+                            'dislike',
+                            'cant_do',
+                            'just_change',
+                            'onboarding_auto_replace',
+                            'personalized_change',
+                            'generated_change'
+                        )
+                    );
+                END $$;
             """)
             cur.execute("""
                 ALTER TABLE mission_change_logs
@@ -415,6 +454,7 @@ def init_db():
                         action_type IN (
                             'mission_change_reason',
                             'mission_dislike_confirm',
+                            'mission_change_method',
                             'awaiting_replacement_mission'
                         )
                     ),
@@ -425,6 +465,38 @@ def init_db():
                     resolved_at TIMESTAMPTZ,
                     expires_at TIMESTAMPTZ
                 )
+            """)
+            cur.execute("""
+                DO $$
+                DECLARE
+                    constraint_name TEXT;
+                BEGIN
+                    SELECT conname
+                      INTO constraint_name
+                      FROM pg_constraint
+                     WHERE conrelid = 'mission_ui_actions'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%action_type%'
+                     LIMIT 1;
+
+                    IF constraint_name IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE mission_ui_actions DROP CONSTRAINT %I',
+                            constraint_name
+                        );
+                    END IF;
+
+                    ALTER TABLE mission_ui_actions
+                    ADD CONSTRAINT mission_ui_actions_action_type_check
+                    CHECK (
+                        action_type IN (
+                            'mission_change_reason',
+                            'mission_dislike_confirm',
+                            'mission_change_method',
+                            'awaiting_replacement_mission'
+                        )
+                    );
+                END $$;
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_mission_ui_actions_active
@@ -2347,6 +2419,9 @@ VALID_MISSION_CHANGE_REASON_TYPES = {
     "dislike",
     "cant_do",
     "just_change",
+    "onboarding_auto_replace",
+    "personalized_change",
+    "generated_change",
 }
 
 
@@ -2477,9 +2552,245 @@ def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) 
 
 # ── 버튼/명시적 UI 액션 ───────────────────────────────────────────────────────
 
+VALID_GENERATED_MISSION_STATUSES = {"draft", "approved", "rejected", "archived", "assigned", "generated_success"}
+
+
+def insert_generated_mission(generated: dict) -> dict | None:
+    """Insert an internally validated real-time generated mission into missions."""
+    if not isinstance(generated, dict):
+        return None
+
+    activity_key = normalize_activity_key(generated.get("activity_key"))
+    if not activity_key:
+        return None
+
+    mission_name = " ".join(str(generated.get("mission_name") or "").split())
+    mission_rule = str(generated.get("mission_rule") or "").strip()
+    if not mission_name or not mission_rule:
+        return None
+
+    difficulty = str(generated.get("difficulty") or "easy").strip().lower()
+    if difficulty not in {"easy", "medium", "hard"}:
+        difficulty = "easy"
+
+    reward_xp = generated.get("reward_xp")
+    try:
+        reward_xp = int(reward_xp)
+    except (TypeError, ValueError):
+        reward_xp = {"easy": 5, "medium": 10, "hard": 12}[difficulty]
+
+    mission_group = " ".join(str(generated.get("mission_group") or "").split()) or None
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO missions (
+                    mission_name,
+                    category,
+                    mission_description,
+                    difficulty,
+                    is_active,
+                    main_category,
+                    sub_category,
+                    mission_location,
+                    reward_xp,
+                    mission_group,
+                    mission_rule,
+                    activity_key
+                )
+                VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING mission_id, mission_name, category, difficulty,
+                          main_category, sub_category, mission_location,
+                          reward_xp, mission_group, mission_rule, activity_key
+                """,
+                (
+                    mission_name,
+                    generated.get("main_category"),
+                    mission_rule,
+                    difficulty,
+                    generated.get("main_category"),
+                    generated.get("sub_category"),
+                    generated.get("mission_location"),
+                    reward_xp,
+                    mission_group,
+                    mission_rule,
+                    activity_key,
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def save_generated_mission_assignment(
+    student_id: int,
+    generated: dict,
+    mission_id: int,
+    source_reason: str | None = None,
+    status: str = "assigned",
+) -> dict | None:
+    """Save generated_missions as assignment/audit history, not an admin review queue."""
+    if status not in VALID_GENERATED_MISSION_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+    if not student_id or not mission_id or not isinstance(generated, dict):
+        return None
+
+    activity_key = normalize_activity_key(generated.get("activity_key"))
+    if not activity_key:
+        return None
+
+    mission_name = " ".join(str(generated.get("mission_name") or "").split())
+    if not mission_name:
+        return None
+
+    difficulty = str(generated.get("difficulty") or "easy").strip().lower()
+    if difficulty not in {"easy", "medium", "hard"}:
+        difficulty = "easy"
+
+    reason = "real_time_generated_change"
+    if source_reason:
+        reason = f"{reason}: {source_reason}"
+    reason = f"{reason}; mission_id={mission_id}"
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO generated_missions (
+                    student_id,
+                    mission_name,
+                    mission_rule,
+                    activity_keys,
+                    difficulty,
+                    source_reason,
+                    status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    student_id,
+                    mission_name,
+                    generated.get("mission_rule") or "",
+                    [activity_key],
+                    difficulty,
+                    reason,
+                    status,
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def save_generated_mission_draft(
+    student_id: int,
+    mission_title: str,
+    mission_description: str | None,
+    activity_keys: list[str],
+    difficulty: str | None = None,
+    generation_reason: str | None = None,
+    source: str = "background_personalized",
+) -> dict | None:
+    """Save a generated mission as draft only; never assign it to today's mission."""
+    title = (mission_title or "").strip()
+    if not student_id or not title:
+        return None
+
+    valid_keys = []
+    seen = set()
+    for key in activity_keys or []:
+        normalized = normalize_activity_key(key)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            valid_keys.append(normalized)
+    if not valid_keys:
+        return None
+
+    normalized_difficulty = (difficulty or "normal").strip().lower()
+    if normalized_difficulty == "medium":
+        normalized_difficulty = "normal"
+    if normalized_difficulty not in {"easy", "normal", "hard"}:
+        normalized_difficulty = "normal"
+
+    source_reason = (generation_reason or "").strip()
+    if source:
+        source_reason = f"{source}: {source_reason}" if source_reason else source
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO generated_missions (
+                    student_id,
+                    mission_name,
+                    mission_rule,
+                    activity_keys,
+                    difficulty,
+                    source_reason,
+                    status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, 'draft')
+                RETURNING *
+                """,
+                (
+                    student_id,
+                    title,
+                    mission_description or "",
+                    valid_keys,
+                    normalized_difficulty,
+                    source_reason,
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def list_generated_mission_drafts(student_id: int, status: str = "draft") -> list[dict]:
+    if status not in VALID_GENERATED_MISSION_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, student_id, mission_name, mission_rule, activity_keys,
+                       difficulty, source_reason, status, created_at
+                FROM generated_missions
+                WHERE student_id = %s
+                  AND status = %s
+                ORDER BY created_at DESC, id DESC
+                """,
+                (student_id, status),
+            )
+            rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def mark_generated_mission_status(generated_mission_id: int, status: str) -> dict | None:
+    if status not in VALID_GENERATED_MISSION_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE generated_missions
+                SET status = %s
+                WHERE id = %s
+                RETURNING *
+                """,
+                (status, generated_mission_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
 VALID_MISSION_UI_ACTION_TYPES = {
     "mission_change_reason",
     "mission_dislike_confirm",
+    "mission_change_method",
     "awaiting_replacement_mission",
 }
 

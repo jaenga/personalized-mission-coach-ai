@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS mission_change_logs (
             'too_hard',
             'dislike',
             'cant_do',
-            'just_change'
+            'just_change',
+            'onboarding_auto_replace',
+            'personalized_change',
+            'generated_change'
         )
     ),
     created_at TIMESTAMPTZ DEFAULT NOW()

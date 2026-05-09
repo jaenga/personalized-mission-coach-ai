@@ -1295,6 +1295,7 @@ async def _cleanup_completed_mission_change(student_id: int | None, session_id: 
         if active and active.get("action_type") in {
             "mission_change_reason",
             "mission_dislike_confirm",
+            "mission_change_method",
             "awaiting_replacement_mission",
         }:
             await run_in_threadpool(
@@ -1654,7 +1655,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 if accepted_result:
                     return accepted_result
 
-            if action_type in ("mission_change_reason", "mission_dislike_confirm"):
+            if action_type in ("mission_change_reason", "mission_dislike_confirm", "mission_change_method"):
                 # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
                 print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
                 block_message = "아래 선택지 중 하나를 골라줘!"
@@ -2156,7 +2157,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                         yield _done_sse(accepted_result.get("ui_action"), accepted_result.get("debug"))
                         return
 
-                if action_type in ("mission_change_reason", "mission_dislike_confirm"):
+                if action_type in ("mission_change_reason", "mission_dislike_confirm", "mission_change_method"):
                     # 버튼 대기 중 → 일반 채팅 차단, 기존 버튼 재전달
                     print(f"[UiActionGuard] blocking chat, active action_type={action_type} action_id={active_ui.get('action_id')}")
                     block_message = "아래 선택지 중 하나를 골라줘!"

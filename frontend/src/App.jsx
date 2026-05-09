@@ -539,13 +539,23 @@ export default function App() {
     setOnboardingSaving(true);
     setOnboardingError("");
     try {
-      await saveOnboardingPreferences({
+      const result = await saveOnboardingPreferences({
         session_id: sessionId,
         preferred_activity_keys: values.preferred_activity_keys,
         disliked_activity_keys: values.disliked_activity_keys,
         restrictions: values.restrictions,
       });
+      if (result?.mission_changed === true) {
+        fetchMissionByStudent(profile.student_id)
+          .then(setMission)
+          .catch(() => {});
+      }
       localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
+      setToastMessage(
+        result?.mission_changed === true
+          ? "입력한 정보를 반영해서 오늘 미션을 바꿨어!"
+          : "선호 정보가 저장됐어요!"
+      );
       return true;
     } catch (err) {
       setOnboardingError(err.message);

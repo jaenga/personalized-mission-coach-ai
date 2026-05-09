@@ -22,7 +22,7 @@ from executor import (
     execute_cancel,
     execute_submit,
 )
-from mission_ui_action_service import create_mission_dislike_confirm_action
+from mission_ui_action_service import create_mission_change_method_action, create_mission_dislike_confirm_action
 from ollama_client import generate_json_message
 
 
@@ -485,6 +485,28 @@ async def _handle_mission_change_reason(
             decision="dislike",
             status="chained_dislike",
             message_hint=_MISSION_DISLIKE_PENDING_HINT,
+            pending_id=pending_id,
+            exec_results=exec_results,
+            ui_action=ui_action,
+        )
+
+    if reason == "just_change":
+        await run_in_threadpool(resolve_pending, pending_id, "accepted")
+        method_payload = {
+            "mission_id": mission_id,
+            "mission_name": payload.get("mission_name", ""),
+            "mission_rule": payload.get("mission_rule", ""),
+            "activity_key": activity_key,
+            "reason_type": "just_change",
+            "source_reason": "just_change",
+            "original_user_message": user_message,
+        }
+        ui_action = await create_mission_change_method_action(student_id, session_id, method_payload)
+        return PendingOutcome(
+            action_type="mission_change_reason",
+            decision="just_change",
+            status="chained_method",
+            message_hint="어떤 방식으로 바꿔볼까?",
             pending_id=pending_id,
             exec_results=exec_results,
             ui_action=ui_action,

@@ -14,6 +14,12 @@ from database import (
     upsert_user_memory,
 )
 from executor import ExecResults, execute_adjustment
+from mission_generator import generate_realtime_personalized_mission
+from mission_personalization import (
+    assign_generated_mission_to_today,
+    calculate_personalization_profile,
+    replace_with_personalized_mission,
+)
 from ollama_client import generate_chat_message
 from response_builder import build_action_ack
 
@@ -67,6 +73,11 @@ MISSION_DISLIKE_CONFIRM_BUTTONS = [
     {"value": "change", "label": "다른 미션으로 바꿔줘"},
 ]
 
+MISSION_CHANGE_METHOD_BUTTONS = [
+    {"value": "personalized_change", "label": "추천 미션으로 바꾸기"},
+    {"value": "generate_new", "label": "새 미션 만들어보기"},
+]
+
 def rebuild_ui_action_payload(active_ui: dict) -> dict:
     """DB row를 받아 action_type에 맞는 버튼 목록을 재조합해 ui_action payload를 반환한다."""
     action_type = active_ui.get("action_type", "")
@@ -75,6 +86,8 @@ def rebuild_ui_action_payload(active_ui: dict) -> dict:
         return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_CHANGE_REASON_BUTTONS}
     if action_type == "mission_dislike_confirm":
         return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_DISLIKE_CONFIRM_BUTTONS}
+    if action_type == "mission_change_method":
+        return {"action_id": action_id, "type": action_type, "lock_chat": True, "buttons": MISSION_CHANGE_METHOD_BUTTONS}
     payload = active_ui.get("payload") if isinstance(active_ui.get("payload"), dict) else {}
     return {"action_id": action_id, "type": action_type, "lock_chat": False, "buttons": [], "payload": payload}
 
@@ -82,6 +95,7 @@ def rebuild_ui_action_payload(active_ui: dict) -> dict:
 UI_ACTION_ALLOWED_VALUES = {
     "mission_change_reason": {button["value"] for button in MISSION_CHANGE_REASON_BUTTONS},
     "mission_dislike_confirm": {button["value"] for button in MISSION_DISLIKE_CONFIRM_BUTTONS},
+    "mission_change_method": {button["value"] for button in MISSION_CHANGE_METHOD_BUTTONS},
 }
 
 
@@ -132,6 +146,22 @@ async def create_mission_dislike_confirm_action(
         "pending",
     )
     return _ui_action_payload(row, MISSION_DISLIKE_CONFIRM_BUTTONS, lock_chat=True)
+
+
+async def create_mission_change_method_action(
+    student_id: int,
+    session_id: str,
+    payload: dict,
+) -> dict:
+    row = await run_in_threadpool(
+        save_mission_ui_action,
+        student_id,
+        session_id,
+        "mission_change_method",
+        payload,
+        "pending",
+    )
+    return _ui_action_payload(row, MISSION_CHANGE_METHOD_BUTTONS, lock_chat=True)
 
 
 async def create_replacement_mission_input_action(
@@ -250,6 +280,82 @@ async def _save_reason_memory(student_id: int, payload: dict, reason_type: str, 
     return None
 
 
+def _current_mission_id(payload: dict) -> int | None:
+    try:
+        return int(payload.get("mission_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _personalized_change_message(result: dict) -> str:
+    if result.get("mission_changed") and result.get("new_mission"):
+        mission_name = result["new_mission"].get("mission_name") or "새 미션"
+        return f'너한테 더 잘 맞는 미션으로 바꿨어! 오늘 미션은 "{mission_name}"야.'
+    reason = result.get("reason")
+    if reason == "current mission already submitted today":
+        return "오늘 미션 결과를 이미 제출해서 지금은 바꿀 수 없어. 바꾸고 싶으면 먼저 기록을 취소해줘!"
+    if reason == "current mission was already changed today":
+        return "오늘은 이미 미션을 한 번 바꿨어. 지금 미션으로 함께 가보자!"
+    if reason == "current mission has already changed":
+        mission = (result.get("new_mission") or {}).get("mission_name")
+        if mission:
+            return f'이미 오늘 미션이 바뀌어 있어. 지금 미션은 "{mission}"야.'
+    return "지금 조건에 안전하게 맞는 다른 추천 미션을 찾지 못했어. 오늘은 현재 미션으로 진행해보자."
+
+
+async def _resolve_personalized_change(student_id: int, payload: dict) -> tuple[str, dict]:
+    result = await run_in_threadpool(
+        replace_with_personalized_mission,
+        student_id,
+        _current_mission_id(payload),
+        {"source_reason": payload.get("source_reason") or "personalized_change"},
+    )
+    return _personalized_change_message(result), result
+
+
+async def _resolve_generate_new(student_id: int, payload: dict) -> tuple[str, dict]:
+    waiting = "새 미션을 만들어보고 있어. 잠깐만 기다려줘!"
+    current_mission_id = _current_mission_id(payload)
+    debug: dict = {"generation_status": "started"}
+
+    try:
+        profile = await run_in_threadpool(calculate_personalization_profile, student_id)
+        generated = await generate_realtime_personalized_mission(profile, max_attempts=2, timeout=80.0)
+        if generated:
+            assigned = await run_in_threadpool(
+                assign_generated_mission_to_today,
+                student_id,
+                generated,
+                current_mission_id,
+                payload.get("source_reason") or "generate_new",
+            )
+            debug = {"generation_status": "validated", "assigned": assigned}
+            if assigned.get("mission_changed") and assigned.get("new_mission"):
+                mission_name = assigned["new_mission"].get("mission_name") or generated.get("mission_name")
+                return f'{waiting}\n\n새 미션을 만들어봤어! 오늘 미션은 "{mission_name}"야.', debug
+            debug["generation_status"] = "assign_failed"
+        else:
+            debug["generation_status"] = "validation_failed"
+    except Exception as exc:
+        print(f"[UiAction] generate_new failed: {type(exc).__name__}: {exc}")
+        debug = {"generation_status": "exception", "error_type": type(exc).__name__}
+
+    fallback_result = await run_in_threadpool(
+        replace_with_personalized_mission,
+        student_id,
+        current_mission_id,
+        {"source_reason": "generate_new_fallback"},
+    )
+    debug["fallback"] = fallback_result
+    if fallback_result.get("mission_changed") and fallback_result.get("new_mission"):
+        mission_name = fallback_result["new_mission"].get("mission_name") or "추천 미션"
+        return (
+            f'{waiting}\n\n새로 만들기는 조금 어려워서, 대신 너한테 잘 맞는 추천 미션으로 바꿨어! '
+            f'오늘 미션은 "{mission_name}"야.'
+        ), debug
+    return f"{waiting}\n\n새 미션 만들기가 잘 안 됐고, 지금 조건에 맞는 추천 미션도 찾지 못했어. 오늘은 현재 미션으로 진행해보자.", debug
+
+
 async def resolve_mission_ui_action_request(action_id: str, session_id: str, value: str) -> dict:
     profile = await run_in_threadpool(fetch_profile, session_id)
     if not profile:
@@ -305,17 +411,20 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
             }
 
         if value == "just_change":
-            await _log_change_reason(student_id, action, "just_change")
-            response, exec_results = await _execute_adjustment_response(student_id, "change")
+            next_payload = {
+                **payload,
+                "source_reason": "just_change",
+            }
+            ui_action = await create_mission_change_method_action(student_id, session_id, next_payload)
             return {
-                "response": response,
+                "response": "어떤 방식으로 바꿔볼까?",
                 "mission_completed": False,
-                "ui_action": None,
+                "ui_action": ui_action,
                 "debug": {
                     "intent": "MISSION_UI_ACTION",
                     "ui_action_type": action_type,
                     "ui_action_value": value,
-                    "adjustment_status": exec_results.adjustment.status.value if exec_results.adjustment else None,
+                    "next_ui_action_type": "mission_change_method",
                 },
             }
 
@@ -373,7 +482,7 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
             }
 
         if value == "change":
-            response, exec_results = await _execute_adjustment_response(student_id, "change")
+            response, result = await _resolve_personalized_change(student_id, payload)
             return {
                 "response": response,
                 "mission_completed": False,
@@ -382,7 +491,39 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                     "intent": "MISSION_UI_ACTION",
                     "ui_action_type": action_type,
                     "ui_action_value": value,
-                    "adjustment_status": exec_results.adjustment.status.value if exec_results.adjustment else None,
+                    "method": "personalized_change",
+                    "result": result,
+                },
+            }
+
+    if action_type == "mission_change_method":
+        if value == "personalized_change":
+            response, result = await _resolve_personalized_change(student_id, payload)
+            return {
+                "response": response,
+                "mission_completed": False,
+                "ui_action": None,
+                "debug": {
+                    "intent": "MISSION_UI_ACTION",
+                    "ui_action_type": action_type,
+                    "ui_action_value": value,
+                    "method": "personalized_change",
+                    "result": result,
+                },
+            }
+
+        if value == "generate_new":
+            response, debug = await _resolve_generate_new(student_id, payload)
+            return {
+                "response": response,
+                "mission_completed": False,
+                "ui_action": None,
+                "debug": {
+                    "intent": "MISSION_UI_ACTION",
+                    "ui_action_type": action_type,
+                    "ui_action_value": value,
+                    "method": "generate_new",
+                    **debug,
                 },
             }
 
