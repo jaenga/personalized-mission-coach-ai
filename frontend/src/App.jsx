@@ -460,14 +460,9 @@ export default function App() {
     goBack(SCREENS.ONBOARD_INFO);
   }
 
-  async function handleReset() {
+  function resetLocalSession() {
     // 채팅 스트리밍 중이어도 로그아웃은 항상 통과시킴 — 진행 중인 요청은 그냥 버려짐.
     setLoading(false);
-    try {
-      await clearChatHistory(sessionId);
-    } catch {
-      // 삭제 실패해도 초기화 진행
-    }
     localStorage.removeItem("user_profile");
     // 클라 잔여 캐시(예: 옛 빌드 흔적) 정리만.
     localStorage.removeItem("tommy_lesson_progress");
@@ -496,6 +491,19 @@ export default function App() {
     setReviewModal(null);
     setToastMessage("");
     resetTo(SCREENS.LOGIN);
+  }
+
+  function handleLogout() {
+    resetLocalSession();
+  }
+
+  async function handleWithdraw() {
+    try {
+      await clearChatHistory(sessionId);
+    } catch {
+      // 삭제 실패해도 탈퇴 흐름은 진행
+    }
+    resetLocalSession();
   }
 
   async function handleSaveOnboardingPreferences(values) {
@@ -914,8 +922,8 @@ export default function App() {
           streakDays={stats.streak_days || 0}
           onBack={() => goBack(SCREENS.HOME)}
           onOpenHealthNote={() => goTo(SCREENS.SETTINGS_HEALTH_EDIT)}
-          onLogout={handleReset}
-          onWithdraw={handleReset}
+          onLogout={handleLogout}
+          onWithdraw={handleWithdraw}
           onNavigate={navHandler(SCREENS.SETTINGS)}
         />
       );

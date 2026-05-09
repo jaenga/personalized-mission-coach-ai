@@ -180,6 +180,7 @@ export default function Settings({
   const [missionNoti, setMissionNoti] = useState(false);
   const [coachNoti, setCoachNoti] = useState(false);
   const [streakNoti, setStreakNoti] = useState(false);
+  const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
 
   return (
     <div
@@ -334,12 +335,99 @@ export default function Settings({
             label="탈퇴"
             icon={<IconBox src={warningImg} bg="#FFDFB8" size={27} />}
             right={<ChevronRight />}
-            onClick={onWithdraw}
+            onClick={() => setWithdrawConfirmOpen(true)}
           />
         </SectionCard>
       </div>
 
       <BottomNav active="settings" onChange={(key) => onNavigate?.(key)} />
+
+      {withdrawConfirmOpen && (
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{
+            zIndex: 20,
+            padding: 24,
+            background: "rgba(42, 30, 24, 0.28)",
+          }}
+        >
+          <div
+            className="font-sejong"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="withdraw-confirm-title"
+            style={{
+              width: "100%",
+              maxWidth: 318,
+              borderRadius: 24,
+              background: "#FFF8F0",
+              border: "1px solid rgba(227, 93, 73, 0.32)",
+              boxShadow: "0 16px 36px rgba(80, 60, 40, 0.18)",
+              padding: "24px 20px 18px",
+              textAlign: "center",
+              letterSpacing: "-0.43px",
+            }}
+          >
+            <img
+              src={warningImg}
+              alt=""
+              draggable="false"
+              className="mx-auto select-none pointer-events-none"
+              style={{ width: 54, height: 54, objectFit: "contain" }}
+            />
+            <h2
+              id="withdraw-confirm-title"
+              className="mt-3"
+              style={{ fontSize: 19, fontWeight: 700, color: "#1f1f1f", lineHeight: "26px" }}
+            >
+              정말 탈퇴하시겠습니까?
+            </h2>
+            <p
+              className="mt-2"
+              style={{ fontSize: 13, color: "#6f6862", lineHeight: "20px", wordBreak: "keep-all" }}
+            >
+              탈퇴하면 대화내역이 사라집니다.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setWithdrawConfirmOpen(false)}
+                className="flex-1 font-sejong transition-transform active:scale-[0.98]"
+                style={{
+                  height: 42,
+                  borderRadius: 999,
+                  border: "1.5px solid #E9C8BD",
+                  background: "#FFFFFF",
+                  color: "#6f6862",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWithdrawConfirmOpen(false);
+                  onWithdraw?.();
+                }}
+                className="flex-1 font-sejong transition-transform active:scale-[0.98]"
+                style={{
+                  height: 42,
+                  borderRadius: 999,
+                  border: "none",
+                  background: "#E35D49",
+                  color: "#FFFFFF",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                탈퇴하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
