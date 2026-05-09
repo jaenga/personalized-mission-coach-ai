@@ -77,6 +77,7 @@ function PlaceholderStep({ title, onNext }) {
 
 export default function OnboardingFlow({
   onInfoSubmit,
+  onInfoBack,
   onHealthSubmit,
   onHealthSkip,
   onPreferencesSubmit,
@@ -122,6 +123,7 @@ export default function OnboardingFlow({
           onInfoSubmit?.(info);
           setStep(STEPS.APP_INTRO);
         }}
+        onBack={onInfoBack}
         loading={false}
         error=""
       />

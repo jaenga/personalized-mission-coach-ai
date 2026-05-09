@@ -9,14 +9,14 @@ export default function Login({ onStart }) {
           alt=""
           aria-hidden="true"
           className="absolute"
-          style={{ left: 176, top: 114, width: 49, height: 26 }}
+          style={{ left: 176, top: 94, width: 49, height: 26 }}
         />
 
         <h1
           className="absolute font-jeju text-tomato text-center"
           style={{
             left: 83,
-            top: 136,
+            top: 116,
             width: 236,
             height: 57,
             fontSize: 50,
@@ -32,7 +32,7 @@ export default function Login({ onStart }) {
           className="absolute font-sejong text-gray-700 text-center"
           style={{
             left: 98,
-            top: 193,
+            top: 173,
             width: 206,
             height: 15,
             fontSize: 15,
@@ -49,7 +49,7 @@ export default function Login({ onStart }) {
           className="absolute pointer-events-none"
           style={{
             left: 33,
-            top: 358,
+            top: 338,
             width: 35,
             height: 25,
             transform: "rotate(-45deg)",
@@ -68,7 +68,7 @@ export default function Login({ onStart }) {
 
         <div
           className="absolute select-none pointer-events-none tomato-float"
-          style={{ left: 53, top: 256, width: 296, height: 268 }}
+          style={{ left: 53, top: 236, width: 296, height: 268 }}
         >
           <img
             src={tomatoMain}
@@ -84,7 +84,7 @@ export default function Login({ onStart }) {
           className="absolute"
           style={{
             left: 102,
-            top: 506,
+            top: 486,
             width: 205,
             height: 32,
             background:
@@ -100,7 +100,7 @@ export default function Login({ onStart }) {
           className="absolute bg-tomato text-white font-sejong shadow-md active:scale-[0.98] hover:bg-tomato-dark transition flex items-center justify-center"
           style={{
             left: 56,
-            top: 593,
+            top: 573,
             width: 290,
             height: 59,
             borderRadius: 50,

@@ -404,6 +404,30 @@ export default function App() {
     }, 1200);
   }
 
+  function handleSignupBack() {
+    setPendingSignup(null);
+    setSignupFarewell(false);
+    setLoginError("");
+    resetTo(SCREENS.LOGIN);
+  }
+
+  function handleInfoBack() {
+    localStorage.removeItem("user_profile");
+    setProfile(null);
+    setMission(null);
+    setStats({ streak_days: 0, success_dates: [] });
+    setMessages([]);
+    setDebugMap({});
+    setSelectedDebugId(null);
+    setExtraInfo(null);
+    setHealthNote(null);
+    setAppStateLoaded(false);
+    setMissionLoaded(false);
+    setOnboardingCompletedThisSession(false);
+    setOnboardingError("");
+    resetTo(SCREENS.SIGNUP);
+  }
+
   function handleInfoSubmit(info) {
     setExtraInfo(info);
   }
@@ -790,6 +814,7 @@ export default function App() {
           farewell={signupFarewell}
           onConfirmSignup={handleConfirmSignup}
           onCancelSignup={handleCancelSignup}
+          onBack={handleSignupBack}
         />
       );
 
@@ -797,6 +822,7 @@ export default function App() {
       return (
         <OnboardingFlow
           onInfoSubmit={handleInfoSubmit}
+          onInfoBack={handleInfoBack}
           onHealthSubmit={handleHealthSubmit}
           onHealthSkip={handleHealthSkip}
           onPreferencesSubmit={handleSaveOnboardingPreferences}
@@ -810,6 +836,7 @@ export default function App() {
       return (
         <OnboardingFlow
           onInfoSubmit={handleInfoSubmit}
+          onInfoBack={handleInfoBack}
           onHealthSubmit={handleHealthSubmit}
           onHealthSkip={handleHealthSkip}
           onPreferencesSubmit={handleSaveOnboardingPreferences}
@@ -823,6 +850,7 @@ export default function App() {
       return (
         <OnboardingFlow
           onInfoSubmit={handleInfoSubmit}
+          onInfoBack={handleInfoBack}
           onHealthSubmit={handleHealthSubmit}
           onHealthSkip={handleHealthSkip}
           onPreferencesSubmit={handleSaveOnboardingPreferences}
@@ -836,6 +864,7 @@ export default function App() {
       return (
         <OnboardingFlow
           onInfoSubmit={handleInfoSubmit}
+          onInfoBack={handleInfoBack}
           onHealthSubmit={handleHealthSubmit}
           onHealthSkip={handleHealthSkip}
           onPreferencesSubmit={handleSaveOnboardingPreferences}

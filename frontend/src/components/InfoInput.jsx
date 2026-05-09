@@ -7,7 +7,7 @@ function formatBirth(iso) {
   return `${y}. ${m}. ${d}`;
 }
 
-export default function InfoInput({ onSubmit, loading, error }) {
+export default function InfoInput({ onSubmit, onBack, loading, error }) {
   const [birth, setBirth] = useState("");
   const [gender, setGender] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
@@ -29,11 +29,33 @@ export default function InfoInput({ onSubmit, loading, error }) {
 
   return (
     <div className="mobile-frame" style={{ background: "#FFF3E7" }}>
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label="이전 화면으로 돌아가기"
+        className="absolute flex items-center justify-center"
+        style={{
+          left: 18,
+          top: 24,
+          width: 38,
+          height: 38,
+          borderRadius: "50%",
+          border: "none",
+          background: "rgba(255, 255, 255, 0.65)",
+          color: "#E35D49",
+          cursor: "pointer",
+        }}
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 6 L9 12 L15 18" />
+        </svg>
+      </button>
+
       <div
         className="absolute bg-white flex items-center justify-center text-center px-4"
         style={{
           left: 68,
-          top: 221,
+          top: 201,
           width: 265,
           height: 65.57,
           borderRadius: 14,
@@ -60,7 +82,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
       <svg
         aria-hidden="true"
         className="absolute"
-        style={{ left: 188, top: 285, width: 23, height: 16 }}
+        style={{ left: 188, top: 265, width: 23, height: 16 }}
         viewBox="0 0 23 16"
         fill="none"
       >
@@ -79,7 +101,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
         className="absolute pointer-events-none"
         style={{
           left: 253,
-          top: 353,
+          top: 333,
           width: 21,
           height: 25,
           transform: "rotate(45deg)",
@@ -101,13 +123,13 @@ export default function InfoInput({ onSubmit, loading, error }) {
         alt="토미 캐릭터"
         draggable="false"
         className="absolute select-none pointer-events-none"
-        style={{ left: 144, top: 320, width: 114, height: 107, objectFit: "contain" }}
+        style={{ left: 144, top: 300, width: 114, height: 107, objectFit: "contain" }}
       />
 
       <div
         aria-hidden="true"
         className="absolute rounded-full bg-black/15 blur-[4px]"
-        style={{ left: 164, top: 421, width: 74, height: 12 }}
+        style={{ left: 164, top: 401, width: 74, height: 12 }}
       />
 
       <form onSubmit={handleSubmit}>
@@ -122,7 +144,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
           }}
           style={{
             left: 56,
-            top: 472,
+            top: 452,
             width: 290,
             height: 45,
             borderRadius: 50,
@@ -164,7 +186,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
           className="absolute flex gap-2"
           style={{
             left: 56,
-            top: 526,
+            top: 506,
             width: 290,
             height: 45,
             opacity: isPrivate ? 0.5 : 1,
@@ -206,7 +228,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
           className={`signup-submit absolute text-white font-sejong shadow-md flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${loading ? "is-loading" : ""}`}
           style={{
             left: 56,
-            top: 580,
+            top: 560,
             width: 290,
             height: 45,
             borderRadius: 50,
@@ -228,7 +250,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
 
         <label
           className="absolute flex items-center gap-1.5 cursor-pointer select-none"
-          style={{ left: 89, top: 638 }}
+          style={{ left: 89, top: 618 }}
         >
           <input
             type="checkbox"
@@ -266,7 +288,7 @@ export default function InfoInput({ onSubmit, loading, error }) {
           className="absolute text-center text-red-500 font-sejong"
           style={{
             left: 56,
-            top: 660,
+            top: 640,
             width: 290,
             fontSize: 13,
             letterSpacing: "-0.43px",

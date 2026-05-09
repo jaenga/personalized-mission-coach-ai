@@ -9,6 +9,7 @@ export default function Signup({
   farewell,
   onConfirmSignup,
   onCancelSignup,
+  onBack,
 }) {
   const [name, setName] = useState("");
   const [phone4, setPhone4] = useState("");
@@ -23,11 +24,33 @@ export default function Signup({
 
   return (
     <div className="mobile-frame" style={{ background: "#FFF3E7" }}>
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label="처음 화면으로 돌아가기"
+        className="absolute flex items-center justify-center"
+        style={{
+          left: 18,
+          top: 24,
+          width: 38,
+          height: 38,
+          borderRadius: "50%",
+          border: "none",
+          background: "rgba(255, 255, 255, 0.65)",
+          color: "#E35D49",
+          cursor: "pointer",
+        }}
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 6 L9 12 L15 18" />
+        </svg>
+      </button>
+
       <div
         className="absolute bg-white flex items-center justify-center px-4"
         style={{
           left: 109.5,
-          top: 229,
+          top: 209,
           width: 183,
           height: 42,
           borderRadius: 14,
@@ -50,7 +73,7 @@ export default function Signup({
       <svg
         aria-hidden="true"
         className="absolute"
-        style={{ left: 193, top: 269, width: 16, height: 14 }}
+        style={{ left: 193, top: 249, width: 16, height: 14 }}
         viewBox="0 0 16 14"
         fill="none"
       >
@@ -69,7 +92,7 @@ export default function Signup({
         className="absolute pointer-events-none"
         style={{
           left: 253,
-          top: 333,
+          top: 313,
           width: 21,
           height: 25,
           transform: "rotate(45deg)",
@@ -91,20 +114,20 @@ export default function Signup({
         alt="토미 캐릭터"
         draggable="false"
         className="absolute select-none pointer-events-none"
-        style={{ left: 144, top: 300, width: 114, height: 107, objectFit: "contain" }}
+        style={{ left: 144, top: 280, width: 114, height: 107, objectFit: "contain" }}
       />
 
       <div
         aria-hidden="true"
         className="absolute rounded-full bg-black/15 blur-[4px]"
-        style={{ left: 164, top: 401, width: 74, height: 12 }}
+        style={{ left: 164, top: 381, width: 74, height: 12 }}
       />
 
       <p
         className="absolute font-sejong text-center text-gray-700"
         style={{
           left: 56,
-          top: 440,
+          top: 420,
           width: 290,
           fontSize: 13,
           fontWeight: 400,
@@ -124,7 +147,7 @@ export default function Signup({
           className="signup-input absolute outline-none font-sejong"
           style={{
             left: 56,
-            top: 472,
+            top: 452,
             width: 290,
             height: 45,
             borderRadius: 50,
@@ -152,7 +175,7 @@ export default function Signup({
           className="signup-input absolute outline-none font-sejong"
           style={{
             left: 56,
-            top: 526,
+            top: 506,
             width: 290,
             height: 45,
             borderRadius: 50,
@@ -176,7 +199,7 @@ export default function Signup({
           className={`signup-submit absolute text-white font-sejong shadow-md flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${loading ? "is-loading" : ""}`}
           style={{
             left: 56,
-            top: 580,
+            top: 560,
             width: 290,
             height: 45,
             borderRadius: 50,
