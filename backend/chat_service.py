@@ -709,7 +709,7 @@ def _identity_response() -> str:
 
 
 _AI_OUTPUT_RE = re.compile(
-    r"인공지능|AI\s*(?:야|이야|이에요|입니다|예요|모델)|챗봇|언어\s*모델|대규모\s*언어\s*모델|LLM|GPT|Gemma|gemma|젬마|구글|딥마인드",
+    r"인공지능|AI\s*(?:야|이야|이에요|입니다|예요|모델)|챗봇|언어\s*모델|대규모\s*언어\s*모델|\bLLM\b|\bGPT\b|\bGemma\b|(?<!\w)gemma(?!\w)|젬마|딥마인드",
     re.IGNORECASE,
 )
 _OFFTOPIC_RE = re.compile(
