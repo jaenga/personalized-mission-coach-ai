@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from database import _kst_today, get_student_mission_db, get_user_history_db, resolve_mission_query_date
 from category_prompts import get_category_equivalency_prompt
+from prompts import EQUIVALENCY_JUDGE_PROMPT
 from executor import (
     SubmitStatus, SubmitResult,
     AdjustmentStatus, AdjustmentResult,
@@ -170,6 +171,37 @@ def build_equivalency_hint(student_id: int, fn_args: dict) -> str:
         lines.append(f"수행 규칙: {mission['mission_rule']}")
     lines.append(f"\n{category_prompt}")
     return "\n".join(lines)
+
+
+def build_equivalency_judge_prompt(student_id: int, fn_args: dict) -> str | None:
+    """판정용 LLM 시스템 프롬프트 구성. 미션 없으면 None 반환."""
+    today = _kst_today()
+    mission = get_student_mission_db(student_id, today)
+    if not mission:
+        return None
+
+    category_prompt = get_category_equivalency_prompt(
+        mission.get("main_category"),
+        mission.get("sub_category"),
+    )
+    lines = [
+        EQUIVALENCY_JUDGE_PROMPT,
+        "",
+        f"미션명: {mission.get('mission_name', '')}",
+    ]
+    if mission.get("mission_rule"):
+        lines.append(f"수행 규칙: {mission['mission_rule']}")
+    lines.append(f"\n{category_prompt}")
+    return "\n".join(lines)
+
+
+def build_equivalency_result_hint(judgment: dict) -> str:
+    """판정 결과를 Gemma 응답용 hint 텍스트로 변환."""
+    if judgment.get("need_clarification"):
+        return "아이가 어떤 대체 행동을 하려는지 불명확해. 구체적으로 어떤 행동인지 한 문장으로만 되물어봐."
+    if judgment.get("approved"):
+        return "아이의 대체 수행이 인정됐어. 미션 성공으로 기록됐어. 아이를 짧고 따뜻하게 칭찬해줘."
+    return "아이의 대체 수행은 기준에 맞지 않아 인정이 안 됐어. 아이에게 부드럽게 알려주고, 원래 미션이나 다른 방법을 가볍게 제안해줘."
 
 
 def build_mission_info_hint(student_id: int, fn_args: dict) -> str:

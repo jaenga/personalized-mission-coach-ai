@@ -46,7 +46,7 @@ from mission_ui_action_service import (
     get_active_ui_action,
     rebuild_ui_action_payload,
 )
-from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
+from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream, judge_mission_equivalency
 from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
 from qwen_client import detect_history_call, detect_mission_info_call, detect_submit_report_call
 from pipeline import (
@@ -57,6 +57,7 @@ from pipeline import (
     step_execute,
     step_extract_functions,
 )
+from hint_builder import build_equivalency_judge_prompt
 from normalizer import normalize_b_input
 from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MAP
 from rag import search_rag
@@ -1966,6 +1967,24 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
         await _cleanup_completed_mission_change(student_id, body.session_id)
 
+    # 서버 주도 대체 수행 판정 (eq_submit인 경우 판정 후 즉시 submit 처리)
+    eq_judgment: dict | None = None
+    eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
+    if eq_submit and pending_submit_args and student_id:
+        judge_prompt = await run_in_threadpool(
+            build_equivalency_judge_prompt, student_id, next(
+                (args for fn, args in fn_calls if fn == "check_mission_equivalency"), {}
+            )
+        )
+        if judge_prompt:
+            eq_judgment = await judge_mission_equivalency(judge_prompt, body.message)
+            print(f"[Equivalency] judgment={eq_judgment}")
+            if eq_judgment.get("approved") and not eq_judgment.get("need_clarification"):
+                submit_result = await run_in_threadpool(execute_submit, student_id, pending_submit_args)
+                exec_results.submit = submit_result
+                print(f"[Equivalency] submit executed: {submit_result.status}")
+            pending_submit_args = None  # 판정 완료, 태그 경로 비활성화
+
     system_prompt = await run_in_threadpool(
         step_build_hints,
         student_id=student_id,
@@ -1979,6 +1998,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         clarify_hint_override=clarify_hint_override,
         student_name=student_name,
         user_message=body.message,
+        eq_judgment=eq_judgment,
     )
     print(f"[Prompt] function_results={'Y' if '[기능 실행 결과]' in system_prompt else 'N'}")
 
@@ -1993,7 +2013,6 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
         ]
 
-    eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
     action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
     llm_only = ""
     call1_ms = 0
@@ -2499,6 +2518,24 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
             await _cleanup_completed_mission_change(student_id, body.session_id)
 
+        # 서버 주도 대체 수행 판정
+        eq_judgment: dict | None = None
+        eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
+        if eq_submit and pending_submit_args and student_id:
+            judge_prompt = await run_in_threadpool(
+                build_equivalency_judge_prompt, student_id, next(
+                    (args for fn, args in fn_calls if fn == "check_mission_equivalency"), {}
+                )
+            )
+            if judge_prompt:
+                eq_judgment = await judge_mission_equivalency(judge_prompt, body.message)
+                print(f"[Equivalency] judgment={eq_judgment}")
+                if eq_judgment.get("approved") and not eq_judgment.get("need_clarification"):
+                    submit_result = await run_in_threadpool(execute_submit, student_id, pending_submit_args)
+                    exec_results.submit = submit_result
+                    print(f"[Equivalency] submit executed: {submit_result.status}")
+                pending_submit_args = None  # 판정 완료, 태그 경로 비활성화
+
         system_prompt = await run_in_threadpool(
             step_build_hints,
             student_id=student_id,
@@ -2512,6 +2549,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             clarify_hint_override=clarify_hint_override,
             student_name=student_name,
             user_message=body.message,
+            eq_judgment=eq_judgment,
         )
         print(f"[Prompt] function_results={'Y' if '[기능 실행 결과]' in system_prompt else 'N'}")
 
@@ -2531,7 +2569,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
 
         t_gen = time.perf_counter()
         tag_markers = ("[APPROVED]", "[DENIED]")
-        eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
+        # eq_submit은 위에서 이미 계산됨; pending_submit_args=None이면 태그 판정 경로 비활성
         action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
         server_prefix = (
             action_ack.message

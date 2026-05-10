@@ -200,6 +200,23 @@ FUNCTION_RESULT_PROMPT = """
 """.strip()
 
 
+# ==== 대체 수행 판정 프롬프트 ===================
+EQUIVALENCY_JUDGE_PROMPT = """
+너는 미션 대체 수행 심사관이야.
+아이가 제안한 행동/장소/시간이 미션 기준에 맞는지 판정한다.
+
+반드시 JSON만 출력한다. 다른 텍스트 절대 금지.
+
+출력 형식:
+{"approved": true 또는 false, "need_clarification": true 또는 false}
+
+판정 기준:
+- 아이 제안이 명확하고 기준에 맞으면 → {"approved": true, "need_clarification": false}
+- 아이 제안이 명확하지만 기준에 맞지 않으면 → {"approved": false, "need_clarification": false}
+- 아이 제안이 불명확해서 판단이 어려우면 → {"approved": false, "need_clarification": true}
+""".strip()
+
+
 # ==== 건강 RAG 프롬프트 ===================
 HEALTH_RAG_PROMPT = """
 너의 역할은 아이의 건강, 영양, 운동, 수면, 생활습관 질문에 답하는 것이다.

@@ -19,6 +19,7 @@ from executor import (
 )
 from hint_builder import (
     build_one_hint, build_conflict_prompt, build_fn_hint, build_cancel_hint,
+    build_equivalency_result_hint,
     EQUIVALENCY_SUBMIT_TAG_INSTRUCTION,
 )
 
@@ -461,6 +462,7 @@ def _build_function_hint(
     fn_calls: list[tuple[str, dict]],
     exec_results: ExecResults,
     combo: str | None,
+    eq_judgment: dict | None = None,
 ) -> str:
     """B 인텐트 전용 힌트 문자열 생성. DB write 없음."""
     has_exec_hint = exec_results.cancel is not None
@@ -473,8 +475,6 @@ def _build_function_hint(
     hints: list[str] = []
 
     if combo == "db_branch":
-        # db_branch에서 직전 액션 불일치면 step_execute에서 충돌 전환됨.
-        # 여기까지 왔으면 정상 순차 → cancel hint + 나머지 hint.
         if student_id is not None:
             if exec_results.cancel:
                 hints.append(build_cancel_hint(exec_results.cancel))
@@ -493,10 +493,15 @@ def _build_function_hint(
             hints.append(build_cancel_hint(exec_results.cancel))
         for fn, args in ordered:
             if fn == "submit_mission_result" and eq_submit:
-                continue  # submit 힌트 스킵 (LLM이 태그로 판정)
+                continue  # submit 힌트 스킵 (판정 결과 또는 태그로 처리)
             hints.append(build_one_hint(student_id, fn, args, exec_results))
         if eq_submit:
-            hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
+            if eq_judgment is not None:
+                # 서버 판정 결과가 있으면 결과 기반 hint 사용
+                hints.append(build_equivalency_result_hint(eq_judgment))
+            else:
+                # fallback: 태그 방식 유지
+                hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
     else:
         for fn, args in fn_calls:
             hints.append(build_fn_hint(fn, args))
@@ -516,12 +521,13 @@ def step_build_hints(
     clarify_hint_override: str = "",
     student_name: str = "",
     user_message: str = "",
+    eq_judgment: dict | None = None,
 ) -> str:
     """시스템 프롬프트 조립. DB write 없음."""
     function_hint = ""
     if intent == "B":
-        function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo)
-        print(f"[Prompt] function_hint={'Y' if function_hint else 'N'} combo={combo or '-'} len={len(function_hint)}")
+        function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo, eq_judgment)
+        print(f"[Prompt] function_hint={'Y' if function_hint else 'N'} combo={combo or '-'} eq_judged={'Y' if eq_judgment is not None else 'N'} len={len(function_hint)}")
 
     clarify_hint = ""
     if intent == "D":

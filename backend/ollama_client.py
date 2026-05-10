@@ -93,6 +93,22 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     return ai_message, call1_ms
 
 
+async def judge_mission_equivalency(judge_system_prompt: str, user_message: str) -> dict:
+    """대체 수행 판정 전용 호출. {"approved": bool, "need_clarification": bool} 반환.
+    LLM 실패 또는 파싱 실패 시 need_clarification=True 반환하여 안전하게 fallback.
+    """
+    try:
+        raw = await generate_json_message(judge_system_prompt, user_message, timeout=15.0)
+        result = json.loads(raw)
+        return {
+            "approved": bool(result.get("approved", False)),
+            "need_clarification": bool(result.get("need_clarification", False)),
+        }
+    except Exception as e:
+        print(f"[Equivalency] judge call failed: {e}")
+        return {"approved": False, "need_clarification": True}
+
+
 async def generate_json_message(system_prompt: str, user_message: str, timeout: float = 10.0) -> str:
     """JSON 전용 호출. 미션 생성처럼 긴 JSON도 끊기지 않도록 충분한 출력 길이를 둔다."""
     url = f"{OLLAMA_BASE_URL}/api/chat"
