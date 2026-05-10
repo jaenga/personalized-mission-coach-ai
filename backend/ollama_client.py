@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import httpx
@@ -27,6 +28,19 @@ async def close_ollama_client() -> None:
     _client = None
 
 
+def strip_markdown(text: str) -> str:
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\*(.+?)\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"_(.+?)_", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    text = re.sub(r"^\s*[-*+]\s", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s", "", text, flags=re.MULTILINE)
+    return text.strip()
+
+
 async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
     """Ollama /api/chat 기본 호출 헬퍼."""
     url = f"{OLLAMA_BASE_URL}/api/chat"
@@ -41,7 +55,7 @@ async def _call_ollama(messages: list[dict], use_json: bool = False) -> str:
 
     resp = await _get_client().post(url, json=payload, timeout=60.0)
     resp.raise_for_status()
-    return resp.json()["message"]["content"].strip()
+    return strip_markdown(resp.json()["message"]["content"])
 
 
 async def generate_chat_message_stream(system_prompt: str, messages: list[dict]):
@@ -79,3 +93,23 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     return ai_message, call1_ms
 
 
+async def generate_json_message(system_prompt: str, user_message: str, timeout: float = 10.0) -> str:
+    """JSON 전용 호출. 미션 생성처럼 긴 JSON도 끊기지 않도록 충분한 출력 길이를 둔다."""
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": OLLAMA_MODEL,
+        "stream": False,
+        "format": "json",
+        "think": False,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 768,
+        },
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+    }
+    resp = await _get_client().post(url, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"].strip()

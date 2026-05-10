@@ -1,0 +1,814 @@
+import { useEffect, useMemo, useState } from "react";
+import { BottomNav, LevelRing } from "./Home.jsx";
+import { LESSONS } from "../data/lessons.js";
+import { completeLessonQuiz, fetchLessonProgress, updateLessonProgress } from "../api.js";
+import EducationScreen from "./EducationScreen.jsx";
+import QuizScreen from "./QuizScreen.jsx";
+import AppLoadingScreen from "./AppLoadingScreen.jsx";
+import gachaImg from "../assets/tomato/_shared/gacha.svg";
+import readingTomato from "../assets/read.png";
+import bookIconImg from "../assets/book.png";
+import starIconImg from "../assets/star.png";
+import flagImg from "../assets/tomato/home/flag.png";
+import ticketImg from "../assets/tomato/_shared/ticket.png";
+import heartImg from "../assets/tomato/_shared/heart.png";
+
+/* ─────────────────────────────────────────────────────────
+   하루치 플랜 — day별 단원 2개 (다른 주제) → 4노드 (교육-퀴즈-교육-퀴즈)
+   ───────────────────────────────────────────────────────── */
+const DAILY_PLAN = [
+  { day: 1, title: "건강한 하루의 시작",     lessonIds: ["sugar-snacks", "rainbow-vegetables"] },
+  { day: 2, title: "눈 건강과 응급처치",      lessonIds: ["eye-health", "first-aid"] },
+  { day: 3, title: "영양과 면역",            lessonIds: ["hand-washing", "immunity-vaccine"] },
+  { day: 4, title: "물과 잠의 비밀",         lessonIds: ["water-habit", "sleep-golden-time"] },
+  { day: 5, title: "잘 먹고 잘 닦기",        lessonIds: ["nutrition-label", "tooth-care"] },
+  { day: 6, title: "바른 자세, 신나는 운동", lessonIds: ["posture-spine", "exercise-muscle"] },
+  { day: 7, title: "눈 보호와 안전",         lessonIds: ["outdoor-safety", "emotion-stress"] },
+];
+
+const NODE_GAP = 100;
+const PATH_WIDTH = 280;
+const DAY_MARKER_HEIGHT = 24;
+
+function getPlanLessons(plan) {
+  return plan.lessonIds
+    .map((id) => LESSONS.find((l) => l.id === id))
+    .filter(Boolean);
+}
+
+function isDayComplete(plan, progress) {
+  return plan.lessonIds.every((lessonId) => {
+    const p = progress[lessonId] || {};
+    return p.eduDone && p.quizDone;
+  });
+}
+
+function toLocalDateKey(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isDayCompleteBeforeToday(plan, progress, todayKey) {
+  if (!isDayComplete(plan, progress)) return false;
+  const completionDates = plan.lessonIds
+    .map((lessonId) => toLocalDateKey(progress[lessonId]?.completedAt))
+    .filter(Boolean);
+  if (completionDates.length !== plan.lessonIds.length) return false;
+  return completionDates.every((dateKey) => dateKey < todayKey);
+}
+
+function getUnlockedDay(progress) {
+  let unlockedDay = 1;
+  for (const plan of DAILY_PLAN) {
+    if (plan.day > unlockedDay) break;
+    if (!isDayComplete(plan, progress)) break;
+    unlockedDay = Math.min(plan.day + 1, DAILY_PLAN.length);
+  }
+  return unlockedDay;
+}
+
+export default function LearnScreen({
+  onNavigate,
+  studentId,
+  todayMission = { title: "15분 책 읽기" },
+  currentDay = 1,
+  level = 3,
+  currentXp = 12,
+  maxXp = 20,
+  ticketCount = 2,
+  heartCount = 4,
+  onAppStateUpdate,
+  disablePulse = false,
+}) {
+  const [activeNav, setActiveNav] = useState("learn");
+  // progress[lessonId] = { eduDone, quizDone }. 백엔드 lesson_progress에서 로드.
+  const [progress, setProgress] = useState({});
+  const [progressLoaded, setProgressLoaded] = useState(!studentId);
+
+  // 진입 시 백엔드에서 진행도 로드
+  useEffect(() => {
+    if (!studentId) {
+      setProgressLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    setProgressLoaded(false);
+    fetchLessonProgress(studentId)
+      .then((rows) => {
+        if (cancelled) return;
+        setProgress((prev) => {
+          const map = { ...prev };
+          for (const r of rows) {
+            const existing = prev[r.lesson_id] || {};
+            map[r.lesson_id] = {
+              eduDone: Boolean(r.edu_done || existing.eduDone),
+              quizDone: Boolean(r.quiz_done || existing.quizDone),
+              completedAt: existing.completedAt || r.completed_at,
+            };
+          }
+          return map;
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setProgressLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [studentId]);
+  const [openLessonId, setOpenLessonId] = useState(null);
+  const [openMode, setOpenMode] = useState(null);
+  const [expOpen, setExpOpen] = useState(false);
+
+  const unlockedDay = useMemo(
+    () => getUnlockedDay(progress),
+    [progress]
+  );
+
+  const lessonNodes = useMemo(
+    () =>
+      DAILY_PLAN.filter((d) => d.day <= unlockedDay).flatMap((plan) =>
+        getPlanLessons(plan).flatMap((lesson, idx) => [
+          {
+            id: `${lesson.id}-edu`,
+            lessonId: lesson.id,
+            kind: "education",
+            lesson,
+            day: plan.day,
+            dayTitle: plan.title,
+            setIdx: idx + 1,
+          },
+          {
+            id: `${lesson.id}-quiz`,
+            lessonId: lesson.id,
+            kind: "quiz",
+            lesson,
+            day: plan.day,
+            dayTitle: plan.title,
+            setIdx: idx + 1,
+          },
+        ])
+      ),
+    [unlockedDay]
+  );
+
+  // 잠긴 다음 날들도 같은 패스에 연결
+  const lockedDayNodes = useMemo(
+    () =>
+      DAILY_PLAN.filter((d) => d.day > unlockedDay).map((d) => ({
+        id: `day-${d.day}`,
+        kind: "lockedDay",
+        day: d.day,
+        title: d.title,
+      })),
+    [unlockedDay]
+  );
+
+  const nodes = useMemo(() => [...lessonNodes, ...lockedDayNodes], [lessonNodes, lockedDayNodes]);
+
+  function nodeState(node) {
+    if (node.kind === "lockedDay") return "locked";
+    const p = progress[node.lessonId] || {};
+    if (node.kind === "education") return p.eduDone ? "done" : "active";
+    if (!p.eduDone) return "locked";
+    return p.quizDone ? "done" : "active";
+  }
+
+  const states = nodes.map(nodeState);
+  const activeIdx = states.findIndex((s) => s === "active");
+
+  function handleNav(key) {
+    setActiveNav(key);
+    onNavigate?.(key);
+  }
+
+  function handleNodeClick(node, state) {
+    if (state === "locked") return;
+    if (state === "active" && nodes.findIndex((n) => n.id === node.id) !== activeIdx) return;
+    setOpenLessonId(node.lessonId);
+    setOpenMode(node.kind);
+  }
+
+  function handleEduFinish(lessonId) {
+    setProgress((prev) => ({
+      ...prev,
+      [lessonId]: { ...(prev[lessonId] || {}), eduDone: true },
+    }));
+    setOpenMode("quiz");
+    if (studentId) {
+      updateLessonProgress({ studentId, lessonId, eduDone: true }).catch(() => {});
+    }
+  }
+
+  function handleQuizComplete(lessonId) {
+    setProgress((prev) => ({
+      ...prev,
+      [lessonId]: { ...(prev[lessonId] || {}), quizDone: true, completedAt: new Date().toISOString() },
+    }));
+    if (studentId) {
+      completeLessonQuiz({ studentId, lessonId })
+        .then((res) => {
+          // 첫 완료라면 백엔드가 ticket +1 한 새 app_state를 반환 — 부모에 반영.
+          if (res?.app_state) onAppStateUpdate?.(res.app_state);
+          if (res?.progress?.completed_at) {
+            setProgress((prev) => ({
+              ...prev,
+              [lessonId]: {
+                ...(prev[lessonId] || {}),
+                quizDone: true,
+                completedAt: res.progress.completed_at,
+              },
+            }));
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
+  function closeOverlay() {
+    setOpenLessonId(null);
+    setOpenMode(null);
+  }
+
+  if (openLessonId && openMode === "education") {
+    const lesson = LESSONS.find((l) => l.id === openLessonId);
+    return (
+      <EducationScreen
+        lesson={lesson}
+        onBack={closeOverlay}
+        onFinish={() => handleEduFinish(openLessonId)}
+      />
+    );
+  }
+
+  if (openLessonId && openMode === "quiz") {
+    const lesson = LESSONS.find((l) => l.id === openLessonId);
+    return (
+      <QuizScreen
+        lesson={lesson}
+        onBack={closeOverlay}
+        onComplete={() => handleQuizComplete(openLessonId)}
+        alreadyCompleted={!!progress[openLessonId]?.quizDone}
+      />
+    );
+  }
+
+  if (!progressLoaded) {
+    return (
+      <AppLoadingScreen
+        active="learn"
+        message="불러오는 중 ..."
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="mobile-frame flex flex-col"
+      style={{ background: "#FFF3E7" }}
+    >
+      {/* 상단 바 (LevelRing + 뽑기권/하트 칩) */}
+      <div
+        className="relative flex-shrink-0 flex items-start justify-between"
+        style={{ paddingInline: 19, paddingTop: 16 }}
+      >
+        <button
+          type="button"
+          data-tutorial-target="learn-level"
+          onClick={() => setExpOpen((v) => !v)}
+          aria-expanded={expOpen}
+          aria-label={`레벨 ${level} EXP ${currentXp}/${maxXp}`}
+          className="transition-transform active:scale-95"
+          style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer" }}
+        >
+          <LevelRing level={level} currentXp={currentXp} maxXp={maxXp} size={38} />
+        </button>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            data-tutorial-target="learn-ticket"
+            onClick={() => onNavigate?.("draw")}
+            className="flex items-center gap-1 font-sejong transition-transform active:scale-95"
+            style={{
+              background: "rgba(255, 218, 137, 0.5)",
+              borderRadius: 50,
+              paddingInline: 8,
+              height: 24,
+              fontSize: 12,
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            <img src={ticketImg} alt="" style={{ width: 12, height: 12 }} />
+            {ticketCount}
+          </button>
+          <button
+            type="button"
+            data-tutorial-target="learn-heart"
+            onClick={() => { window.location.hash = "#game"; }}
+            aria-label={`하트 ${heartCount}개 — 토미랑 달리기 게임으로`}
+            className="flex items-center gap-1 font-sejong"
+            style={{
+              background: "rgba(252, 228, 225, 0.7)",
+              borderRadius: 50,
+              paddingInline: 8,
+              height: 24,
+              fontSize: 12,
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            <img src={heartImg} alt="" style={{ width: 12, height: 12 }} />
+            {heartCount}
+          </button>
+        </div>
+
+        {/* 레벨 링 */}
+        <div
+          className="absolute"
+          style={{
+            left: 19,
+            top: 68,
+            width: 220,
+            padding: "10px 14px",
+            borderRadius: 18,
+            background: "rgba(255, 255, 255, 0.95)",
+            border: "1px solid rgba(227, 93, 73, 0.4)",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
+            opacity: expOpen ? 1 : 0,
+            transform: expOpen ? "translateY(0)" : "translateY(-6px)",
+            pointerEvents: expOpen ? "auto" : "none",
+            transition: "opacity 0.2s ease, transform 0.2s ease",
+            zIndex: 10,
+          }}
+        >
+          <div className="flex flex-col gap-1">
+            <div className="flex items-baseline justify-between font-sejong">
+              <span style={{ fontSize: 12, color: "#75726e", letterSpacing: "-0.43px" }}>
+                Lv.{level} EXP
+              </span>
+              <span style={{ fontSize: 12, color: "#000", letterSpacing: "-0.43px" }}>
+                {currentXp}/{maxXp}
+              </span>
+            </div>
+            <div className="rounded-full overflow-hidden" style={{ height: 8, background: "#FCE0DA" }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${Math.min(1, currentXp / maxXp) * 100}%`,
+                  background: "#E35D49",
+                  transition: "width 0.6s ease",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 타이틀 */}
+      <div className="flex-shrink-0" style={{ paddingInline: 19, paddingTop: 16, paddingBottom: 4 }}>
+        <h1
+          className="font-sejong"
+          style={{ fontSize: 20, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.43px" }}
+        >
+          오늘의 배움 길
+        </h1>
+      </div>
+
+      {/* 본문 */}
+      <div
+        className="flex-1 overflow-y-auto relative"
+        style={{ paddingInline: 19, paddingTop: 6, paddingBottom: "calc(110px + env(safe-area-inset-bottom))" }}
+      >
+        {/* 배경 데코 (구름/풀) */}
+        <BackgroundDecor />
+
+        {/* 미션 배너 */}
+        <MissionBanner mission={todayMission} day={currentDay} />
+
+        {/* 패스 (오늘 + 잠긴 다음 날들 연결) */}
+        <Path nodes={nodes} states={states} activeIdx={activeIdx} onClick={handleNodeClick} disablePulse={disablePulse} />
+      </div>
+
+      {/* 가챠 플로팅 버튼 */}
+      <button
+        type="button"
+        onClick={() => onNavigate?.("draw")}
+        aria-label="뽑기 화면으로 이동"
+        className="gacha-hover-shake absolute transition-transform active:scale-95"
+        style={{
+          right: 14, bottom: 84,
+          width: 78, height: 78,
+          borderRadius: "50%",
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          zIndex: 5,
+        }}
+      >
+        <img
+          src={gachaImg}
+          alt=""
+          draggable="false"
+          className="select-none pointer-events-none"
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        />
+      </button>
+
+      <BottomNav active={activeNav} onChange={handleNav} />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+   미션 배너 — 진행 바 + 토마토 캐릭터
+   ───────────────────────────────────────────────────────── */
+function MissionBanner({ mission }) {
+  return (
+    <div className="relative" style={{ minHeight: 96, zIndex: 1 }}>
+      {/* 좌측 미션 카드 (말풍선 스타일, 폭 좁게) */}
+      <div
+        className="flex items-center"
+        style={{
+          position: "relative",
+          zIndex: 1,
+          background: "#DDEBC9",
+          borderRadius: 22,
+          padding: "12px 16px",
+          gap: 12,
+          maxWidth: 220,
+          minHeight: 70,
+          border: "1px solid rgba(123, 164, 92, 0.25)",
+        }}
+      >
+        <span
+          className="inline-flex items-center justify-center flex-shrink-0"
+          style={{ width: 40, height: 40, borderRadius: 12, background: "#FFFFFF" }}
+        >
+          <img src={flagImg} alt="" style={{ width: 24, height: 24, objectFit: "contain" }} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div
+            className="font-sejong"
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: "#7BA45C",
+              letterSpacing: "-0.43px",
+            }}
+          >
+            오늘의 미션
+          </div>
+          <div
+            className="font-sejong"
+            style={{
+              fontSize: 15,
+              fontWeight: 700,
+              color: "#1a1a1a",
+              letterSpacing: "-0.43px",
+              lineHeight: "19px",
+              marginTop: 1,
+            }}
+          >
+            {mission.title}
+          </div>
+        </div>
+      </div>
+
+      {/* 우측 토마토 (카드와 살짝 겹치게) */}
+      <img
+        src={readingTomato}
+        alt=""
+        draggable="false"
+        className="absolute select-none pointer-events-none"
+        style={{
+          left: 188,
+          top: -14,
+          width: 116,
+          height: 116,
+          objectFit: "contain",
+          zIndex: 2,
+        }}
+      />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+   곡선 패스 + 노드
+   ───────────────────────────────────────────────────────── */
+function Path({ nodes, states, activeIdx, onClick, disablePulse }) {
+  const positions = nodes.map((_, i) => ({
+    x: PATH_WIDTH / 2 + (i % 2 === 0 ? -52 : 52),
+    y: 82 + i * NODE_GAP,
+  }));
+  const dayMarkers = [];
+  const seenDays = new Set();
+  nodes.forEach((node, i) => {
+    if (node.kind === "lockedDay" || !node.day || seenDays.has(node.day)) return;
+    seenDays.add(node.day);
+    const prevY = i === 0 ? 0 : positions[i - 1].y;
+    const midY = (prevY + positions[i].y) / 2;
+    dayMarkers.push({
+      day: node.day,
+      y: Math.max(0, midY - DAY_MARKER_HEIGHT / 2),
+    });
+  });
+  const lastPos = positions[positions.length - 1];
+  const endPoint = {
+    x: lastPos.x + (nodes.length % 2 === 0 ? -54 : 54),
+    y: lastPos.y + 96,
+  };
+  const totalHeight = endPoint.y + 40;
+
+  // SVG path: 미션 카드 바로 아래에서 시작
+  const startX = positions[0].x;
+  const startY = 0;
+  const svgPath = positions.reduce((acc, p, i) => {
+    if (i === 0) {
+      return `M ${startX} ${startY} L ${p.x} ${p.y}`;
+    }
+    const prev = positions[i - 1];
+    const midY = (prev.y + p.y) / 2;
+    return `${acc} C ${prev.x} ${midY}, ${p.x} ${midY}, ${p.x} ${p.y}`;
+  }, "");
+  const tailMidY = (lastPos.y + endPoint.y) / 2;
+  const continuedPath = `${svgPath} C ${lastPos.x} ${tailMidY}, ${endPoint.x} ${tailMidY}, ${endPoint.x} ${endPoint.y}`;
+
+  return (
+    <div
+      className="relative mx-auto"
+      style={{ width: PATH_WIDTH, height: totalHeight, marginTop: -26 }}
+    >
+      <svg
+        aria-hidden="true"
+        width={PATH_WIDTH}
+        height={totalHeight}
+        style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+      >
+        <path
+          d={continuedPath}
+          stroke="rgba(227, 93, 73, 0.4)"
+          strokeWidth="3.5"
+          strokeDasharray="8 8"
+          strokeLinecap="round"
+          fill="none"
+        />
+      </svg>
+
+      {dayMarkers.map((marker) => (
+        <DayMarker key={marker.day} day={marker.day} y={marker.y} />
+      ))}
+
+      {nodes.map((node, i) => {
+        const state = states[i];
+        const isCurrent = i === activeIdx;
+        const pos = positions[i];
+        return (
+          <PathNode
+            key={node.id}
+            node={node}
+            state={state}
+            isCurrent={isCurrent}
+            x={pos.x}
+            y={pos.y}
+            onClick={() => onClick(node, state)}
+            disablePulse={disablePulse}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function DayMarker({ day, y }) {
+  return (
+    <div
+      className="absolute flex items-center font-sejong"
+      style={{
+        left: 10,
+        top: y,
+        zIndex: 2,
+        width: PATH_WIDTH - 20,
+        gap: 10,
+        color: "#B86A5B",
+        fontSize: 12,
+        fontWeight: 800,
+        letterSpacing: 0,
+        pointerEvents: "none",
+      }}
+    >
+      <span
+        style={{
+          height: 1,
+          flex: 1,
+          background: "linear-gradient(90deg, rgba(227,93,73,0), rgba(227,93,73,0.28))",
+        }}
+      />
+      <span
+        style={{
+          flexShrink: 0,
+          padding: "3px 10px",
+          borderRadius: 999,
+          background: "rgba(255, 243, 231, 0.92)",
+          border: "1px solid rgba(227,93,73,0.18)",
+        }}
+      >
+        {day}일차
+      </span>
+      <span
+        style={{
+          height: 1,
+          flex: 1,
+          background: "linear-gradient(90deg, rgba(227,93,73,0.28), rgba(227,93,73,0))",
+        }}
+      />
+    </div>
+  );
+}
+
+function PathNode({ node, state, isCurrent, x, y, onClick, disablePulse }) {
+  const isLockedDay = node.kind === "lockedDay";
+  const isEdu = node.kind === "education";
+  // 교육=메인 레드 / 퀴즈=노랑 / 잠금=쿨 그레이
+  const baseColor = isEdu ? "#E35D49" : "#F4C842";
+  const lockedColor = "#D9D5D0";
+  const bg = state === "locked" ? lockedColor : baseColor;
+  const ring = darken(bg);
+  const size = isLockedDay ? 56 : isCurrent ? 80 : 68;
+  const innerImg = isEdu ? bookIconImg : starIconImg;
+  const innerSize = isCurrent ? 35 : 27;
+
+  return (
+    <div
+      className="absolute flex flex-col items-center"
+      style={{
+        left: x - size / 2,
+        top: y - size / 2,
+        width: size,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={state === "locked" || (!isCurrent && state === "active")}
+        className="relative transition-transform active:scale-95"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: bg,
+          border: `4px solid #FFFFFF`,
+          cursor: state === "locked" ? "default" : "pointer",
+          boxShadow: state === "locked"
+            ? "0 2px 0 rgba(0,0,0,0.05)"
+            : `0 5px 0 ${ring}, 0 8px 16px rgba(0,0,0,0.06)`,
+          padding: 0,
+          opacity: state === "locked" ? 0.85 : 1,
+        }}
+      >
+        {!disablePulse && isCurrent && state === "active" && (
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: -10,
+              borderRadius: "50%",
+              border: `3px solid ${baseColor}`,
+              opacity: 0.35,
+              animation: "pulseRing 1.6s ease-out infinite",
+            }}
+          />
+        )}
+        <span className="absolute inset-0 flex items-center justify-center">
+          {isLockedDay ? (
+            <span className="font-jeju" style={{ fontSize: 22, color: "#fff", letterSpacing: "-0.43px" }}>
+              {node.day}
+            </span>
+          ) : (
+            <img
+              src={innerImg}
+              alt=""
+              draggable="false"
+              className="select-none pointer-events-none"
+              style={{
+                width: innerSize,
+                height: innerSize,
+                objectFit: "contain",
+                filter: state === "locked" ? "grayscale(0.6) opacity(0.7)" : "none",
+              }}
+            />
+          )}
+        </span>
+        {state === "done" && <DoneBadge />}
+        {state === "locked" && <LockBadge />}
+      </button>
+
+      <style>{`
+        @keyframes pulseRing {
+          0%   { transform: scale(0.95); opacity: 0.5; }
+          70%  { transform: scale(1.18); opacity: 0; }
+          100% { transform: scale(1.18); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+   배경 데코 (구름 / 풀)
+   ───────────────────────────────────────────────────────── */
+function BackgroundDecor() {
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute pointer-events-none"
+      style={{ inset: 0, overflow: "hidden", zIndex: 0 }}
+    >
+      {/* 구름 */}
+      <Cloud style={{ left: 16, top: 220, opacity: 0.55 }} />
+      <Cloud style={{ right: 8,  top: 280, opacity: 0.45, transform: "scale(0.8)" }} />
+      <Cloud style={{ left: 26, top: 480, opacity: 0.4, transform: "scale(0.7)" }} />
+      <Cloud style={{ right: 18, top: 540, opacity: 0.5 }} />
+    </div>
+  );
+}
+function Cloud({ style }) {
+  return (
+    <svg
+      width="60"
+      height="32"
+      viewBox="0 0 60 32"
+      fill="none"
+      style={{ position: "absolute", ...style }}
+    >
+      <ellipse cx="18" cy="20" rx="12" ry="10" fill="#FFFFFF" />
+      <ellipse cx="32" cy="14" rx="14" ry="11" fill="#FFFFFF" />
+      <ellipse cx="46" cy="20" rx="11" ry="9"  fill="#FFFFFF" />
+    </svg>
+  );
+}
+
+
+/* ─────────────────────────────────────────────────────────
+   아이콘 / 배지
+   ───────────────────────────────────────────────────────── */
+function DoneBadge() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        top: -2, right: -2,
+        width: 22, height: 22, borderRadius: "50%",
+        background: "#7BA45C",
+        border: "2px solid #FFF3E7",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 7.5 L6 10.5 L11 4.5" />
+      </svg>
+    </span>
+  );
+}
+function LockBadge() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        bottom: -4, right: -4,
+        width: 24, height: 24, borderRadius: "50%",
+        background: "#FFFFFF",
+        border: "2px solid #D9D5D0",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <LockBadgeInline />
+    </span>
+  );
+}
+function LockBadgeInline() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#A6A29D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="6" width="8" height="6" rx="1.2" />
+      <path d="M5 6 V4.5 a2 2 0 0 1 4 0 V6" />
+    </svg>
+  );
+}
+
+function darken(hex) {
+  const map = {
+    "#E35D49": "#B84838",
+    "#F4C842": "#C49A1F",
+    "#D9D5D0": "#B5B0AB",
+  };
+  return map[hex] || "#999";
+}

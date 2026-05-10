@@ -1,19 +1,33 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const backend = "http://localhost:8000";
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     proxy: {
-      "/mission": "http://127.0.0.1:8000",
-      "/feedback": "http://127.0.0.1:8000",
-      "/logs": "http://127.0.0.1:8000",
-      "/chat": "http://127.0.0.1:8000",
-      "/analysis": "http://127.0.0.1:8000",
-      "/profile": "http://127.0.0.1:8000",
-      "/verify-student": "http://127.0.0.1:8000",
-      "/demo-register-student": "http://127.0.0.1:8000",
+      "/mission": backend,
+      "/feedback": backend,
+      "/logs": backend,
+      "/chat": backend,
+      "/analysis": backend,
+      "/app-state": backend,
+      "/attendance": backend,
+      "/draw": backend,
+      "/game": backend,
+      "/health-note": backend,
+      "/lessons": backend,
+      "/ranking": backend,
+      "/profile": backend,
+      "/stats": backend,
+      "/students": backend,
+      "/verify-student": backend,
+      "/demo-register-student": backend,
+      "/onboarding-preferences": backend,
+      "/mission-review": backend,
+      "/mission-ui-actions": backend,
     },
   },
 });

@@ -540,4 +540,5 @@ def step_build_hints(
         is_greeting=is_greet,
         student_name=student_name,
         name_call_allowed=name_call_allowed,
+        memory_context="",
     )

@@ -1,13 +1,20 @@
 import os
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone, timedelta
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except ModuleNotFoundError as e:
+    gspread = None
+    Credentials = None
+    print(f"[Sheets] Google Sheets dependency 없음 - 시트 동기화 비활성화: {e}")
 
 KST = timezone(timedelta(hours=9))
 
 SPREADSHEET_ID = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "google_credentials.json")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+WORKSHEET_NOT_FOUND = gspread.WorksheetNotFound if gspread is not None else Exception
 
 DAILY_STATUS_HEADERS = [
     "student_id", "student_name", "age", "gender", "location",
@@ -26,6 +33,8 @@ KEYWORDS_FAILED = [
 
 
 def _get_spreadsheet():
+    if not SPREADSHEET_ID or gspread is None or Credentials is None:
+        return None
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_ID)
@@ -49,6 +58,9 @@ def generate_daily_status(today: str) -> int:
     날짜 탭(예: 2026-03-29)을 생성하고 DB students 테이블의 is_active 학생 전체를 추가
     탭이 이미 있으면 없는 학생만 추가
     """
+    if not SPREADSHEET_ID:
+        return 0
+
     from database import get_conn
     import psycopg2.extras
 
@@ -59,10 +71,12 @@ def generate_daily_status(today: str) -> int:
             students = [dict(r) for r in cur.fetchall()]
 
     ss = _get_spreadsheet()
+    if ss is None:
+        return 0
     try:
         sheet = ss.worksheet(today)
         existing_ids = {str(r["student_id"]) for r in sheet.get_all_records()}
-    except gspread.WorksheetNotFound:
+    except WORKSHEET_NOT_FOUND:
         sheet = ss.add_worksheet(title=today, rows=200, cols=len(DAILY_STATUS_HEADERS))
         sheet.append_row(DAILY_STATUS_HEADERS)
         existing_ids = set()
@@ -96,9 +110,11 @@ def cancel_mission_result(student_id: int, today: str):
         return
 
     ss = _get_spreadsheet()
+    if ss is None:
+        return
     try:
         sheet = ss.worksheet(today)
-    except gspread.WorksheetNotFound:
+    except WORKSHEET_NOT_FOUND:
         return
 
     all_rows = sheet.get_all_values()
@@ -128,7 +144,7 @@ def cancel_mission_result(student_id: int, today: str):
 def _get_or_create_daily_sheet(ss, today: str):
     try:
         return ss.worksheet(today)
-    except gspread.WorksheetNotFound:
+    except WORKSHEET_NOT_FOUND:
         sheet = ss.add_worksheet(title=today, rows=200, cols=len(DAILY_STATUS_HEADERS))
         sheet.append_row(DAILY_STATUS_HEADERS)
         return sheet
@@ -154,6 +170,8 @@ def update_mission_result(
         return
 
     ss = _get_spreadsheet()
+    if ss is None:
+        return
     sheet = _get_or_create_daily_sheet(ss, today)
     all_rows = sheet.get_all_values()
     headers = all_rows[0] if all_rows else DAILY_STATUS_HEADERS
