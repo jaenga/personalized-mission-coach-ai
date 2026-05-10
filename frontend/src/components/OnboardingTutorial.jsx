@@ -78,9 +78,11 @@ const STEP_ASSETS = {
     style:  { left: "50%", transform: "translateX(-50%)", bottom: 100, width: 200 },
     bubble: {
       texts: [
-        "안녕! 나는 토미야. 너랑 함께 건강한 생활 습관을 만드는 게 내 목표야!",
-        "매일 생활 습관 미션을 알려줄 거야. 앱 사용법을 간단하게 알려줄게!",
+        "안녕! 나는 토미야. 앞으로 너랑 같이 건강한 생활 습관을 만들어갈 거야!",
+        "매일 도전하기 쉬운 작은 미션들을 알려줄게.",
+        "이제 앱 사용법을 간단히 소개해줄게. 천천히 따라와봐!"
       ],
+      highlights: ["토미", "건강한 생활 습관", "도전하기 쉬운 작은 미션"],
       tail: "down",
       style: { left: "50%", transform: "translateX(-50%)", bottom: 310, width: 220 },
     },
@@ -88,31 +90,31 @@ const STEP_ASSETS = {
   home_mission: {
     src: onb2,
     style:  { left: "70%", transform: "translateX(-50%)", bottom: 210, width: 160 },
-    bubble: { texts: ["이곳에서 항상 오늘의 미션을 확인할 수 있어!", "누르면 자세한 미션 설명이 나오니까 잘 확인하고 미션을 도전해보자."], tail: "down-right",
+    bubble: { texts: ["이곳에서 항상 오늘의 미션을 확인할 수 있어!", "누르면 자세한 미션 설명이 나오니까 잘 확인하고 미션을 도전해보자."], highlights: ["오늘의 미션", "미션 설명"], tail: "down-right",
               style: { left: 70, bottom: 360, width: 200 } },
   },
   home_calendar: {
     src: onb3,
     style:  { right: 20, bottom: 100, width: 160 },
-    bubble: { texts: ["여기서 미션 기록을 확인할 수 있어!", "미션을 성공하면 캘린더 위에 스티커가 올라가! 캘린더를 토미 스티커로 꽉 채워보자~"], tail: "right-bottom",
+    bubble: { texts: ["여기서 미션 기록을 확인할 수 있어!", "미션을 성공하면 캘린더 위에 스티커가 올라가! 캘린더를 토미 스티커로 꽉 채워보자~"], highlights: ["미션 기록", "캘린더", "스티커"], tail: "right-bottom",
               style: { left: 30, bottom: 160, width: 200 } },
   },
   chat_intro: {
     src: onb4,
     style:  { left: "50%", transform: "translateX(-50%)", bottom: 100, width: 200 },
-    bubble: { texts: ["이곳에선 나와 대화할 수 있어!", "왼쪽 아래 + 버튼을 누르면, 내가 할 수 있는 일들을 볼 수 있어. 건강 관련된 이야기는 무엇이든 물어봐!"], tail: "down",
+    bubble: { texts: ["이곳에선 나와 대화할 수 있어!", "왼쪽 아래 + 버튼을 누르면, 내가 할 수 있는 일들을 볼 수 있어. 건강 관련된 이야기는 무엇이든 물어봐!"], highlights: ["+ 버튼", "건강 관련된 이야기"], tail: "down",
               style: { left: "50%", transform: "translateX(-50%)", bottom: 310, width: 220 } },
   },
   learn_intro: {
     src: onb5,
     style:  { left: "50%", transform: "translateX(-50%)", bottom: 100, width: 200 },
-    bubble: { texts: ["여기는 재미있고 도움되는 건강 지식을 배울 수 있는 곳이야!", "매일 두 개의 교육과, 퀴즈가 있어. 퀴즈를 모두 맞추면 보상도 있으니 꼭 풀어보자!"], tail: "down",
+    bubble: { texts: ["여기는 재미있고 도움되는 건강 지식을 배울 수 있는 곳이야!", "매일 두 개의 교육과, 퀴즈가 있어. 퀴즈를 모두 맞추면 보상도 있으니 꼭 풀어보자!"], highlights: ["건강 지식", "교육", "퀴즈", "보상"], tail: "down",
               style: { left: "50%", transform: "translateX(-50%)", bottom: 320, width: 220 } },
   },
   reward_ticket: {
     src: onb6,
     style:  { left: "50%", transform: "translateX(-50%)", bottom: 100, width: 200 },
-    bubble: { texts: ["건강 교육을 다 듣고, 퀴즈를 모두 맞추면 뽑기권을 받을 수 있어!", "뽑기에서는 하트와 경험치를 얻을 수 있어."], tail: "down",
+    bubble: { texts: ["건강 교육을 다 듣고, 퀴즈를 모두 맞추면 뽑기권을 받을 수 있어!", "뽑기에서는 하트와 경험치를 얻을 수 있어."], highlights: ["퀴즈", "뽑기권", "하트", "경험치"], tail: "down",
               style: { left: "50%", transform: "translateX(-50%)", bottom: 350, width: 250 } },
   },
   reward_heart: {
@@ -124,16 +126,61 @@ const STEP_ASSETS = {
   reward_level: {
     src: onb8,
     style:  { left: "45%", transform: "translateX(-50%)", bottom: 270, width: 310 },
-    bubble: { texts: ["경험치를 모으면 레벨이 올라가! 경험치를 많이 모으면 더 높은 레벨에 도달할 수 있어.", "특정 레벨에 도달하면 더 멋진 토마토가 될 수 있어!"], tail: "up",
+    bubble: { texts: ["경험치를 모으면 레벨이 올라가! 경험치를 많이 모으면 더 높은 레벨에 도달할 수 있어.", "특정 레벨에 도달하면 더 멋진 토마토가 될 수 있어!"], highlights: ["경험치", "레벨", "토마토"], tail: "up",
               style: { left: "50%", transform: "translateX(-50%)", bottom: 150, width: 300 } },
   },
   rewards_done: {
     src: onb9,
     style:  { left: "50%", transform: "translateX(-50%)", bottom: 100, width: 250 },
-    bubble: { texts: ["나의 안내는 여기까지야! 우리 앞으로 열심히 나아가보자!", "너에게 딱 맞는 미션을 주기 위해 필요한 정보가 있어. 대답해줄래?"], tail: "down",
+    bubble: { texts: ["나의 안내는 여기까지야! 우리 앞으로 열심히 나아가보자!", "너에게 딱 맞는 미션을 주기 위해 필요한 정보가 있어. 대답해줄래?"], highlights: ["딱 맞는 미션"], tail: "down",
               style: { left: "50%", transform: "translateX(-50%)", bottom: 350, width: 250 } },
   },
 };
+
+// 텍스트를 강조/일반 세그먼트 배열로 미리 분리
+// 타이핑 애니메이션 시작 전에 호출해 글자 수 카운트만으로 렌더링
+function buildSegments(text, keywords) {
+  if (!keywords?.length) return [{ text, style: null }];
+  const normalized = keywords.map((k) =>
+    typeof k === "string" ? { text: k, color: "#E35D49", bold: true } : k
+  );
+  const sorted = [...normalized].sort((a, b) => b.text.length - a.text.length);
+  const regex = new RegExp(
+    `(${sorted.map((k) => k.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "g"
+  );
+  return text.split(regex).map((part) => {
+    const match = normalized.find((k) => k.text === part);
+    return {
+      text: part,
+      style: match
+        ? {
+            color: match.color || "#E35D49",
+            fontWeight: match.bold !== false ? 800 : undefined,
+            ...(match.bg && { background: match.bg, borderRadius: 4, padding: "1px 5px" }),
+          }
+        : null,
+    };
+  });
+}
+
+// 세그먼트 배열 + 표시할 글자 수 → JSX
+function renderSegments(segments, charCount) {
+  const out = [];
+  let remaining = charCount;
+  for (let i = 0; i < segments.length; i++) {
+    if (remaining <= 0) break;
+    const seg = segments[i];
+    const visible = seg.text.slice(0, remaining);
+    remaining -= seg.text.length;
+    out.push(
+      seg.style
+        ? <span key={i} style={seg.style}>{visible}</span>
+        : visible
+    );
+  }
+  return out;
+}
 
 const SPOTLIGHT_RADIUS = 20;
 
@@ -232,19 +279,20 @@ function SpeechBubble({ text, style, tail = "down", bgColor = "#FFFFFF", textCol
 }
 
 // Single bubble item for use inside BubbleStack (not absolutely positioned)
-function BubbleItem({ text, tail, bgColor = "#FFFFFF", textColor = "#1a1a1a", speed = 50, onDone }) {
-  const [displayed, setDisplayed] = useState(speed === 0 ? text : "");
+function BubbleItem({ text, tail, bgColor = "#FFFFFF", textColor = "#1a1a1a", speed = 50, onDone, highlights }) {
+  const segments = buildSegments(text, highlights);
+  const [charCount, setCharCount] = useState(speed === 0 ? text.length : 0);
 
   useEffect(() => {
     if (speed === 0) {
-      setDisplayed(text);
+      setCharCount(text.length);
       return;
     }
-    setDisplayed("");
+    setCharCount(0);
     let i = 0;
     const id = setInterval(() => {
       i += 1;
-      setDisplayed(text.slice(0, i));
+      setCharCount(i);
       if (i >= text.length) {
         clearInterval(id);
         onDone?.();
@@ -273,14 +321,14 @@ function BubbleItem({ text, tail, bgColor = "#FFFFFF", textColor = "#1a1a1a", sp
         wordBreak: "keep-all",
       }}
     >
-      {displayed}
+      {renderSegments(segments, charCount)}
       {tailStyle && <span aria-hidden="true" style={tailStyle} />}
     </div>
   );
 }
 
 // Multi-message chat-style bubble stack — messages appear one by one sequentially
-function BubbleStack({ texts, style, tail = "down", bgColor = "#FFFFFF", textColor = "#1a1a1a", speed = 50 }) {
+function BubbleStack({ texts, style, tail = "down", bgColor = "#FFFFFF", textColor = "#1a1a1a", speed = 50, highlights }) {
   const [visibleCount, setVisibleCount] = useState(1);
 
   function handleDone() {
@@ -316,6 +364,7 @@ function BubbleStack({ texts, style, tail = "down", bgColor = "#FFFFFF", textCol
             textColor={textColor}
             speed={isLast ? speed : 0}
             onDone={isLast ? handleDone : undefined}
+            highlights={highlights}
           />
         );
       })}
@@ -514,6 +563,7 @@ export default function OnboardingTutorial({ onComplete, onBack, initialStep = 0
                   tail={asset.bubble.tail}
                   bgColor={asset.bubble.bgColor}
                   textColor={asset.bubble.textColor}
+                  highlights={asset.bubble.highlights}
                 />
               ) : (
                 <SpeechBubble

@@ -486,7 +486,9 @@ export default function Home({
   }, [today]);
   const successSet = useMemo(() => new Set(successDates), [successDates]);
 
-  const missionPct = todayMission.done ? 1 : 0;
+  const missionFailed = todayMission.resultType === "fail" || todayMission.resultType === "failure";
+  const missionPct = todayMission.done || missionFailed ? 1 : 0;
+  const missionBarColor = missionFailed ? "#B0ABAA" : "#E35D49";
   const missionGuide =
     todayMission.description?.trim() ||
     "미션 설명을 아직 불러오지 못했어. 잠시 후 다시 확인해줘!";
@@ -939,7 +941,7 @@ export default function Home({
                   className="h-full rounded-full"
                   style={{
                     width: `${missionPct * 100}%`,
-                    background: "#E35D49",
+                    background: missionBarColor,
                     transition: "width 0.6s ease",
                   }}
                 />

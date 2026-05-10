@@ -7,6 +7,7 @@ export default {
         jeju: ['"EF_jejudoldam"', "serif"],
         sejong: ['"SejongGeulggot"', "sans-serif"],
         noto: ['"Noto Sans KR"', '"Apple SD Gothic Neo"', "sans-serif"],
+        pretendard: ["Pretendard", '"Apple SD Gothic Neo"', "sans-serif"],
       },
       colors: {
         tomato: {

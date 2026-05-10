@@ -9,6 +9,7 @@ from database import (
     fetch_profile,
     get_pending_mission_ui_action,
     resolve_mission_ui_action,
+    save_message,
     save_mission_change_log,
     save_mission_ui_action,
     upsert_user_memory,
@@ -77,6 +78,25 @@ MISSION_CHANGE_METHOD_BUTTONS = [
     {"value": "personalized_change", "label": "추천 미션으로 바꾸기"},
     {"value": "generate_new", "label": "새 미션 만들어보기"},
 ]
+
+_BUTTON_LABEL: dict[str, str] = {
+    btn["value"]: btn["label"]
+    for btn in (
+        MISSION_CHANGE_REASON_BUTTONS
+        + MISSION_DISLIKE_CONFIRM_BUTTONS
+        + MISSION_CHANGE_METHOD_BUTTONS
+    )
+}
+
+
+async def _save_ui_action_exchange(session_id: str, user_label: str, assistant_response: str) -> None:
+    """버튼 선택(user)과 봇 응답(assistant)을 대화 히스토리에 저장한다."""
+    try:
+        await run_in_threadpool(save_message, session_id, "user", user_label, "mission_ui_action")
+        await run_in_threadpool(save_message, session_id, "assistant", assistant_response)
+    except Exception as e:
+        print(f"[UiAction] save_message failed: {e}")
+
 
 def rebuild_ui_action_payload(active_ui: dict) -> dict:
     """DB row를 받아 action_type에 맞는 버튼 목록을 재조합해 ui_action payload를 반환한다."""
@@ -377,12 +397,14 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
     action_type = action.get("action_type")
     payload = _action_payload(action)
 
+    result: dict | None = None
+
     if action_type == "mission_change_reason":
         if value == "too_hard":
             log_row = await _log_change_reason(student_id, action, "too_hard")
             memory = await _save_reason_memory(student_id, payload, "too_hard", log_row)
             response, exec_results = await _execute_adjustment_response(student_id, "easier")
-            return {
+            result = {
                 "response": response,
                 "mission_completed": False,
                 "ui_action": None,
@@ -395,10 +417,10 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-        if value == "too_easy":
+        elif value == "too_easy":
             await _log_change_reason(student_id, action, "too_easy")
             response, exec_results = await _execute_adjustment_response(student_id, "harder")
-            return {
+            result = {
                 "response": response,
                 "mission_completed": False,
                 "ui_action": None,
@@ -410,13 +432,10 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-        if value == "just_change":
-            next_payload = {
-                **payload,
-                "source_reason": "just_change",
-            }
+        elif value == "just_change":
+            next_payload = {**payload, "source_reason": "just_change"}
             ui_action = await create_mission_change_method_action(student_id, session_id, next_payload)
-            return {
+            result = {
                 "response": "어떤 방식으로 바꿔볼까?",
                 "mission_completed": False,
                 "ui_action": ui_action,
@@ -428,7 +447,7 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-        if value == "dislike":
+        elif value == "dislike":
             log_row = await _log_change_reason(student_id, action, "dislike")
             memory = await _save_reason_memory(student_id, payload, "dislike", log_row)
             ui_action = await create_mission_dislike_confirm_action(student_id, session_id, payload)
@@ -436,7 +455,7 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 payload.get("mission_name", "오늘 미션"),
                 payload.get("mission_rule", ""),
             )
-            return {
+            result = {
                 "response": response,
                 "mission_completed": False,
                 "ui_action": ui_action,
@@ -449,14 +468,11 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-        if value == "cant_do":
+        elif value == "cant_do":
             await _log_change_reason(student_id, action, "cant_do")
-            next_payload = {
-                **payload,
-                "source_reason": "cant_do",
-            }
+            next_payload = {**payload, "source_reason": "cant_do"}
             ui_action = await create_replacement_mission_input_action(student_id, session_id, next_payload)
-            return {
+            result = {
                 "response": "그럼 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘.",
                 "mission_completed": False,
                 "ui_action": ui_action,
@@ -468,9 +484,9 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-    if action_type == "mission_dislike_confirm":
+    elif action_type == "mission_dislike_confirm":
         if value == "try_today":
-            return {
+            result = {
                 "response": "좋아, 오늘은 딱 한 번만 같이 해보자!",
                 "mission_completed": False,
                 "ui_action": None,
@@ -481,9 +497,9 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-        if value == "change":
-            response, result = await _resolve_personalized_change(student_id, payload)
-            return {
+        elif value == "change":
+            response, res = await _resolve_personalized_change(student_id, payload)
+            result = {
                 "response": response,
                 "mission_completed": False,
                 "ui_action": None,
@@ -492,14 +508,14 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                     "ui_action_type": action_type,
                     "ui_action_value": value,
                     "method": "personalized_change",
-                    "result": result,
+                    "result": res,
                 },
             }
 
-    if action_type == "mission_change_method":
+    elif action_type == "mission_change_method":
         if value == "personalized_change":
-            response, result = await _resolve_personalized_change(student_id, payload)
-            return {
+            response, res = await _resolve_personalized_change(student_id, payload)
+            result = {
                 "response": response,
                 "mission_completed": False,
                 "ui_action": None,
@@ -508,13 +524,13 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                     "ui_action_type": action_type,
                     "ui_action_value": value,
                     "method": "personalized_change",
-                    "result": result,
+                    "result": res,
                 },
             }
 
-        if value == "generate_new":
+        elif value == "generate_new":
             response, debug = await _resolve_generate_new(student_id, payload)
-            return {
+            result = {
                 "response": response,
                 "mission_completed": False,
                 "ui_action": None,
@@ -527,10 +543,14 @@ async def resolve_mission_ui_action_request(action_id: str, session_id: str, val
                 },
             }
 
-    raise HTTPException(
-        status_code=409,
-        detail={
-            "status": "rejected",
-            "reason": "unsupported_action",
-        },
-    )
+    if result is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"status": "rejected", "reason": "unsupported_action"},
+        )
+
+    # 버튼 선택 + 봇 응답을 대화 히스토리에 저장
+    user_label = _BUTTON_LABEL.get(value, value)
+    await _save_ui_action_exchange(session_id, user_label, result["response"])
+
+    return result

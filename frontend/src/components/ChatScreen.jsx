@@ -481,11 +481,18 @@ function stripMarkdown(text) {
     .trim();
 }
 
-function AssistantMessage({ text, streaming = false }) {
+const DEBUG_MODE = import.meta.env.VITE_PIPELINE_DEBUG === "true";
+
+function AssistantMessage({ text, streaming = false, selected = false, onSelect }) {
   const showTyping = streaming && !String(text || "").trim();
   const displayText = stripMarkdown(text);
+  const clickable = DEBUG_MODE && !streaming && !!onSelect;
   return (
-    <div className="flex items-end gap-2" style={{ maxWidth: "82%" }}>
+    <div
+      className="flex items-end gap-2"
+      style={{ maxWidth: "82%", cursor: clickable ? "pointer" : "default" }}
+      onClick={clickable ? onSelect : undefined}
+    >
       <img
         src={tomatoChat}
         alt=""
@@ -503,9 +510,14 @@ function AssistantMessage({ text, streaming = false }) {
           lineHeight: "20px",
           color: "#000",
           letterSpacing: "-0.43px",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
+          outline: selected ? "2px solid #E35D49" : "none",
+          outlineOffset: 2,
+          boxShadow: selected
+            ? "0 0 0 3px rgba(227, 93, 73, 0.15), 0 1px 3px rgba(0,0,0,0.05)"
+            : "0 1px 3px rgba(0,0,0,0.05)",
+          transition: "box-shadow 0.15s, outline 0.15s",
         }}
       >
         {showTyping ? <TypingDots /> : displayText}
@@ -652,6 +664,9 @@ export default function ChatScreen({
   onSend,
   todayMission,
   initialMessages = INITIAL_MESSAGES,
+  selectedDebugId = null,
+  onSelectDebug,
+  onMissionUiAction,
 }) {
   const [localMessages, setLocalMessages] = useState(initialMessages);
   const [input, setInput] = useState("");
@@ -664,8 +679,14 @@ export default function ChatScreen({
         role: m.role,
         text: m.content ?? m.text ?? "",
         streaming: !!m.streaming,
+        debug: m.debug ?? null,
+        ui_action: m.ui_action ?? null,
       }))
     : localMessages;
+
+  const lockChat = messages.some(
+    (m) => m.ui_action?.lock_chat && !m.ui_action?.resolving
+  );
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -678,7 +699,7 @@ export default function ChatScreen({
 
   function handleSend(textOverride) {
     const text = (textOverride ?? input).trim();
-    if (!text || loading) return;
+    if (!text || loading || lockChat) return;
     setInput("");
     if (onSend) {
       onSend(text);
@@ -793,7 +814,41 @@ export default function ChatScreen({
       >
         {messages.map((m) =>
           m.role === "assistant" ? (
-            <AssistantMessage key={m.id} text={m.text} streaming={m.streaming} />
+            <div key={m.id} className="flex flex-col" style={{ gap: 6 }}>
+              <AssistantMessage
+                text={m.text}
+                streaming={m.streaming}
+                selected={DEBUG_MODE && selectedDebugId === m.id}
+                onSelect={DEBUG_MODE ? () => onSelectDebug?.(m.id, m.debug) : undefined}
+              />
+              {m.ui_action?.buttons?.length > 0 && (
+                <div className="flex flex-wrap" style={{ gap: 6, paddingLeft: 44 }}>
+                  {m.ui_action.buttons.map((btn) => (
+                    <button
+                      key={btn.value}
+                      type="button"
+                      disabled={!!m.ui_action.resolving || loading}
+                      onClick={() => onMissionUiAction?.(m.ui_action.action_id, btn.value)}
+                      className="ui-action-btn font-sejong transition-transform active:scale-95"
+                      style={{
+                        border: "1.5px solid #E35D49",
+                        borderRadius: 999,
+                        padding: "6px 14px",
+                        background: "#FFFFFF",
+                        color: "#E35D49",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        letterSpacing: "-0.3px",
+                        cursor: m.ui_action.resolving || loading ? "not-allowed" : "pointer",
+                        opacity: m.ui_action.resolving || loading ? 0.5 : 1,
+                      }}
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           ) : (
             <UserMessage key={m.id} text={m.text} />
           )
@@ -846,14 +901,14 @@ export default function ChatScreen({
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={loading}
+              disabled={loading || lockChat}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSend();
                 }
               }}
-              placeholder="메시지 입력..."
+              placeholder={lockChat ? "위 버튼에서 선택해줘!" : "메시지 입력..."}
               className="font-sejong flex-1"
               style={{
                 border: "none",
@@ -870,7 +925,7 @@ export default function ChatScreen({
           <button
             type="button"
             onClick={() => handleSend()}
-            disabled={!input.trim() || loading}
+            disabled={!input.trim() || loading || lockChat}
             aria-label="보내기"
             className="flex items-center justify-center transition-transform active:scale-95 disabled:opacity-50"
             style={{
@@ -878,7 +933,7 @@ export default function ChatScreen({
               borderRadius: 999,
               background: "#E35D49",
               border: "none", padding: 0,
-              cursor: input.trim() && !loading ? "pointer" : "not-allowed",
+              cursor: input.trim() && !loading && !lockChat ? "pointer" : "not-allowed",
               flexShrink: 0,
             }}
           >

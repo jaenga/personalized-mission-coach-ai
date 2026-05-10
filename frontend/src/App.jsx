@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import HealthNote from "./components/HealthNote.jsx";
@@ -13,6 +13,9 @@ import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
 import AppLoadingScreen from "./components/AppLoadingScreen.jsx";
 import MissionReviewModal from "./components/MissionReviewModal.jsx";
+import PipelineDebugPanel from "./components/PipelineDebugPanel.jsx";
+
+const PIPELINE_DEBUG = import.meta.env.VITE_PIPELINE_DEBUG === "true";
 import OnboardingFlow from "./components/OnboardingFlow.jsx";
 
 // ── 화면 상수 ──────────────────────────────────────────────────────────────
@@ -175,8 +178,9 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pipeline, setPipeline] = useState([]); // 실시간 파이프라인 단계
-  const [debugMap, setDebugMap] = useState({});
+  const [debugMap, setDebugMap] = useState({});  // 스트리밍 중 라이브 전용
   const [selectedDebugId, setSelectedDebugId] = useState(null);
+  const [selectedDebug, setSelectedDebug] = useState(null); // 선택된 메시지의 debug 객체
   const [sessionId, setSessionId] = useState(getOrCreateSessionId);
 
   // 로그인/온보딩 폼 상태
@@ -316,22 +320,32 @@ export default function App() {
   // 채팅 히스토리 로드
   useEffect(() => {
     if (!mission || !profile) return;
-    fetchChatHistory(sessionId)
-      .then((history) => {
+    Promise.all([
+      fetchChatHistory(sessionId),
+      fetchActiveUiAction(sessionId),
+    ])
+      .then(([history, activeUiAction]) => {
         if (history.length === 0) {
           requestGreeting(mission.mission_name);
         } else {
-          setMessages(
-            history.map((msg, i) =>
-              msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
-            )
+          const mapped = history.map((msg, i) =>
+            msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
           );
+          // active ui_action이 있으면 마지막 assistant 메시지에 붙임
+          if (activeUiAction?.buttons?.length > 0) {
+            const lastAssistantIdx = [...mapped].reverse().findIndex((m) => m.role === "assistant");
+            if (lastAssistantIdx !== -1) {
+              const idx = mapped.length - 1 - lastAssistantIdx;
+              mapped[idx] = { ...mapped[idx], ui_action: activeUiAction };
+            }
+          }
+          setMessages(mapped);
         }
       })
       .catch(() => {
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
       });
-  }, [sessionId, mission]);
+  }, [sessionId, mission?.mission_id]);
 
   function resetUserStats() {
     setLevel(FRESH_STATS.level);
@@ -551,11 +565,6 @@ export default function App() {
           .catch(() => {});
       }
       localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
-      setToastMessage(
-        result?.mission_changed === true
-          ? "입력한 정보를 반영해서 오늘 미션을 바꿨어!"
-          : "선호 정보가 저장됐어요!"
-      );
       return true;
     } catch (err) {
       setOnboardingError(err.message);
@@ -607,9 +616,8 @@ export default function App() {
     try {
       const res = await sendMessage("__GREET__", sessionId, missionTitle);
       const debugId = createClientId("debug");
-      setMessages([{ role: "assistant", content: res.response, debugId }]);
+      setMessages([{ role: "assistant", content: res.response, debugId, debug: res.debug ?? null }]);
       setDebugMap({ [debugId]: { ...res.debug } });
-      setSelectedDebugId(debugId);
     } catch {
       setMessages([{ role: "assistant", content: "안녕! 오늘도 함께 해보자 🌟" }]);
     } finally {
@@ -639,7 +647,7 @@ export default function App() {
                 ...prev,
                 [debugId]: { ...prev[debugId], intent: stage.value },
               }));
-              setSelectedDebugId(debugId);
+              // 자동으로 열지 않음 — 메시지 클릭 시에만 열림
             }
             if (stage.stage === "qwen") {
               const calls = Array.isArray(stage.calls)
@@ -673,7 +681,7 @@ export default function App() {
               )
             );
           },
-          onDone: (debug, _uiAction, doneInfo) => {
+          onDone: (debug, uiAction, doneInfo) => {
             if (debug) {
               // 백엔드가 미션 성공 시 XP/티켓 지급 후 새 app_state를 응답에 포함시킴.
               // 프론트는 그 값을 그대로 반영만 함 — 자체 계산 X.
@@ -700,18 +708,30 @@ export default function App() {
                   setReviewModal({
                     missionId: reviewMissionId,
                     resultType: doneInfo?.mission_result_type ?? debug.submit_result?.result_type,
+                    originScreen: screen,
                   });
                   setReviewError("");
                 }
               }
+              const finalDebug = { ...debugMap[debugId], ...debug };
               setDebugMap((prev) => ({
                 ...prev,
-                [debugId]: { ...prev[debugId], ...debug },
+                [debugId]: finalDebug,
               }));
+              // debug를 메시지 객체에 직접 embed — 화면 이탈 후에도 유지됨
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.debugId === debugId
+                    ? { ...m, streaming: false, debug: finalDebug, ui_action: uiAction ?? null }
+                    : m
+                )
+              );
               if (
                 shouldRefreshMissionAfterDone ||
                 debug.fn_args?.adjustment_type ||
-                debug.detected_function === "request_mission_adjustment"
+                debug.detected_function === "request_mission_adjustment" ||
+                debug.intent === "REPLACEMENT_MISSION" ||
+                debug.intent === "MISSION_UI_ACTION"
               ) {
                 refreshMissionData();
               }
@@ -719,8 +739,9 @@ export default function App() {
           },
         }
       );
+      // streaming: false는 onDone에서 이미 처리; 여기선 debug 없는 경우(에러 등)만 처리
       setMessages((prev) =>
-        prev.map((m) => (m.debugId === debugId ? { ...m, streaming: false } : m))
+        prev.map((m) => (m.debugId === debugId && m.streaming ? { ...m, streaming: false } : m))
       );
       setPipeline([]);
     } catch {
@@ -732,6 +753,67 @@ export default function App() {
         )
       );
       setPipeline([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMissionUiAction(actionId, value) {
+    const loadingId = createClientId("uiaction");
+    // 버튼 클릭한 메시지의 ui_action을 resolving 상태로 표시 + 로딩 점 메시지 추가
+    setMessages((prev) => [
+      ...prev.map((m) =>
+        m.ui_action?.action_id === actionId
+          ? { ...m, ui_action: { ...m.ui_action, resolving: true } }
+          : m
+      ),
+      { role: "assistant", content: "", debugId: loadingId, streaming: true },
+    ]);
+    setLoading(true);
+    try {
+      const result = await resolveMissionUiAction(actionId, sessionId, value);
+      // 버튼 누른 메시지의 ui_action 제거(resolved) + 로딩 메시지를 실제 응답으로 교체
+      const newDebugId = createClientId("debug");
+      setMessages((prev) =>
+        prev
+          .map((m) =>
+            m.ui_action?.action_id === actionId ? { ...m, ui_action: null } : m
+          )
+          .map((m) =>
+            m.debugId === loadingId
+              ? {
+                  ...m,
+                  content: result?.response ?? "",
+                  debugId: newDebugId,
+                  streaming: false,
+                  debug: result?.debug ?? null,
+                  ui_action: result?.ui_action ?? null,
+                }
+              : m
+          )
+      );
+      if (result?.response) {
+        if (result.debug?.app_state) {
+          const s = result.debug.app_state;
+          setLevel(s.level);
+          setCurrentXp(s.current_xp);
+          setMaxXp(LEVEL_THRESHOLDS[s.level + 1] ?? 100);
+          setTicketCount(s.ticket_count);
+          setHeartCount(s.heart_count);
+        }
+        // 미션 변경/조정은 mission_completed가 false여도 미션 데이터가 바뀜
+        refreshMissionData();
+      }
+    } catch (e) {
+      setMessages((prev) =>
+        prev
+          .filter((m) => m.debugId !== loadingId)
+          .map((m) =>
+            m.ui_action?.action_id === actionId
+              ? { ...m, ui_action: { ...m.ui_action, resolving: false } }
+              : m
+          )
+      );
     } finally {
       setLoading(false);
     }
@@ -806,7 +888,7 @@ export default function App() {
         level={leveledUpTo}
         onContinue={() => {
           setLeveledUpTo(null);
-          resetTo(SCREENS.HOME);
+          resetTo(reviewModal?.originScreen ?? SCREENS.HOME);
         }}
       />
     );
@@ -908,6 +990,7 @@ export default function App() {
               title: mission?.mission_name || "오늘의 미션",
               description: mission?.mission_description || mission?.mission_rule || "",
               done: mission?.status === "completed" || mission?.status === "success",
+              resultType: mission?.status ?? null,
             }}
             onNavigate={navHandler(SCREENS.HOME)}
           />
@@ -915,22 +998,51 @@ export default function App() {
         </div>
       );
 
-    case SCREENS.CHAT:
+    case SCREENS.CHAT: {
+      const debugPanelOpen = PIPELINE_DEBUG && selectedDebugId != null;
       return (
-        <div style={{ position: "relative" }}>
-          <ChatScreen
-            onBack={() => goBack(SCREENS.HOME)}
-            messages={messages}
-            loading={loading}
-            onSend={handleSend}
-            todayMission={{
-              title: mission?.mission_name || "오늘의 미션",
-              done: mission?.status === "completed" || mission?.status === "success",
-            }}
-          />
-          {renderGlobalOverlays()}
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 20,
+          width: "100%",
+          height: "100dvh",
+        }}>
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <ChatScreen
+              onBack={() => { goBack(SCREENS.HOME); setSelectedDebugId(null); }}
+              messages={messages}
+              loading={loading}
+              onSend={handleSend}
+              todayMission={{
+                title: mission?.mission_name || "오늘의 미션",
+                done: mission?.status === "completed" || mission?.status === "success",
+              }}
+              selectedDebugId={PIPELINE_DEBUG ? selectedDebugId : null}
+              onSelectDebug={PIPELINE_DEBUG ? (id, debug) => {
+                if (selectedDebugId === id) {
+                  setSelectedDebugId(null);
+                  setSelectedDebug(null);
+                } else {
+                  setSelectedDebugId(id);
+                  setSelectedDebug(debug ?? debugMap[id] ?? null);
+                }
+              } : undefined}
+              onMissionUiAction={handleMissionUiAction}
+            />
+            {renderGlobalOverlays()}
+          </div>
+          {debugPanelOpen && (
+            <PipelineDebugPanel
+              debug={selectedDebug}
+              liveStages={pipeline}
+              onClose={() => { setSelectedDebugId(null); setSelectedDebug(null); }}
+            />
+          )}
         </div>
       );
+    }
 
     case SCREENS.DRAW: {
       const SCREEN_TO_TAB = {
