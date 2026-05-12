@@ -16,6 +16,7 @@ from app_services import (
     get_student_app_state,
     get_student_lesson_progress,
     get_student_stats,
+    get_student_weekly_share_prompt,
     get_today_mission,
     get_user_profile,
     get_xp_ranking_for,
@@ -27,6 +28,7 @@ from app_services import (
     save_user_profile,
     save_student_health_note,
     startup_tasks,
+    update_student_weekly_share_prompt,
     update_student_lesson_progress,
     verify_student,
     delete_student_health_note,
@@ -47,6 +49,7 @@ from schemas import (
     OnboardingPreferencesRequest,
     ProfileRequest,
     VerifyRequest,
+    WeeklySharePromptActionRequest,
 )
 
 
@@ -100,6 +103,16 @@ def get_mission(student_id: int | None = None):
 @app.get("/stats/{student_id}")
 def get_stats(student_id: int):
     return get_student_stats(student_id)
+
+
+@app.get("/weekly-share/{student_id}")
+def get_weekly_share(student_id: int):
+    return get_student_weekly_share_prompt(student_id)
+
+
+@app.post("/weekly-share/action")
+def post_weekly_share_action(body: WeeklySharePromptActionRequest):
+    return update_student_weekly_share_prompt(body)
 
 
 @app.get("/app-state/{student_id}")

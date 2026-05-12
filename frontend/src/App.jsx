@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchWeeklySharePrompt, markWeeklySharePrompt, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import HealthNote from "./components/HealthNote.jsx";
@@ -13,6 +13,7 @@ import LearnScreen from "./components/LearnScreen.jsx";
 import GameScreen from "./components/GameScreen.jsx";
 import AppLoadingScreen from "./components/AppLoadingScreen.jsx";
 import MissionReviewModal from "./components/MissionReviewModal.jsx";
+import WeeklyShareModal from "./components/WeeklyShareModal.jsx";
 import PipelineDebugPanel from "./components/PipelineDebugPanel.jsx";
 
 const PIPELINE_DEBUG = import.meta.env.VITE_PIPELINE_DEBUG === "true";
@@ -166,6 +167,7 @@ export default function App() {
   const [reviewModal, setReviewModal] = useState(null);
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewError, setReviewError] = useState("");
+  const [weeklySharePrompt, setWeeklySharePrompt] = useState(null);
   const [toastMessage, setToastMessage] = useState("");
 
   // ── 핵심 데이터 상태 ─────────────────────────────────────────────────────
@@ -316,6 +318,23 @@ export default function App() {
           .catch(() => setAppStateLoaded(true));
       });
   }, [profile]);
+
+  useEffect(() => {
+    if (!profile?.student_id || screen !== SCREENS.HOME || !appStateLoaded || !missionLoaded) {
+      return;
+    }
+    let cancelled = false;
+    fetchWeeklySharePrompt(profile.student_id)
+      .then((prompt) => {
+        if (!cancelled && prompt?.should_show) {
+          setWeeklySharePrompt(prompt);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.student_id, screen, appStateLoaded, missionLoaded]);
 
   // 채팅 히스토리 로드
   useEffect(() => {
@@ -610,6 +629,33 @@ export default function App() {
     setReviewError("");
   }
 
+  async function handleDismissWeeklyShare() {
+    const prompt = weeklySharePrompt;
+    setWeeklySharePrompt(null);
+    if (!profile?.student_id || !prompt?.week_start) return;
+    markWeeklySharePrompt({
+      studentId: profile.student_id,
+      weekStart: prompt.week_start,
+      action: "dismissed",
+    }).catch(() => {});
+  }
+
+  async function handleSharedWeeklyShare() {
+    const prompt = weeklySharePrompt;
+    setWeeklySharePrompt(null);
+    if (!profile?.student_id || !prompt?.week_start) return;
+    try {
+      await markWeeklySharePrompt({
+        studentId: profile.student_id,
+        weekStart: prompt.week_start,
+        action: "shared",
+      });
+      setToastMessage("지난주 결과를 공유했어요!");
+    } catch {
+      setToastMessage("공유는 완료했지만 기록 저장에 실패했어요.");
+    }
+  }
+
   // ── 채팅 핸들러 ──────────────────────────────────────────────────────────
   async function requestGreeting(missionTitle) {
     setLoading(true);
@@ -874,6 +920,15 @@ export default function App() {
             onSkip={handleSkipMissionReview}
             loading={reviewSaving}
             error={reviewError}
+          />
+        )}
+        {weeklySharePrompt && profile?.student_name && (
+          <WeeklyShareModal
+            open={!!weeklySharePrompt}
+            studentName={profile.student_name}
+            prompt={weeklySharePrompt}
+            onDismiss={handleDismissWeeklyShare}
+            onShared={handleSharedWeeklyShare}
           />
         )}
         {toastMessage && <div className="toast-message">{toastMessage}</div>}
