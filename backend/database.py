@@ -433,6 +433,20 @@ def init_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_share_prompts (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    week_start DATE NOT NULL,
+                    week_end DATE NOT NULL,
+                    prompt_shown_at TIMESTAMPTZ DEFAULT NOW(),
+                    dismissed_at TIMESTAMPTZ,
+                    shared_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (student_id, week_start)
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS generated_missions (
                     id SERIAL PRIMARY KEY,
                     student_id INTEGER REFERENCES students(student_id),
@@ -570,6 +584,7 @@ def delete_student_completely(student_id: int) -> bool:
             cur.execute("DELETE FROM pending_mission_suggestions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_change_logs WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_reviews WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM weekly_share_prompts WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_ui_actions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM generated_missions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_changes WHERE student_id = %s", (student_id,))
@@ -1174,6 +1189,122 @@ def get_success_summary(student_id: int) -> dict:
         "success_count": len(success_dates),
         "streak_days": streak,
     }
+
+
+def _previous_week_range(today: date | None = None) -> tuple[date, date]:
+    today_date = today or datetime.strptime(_kst_today(), "%Y-%m-%d").date()
+    current_week_start = today_date - timedelta(days=today_date.weekday())
+    week_start = current_week_start - timedelta(days=7)
+    week_end = current_week_start - timedelta(days=1)
+    return week_start, week_end
+
+
+def get_weekly_share_prompt(student_id: int) -> dict:
+    if not student_id:
+        raise ValueError("student_id is required")
+
+    week_start, week_end = _previous_week_range()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, prompt_shown_at, dismissed_at, shared_at
+                FROM weekly_share_prompts
+                WHERE student_id = %s
+                  AND week_start = %s
+                LIMIT 1
+            """, (student_id, week_start))
+            existing_prompt = cur.fetchone()
+
+            cur.execute("""
+                SELECT DISTINCT ON (cl.checkin_date)
+                       cl.checkin_date::text AS checkin_date,
+                       cl.mission_result,
+                       cl.mission_id,
+                       m.mission_name
+                FROM checkin_log cl
+                LEFT JOIN missions m ON m.mission_id = cl.mission_id
+                WHERE cl.student_id = %s
+                  AND cl.function_called = 'submit_mission_result'
+                  AND cl.checkin_date BETWEEN %s AND %s
+                ORDER BY cl.checkin_date, cl.created_at DESC
+            """, (student_id, week_start, week_end))
+            mission_rows = [dict(row) for row in cur.fetchall()]
+
+            success_statuses = {"success", "completed"}
+            fail_statuses = {"fail", "failure"}
+            success_count = sum(1 for row in mission_rows if row.get("mission_result") in success_statuses)
+            fail_count = sum(1 for row in mission_rows if row.get("mission_result") in fail_statuses)
+            total_count = len(mission_rows)
+
+            should_show = total_count > 0 and existing_prompt is None
+            prompt_id = existing_prompt["id"] if existing_prompt else None
+            if should_show:
+                cur.execute("""
+                    INSERT INTO weekly_share_prompts (student_id, week_start, week_end)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (student_id, week_start) DO NOTHING
+                    RETURNING id
+                """, (student_id, week_start, week_end))
+                inserted = cur.fetchone()
+                prompt_id = inserted["id"] if inserted else None
+
+        conn.commit()
+
+    missions = [
+        {
+            "date": row.get("checkin_date"),
+            "mission_id": row.get("mission_id"),
+            "mission_name": row.get("mission_name") or "미션",
+            "result": row.get("mission_result"),
+        }
+        for row in mission_rows
+    ]
+    return {
+        "should_show": should_show,
+        "prompt_id": prompt_id,
+        "week_start": week_start.strftime("%Y-%m-%d"),
+        "week_end": week_end.strftime("%Y-%m-%d"),
+        "summary": {
+            "total_count": total_count,
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "missions": missions,
+        },
+    }
+
+
+def mark_weekly_share_prompt(student_id: int, week_start: str, action: str) -> dict:
+    if action not in {"dismissed", "shared"}:
+        raise ValueError("action must be dismissed or shared")
+    if not student_id:
+        raise ValueError("student_id is required")
+
+    try:
+        week_start_date = datetime.strptime(week_start, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        raise ValueError("week_start must be YYYY-MM-DD")
+
+    week_end_date = week_start_date + timedelta(days=6)
+    timestamp_column = "shared_at" if action == "shared" else "dismissed_at"
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"""
+                INSERT INTO weekly_share_prompts (
+                    student_id, week_start, week_end, {timestamp_column}, updated_at
+                )
+                VALUES (%s, %s, %s, NOW(), NOW())
+                ON CONFLICT (student_id, week_start)
+                DO UPDATE SET
+                    {timestamp_column} = NOW(),
+                    updated_at = NOW()
+                RETURNING id, student_id,
+                          week_start::text AS week_start,
+                          week_end::text AS week_end,
+                          prompt_shown_at, dismissed_at, shared_at
+            """, (student_id, week_start_date, week_end_date))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row)
 
 
 def get_app_state(student_id: int) -> dict:

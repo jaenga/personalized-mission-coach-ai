@@ -22,6 +22,7 @@ export default defineConfig({
       "/ranking": backend,
       "/profile": backend,
       "/stats": backend,
+      "/weekly-share": backend,
       "/students": backend,
       "/verify-student": backend,
       "/demo-register-student": backend,
