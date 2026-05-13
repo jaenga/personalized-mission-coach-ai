@@ -38,6 +38,10 @@ from activity_matcher import (
     select_replacement_mission,
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_adjustment, execute_submit
+from health_safety_guard import (
+    append_health_safety_suffix,
+    detect_health_risk_signal,
+)
 from memory_service import extract_and_save_memory
 from mission_ui_action_service import (
     create_mission_change_reason_action,
@@ -1838,6 +1842,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     qwen_ms = 0
     clarify_hint_override = ""
     clarify_reason = ""
+    risk_signal = detect_health_risk_signal(body.message if not is_greet else "")
+    forced_rag_by_health_risk = False
 
     if not is_greet:
         if _CANCEL_NEGATION_RE.search(body.message):
@@ -1899,6 +1905,10 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 fn_calls, qwen_ms = await step_extract_functions(norm.message)
                 detected_function = fn_calls[0][0] if fn_calls else None
                 fn_args = fn_calls[0][1] if fn_calls else {}
+        if risk_signal["has_risk"] and intent == "A":
+            intent = "C"
+            forced_rag_by_health_risk = True
+            print("[Safety] health risk signal detected in intent A -> force intent C/RAG")
         if intent == "C":
             try:
                 rag_result = await run_in_threadpool(search_rag, body.message)
@@ -1930,6 +1940,12 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "model": OLLAMA_MODEL,
                 "timing": {"intent_ms": intent_ms, "qwen_ms": qwen_ms, "llm_ms": 0},
                 "rag_hits": {"chunks": 0, "faqs": 0},
+                "health_risk": {
+                    "has_risk": risk_signal["has_risk"],
+                    "matched_keywords": risk_signal["matched_keywords"],
+                    "risk_level": risk_signal["risk_level"],
+                },
+                "forced_rag_by_health_risk": forced_rag_by_health_risk,
             },
         }
 
@@ -2022,6 +2038,9 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         llm_only = ai_message
         if not eq_submit and action_ack and action_ack.mode is ResponseMode.PREFIX_WITH_GEMMA:
             ai_message = _prepend_db_action_ack(ai_message, exec_results)
+    ai_message = append_health_safety_suffix(ai_message, risk_signal, intent)
+    if risk_signal["has_risk"] and intent == "C":
+        llm_only = ai_message
     print(f"[Chat] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
 
     if not is_greet:
@@ -2068,6 +2087,12 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         "model": OLLAMA_MODEL,
         "timing": {"intent_ms": intent_ms, "qwen_ms": qwen_ms, "llm_ms": call1_ms},
         "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
+        "health_risk": {
+            "has_risk": risk_signal["has_risk"],
+            "matched_keywords": risk_signal["matched_keywords"],
+            "risk_level": risk_signal["risk_level"],
+        },
+        "forced_rag_by_health_risk": forced_rag_by_health_risk,
     }
     if exec_results and exec_results.submit:
         debug["submit_result"] = {
@@ -2361,6 +2386,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         t_total = time.perf_counter()
         clarify_hint_override = ""
         clarify_reason = ""
+        risk_signal = detect_health_risk_signal(body.message if not is_greet else "")
+        forced_rag_by_health_risk = False
 
         if not is_greet:
             if _CANCEL_NEGATION_RE.search(body.message):
@@ -2406,6 +2433,10 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 detected_function = mission_info_call[0]
                 fn_args = mission_info_call[1]
                 print("[Route] mission info query forced to get_mission_info")
+            if risk_signal["has_risk"] and intent == "A":
+                intent = "C"
+                forced_rag_by_health_risk = True
+                print("[Safety] health risk signal detected in intent A -> force intent C/RAG")
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
@@ -2462,6 +2493,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                         "total_ms": total_ms,
                     },
                     "rag_hits": {"chunks": 0, "faqs": 0},
+                    "health_risk": {
+                        "has_risk": risk_signal["has_risk"],
+                        "matched_keywords": risk_signal["matched_keywords"],
+                        "risk_level": risk_signal["risk_level"],
+                    },
+                    "forced_rag_by_health_risk": forced_rag_by_health_risk,
                 },
             )
             return
@@ -2627,6 +2664,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     async for event in _fake_stream_template_response(finalize_suffix):
                         yield event
             ai_message = finalized_message
+        before_safety_suffix = ai_message
+        ai_message = append_health_safety_suffix(ai_message, risk_signal, intent)
+        safety_suffix = ai_message[len(before_safety_suffix):]
+        if safety_suffix.strip():
+            async for event in _fake_stream_template_response(safety_suffix):
+                yield event
         print(f"[Stream] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
 
         total_ms = round((time.perf_counter() - t_total) * 1000)
@@ -2647,6 +2690,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 "total_ms": total_ms,
             },
             "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
+            "health_risk": {
+                "has_risk": risk_signal["has_risk"],
+                "matched_keywords": risk_signal["matched_keywords"],
+                "risk_level": risk_signal["risk_level"],
+            },
+            "forced_rag_by_health_risk": forced_rag_by_health_risk,
         }
         if exec_results.submit:
             debug_payload["submit_result"] = {
@@ -2661,6 +2710,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         llm_save = _filter_ai_response(
             llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
         )
+        if risk_signal["has_risk"] and intent == "C":
+            llm_save = ai_message
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
         if not is_greet:
             await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
