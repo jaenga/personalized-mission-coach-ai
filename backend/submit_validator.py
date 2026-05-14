@@ -52,7 +52,7 @@ _QUESTION_RE = re.compile(
     r"|성공\s*기준|실패\s*기준|기록\s*(?:됐|되었|저장)"
 )
 _COMPLETION_VERB_RE = re.compile(
-    r"했어|했다|했음|했는데|마셨어|마셨|먹었어|걸었어|걸었|닦았어|씻었어|완료했어|다\s*했어|끝났어|마쳤어|해냈|클리어"
+    r"했어|했다|했음|했는데|마셨어|마셨|먹었어|걸었어|걸었|닦았어|씻었어|완료했어|다\s*했어|끝났어|끝냈|마쳤어|해냈|클리어"
 )
 _SCREEN_RESTRICTION_VERB_RE = re.compile(
     r"봤어|봤다|안\s*봤어|안\s*봤다|시청했어|시청했다|안\s*시청했어|시청\s*안"
@@ -242,11 +242,19 @@ def _mission_overlap(message: str, mission_name: str) -> bool:
     mission_tokens = {
         token
         for token in _tokenize_koreanish(mission_name)
-        if token not in _OVERLAP_STOPWORDS
+        if token not in _OVERLAP_STOPWORDS and not _is_numeric_unit_token(token)
     }
-    message_tokens = _tokenize_koreanish(message)
+    message_tokens = {
+        token
+        for token in _tokenize_koreanish(message)
+        if not _is_numeric_unit_token(token)
+    }
     return bool(mission_tokens & message_tokens)
 
 
 def _tokenize_koreanish(text: str) -> set[str]:
     return set(re.findall(r"[가-힣A-Za-z0-9]+", text or ""))
+
+
+def _is_numeric_unit_token(token: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|세트)?", token or ""))

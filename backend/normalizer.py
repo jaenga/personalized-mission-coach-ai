@@ -100,10 +100,18 @@ def _mission_overlap(message: str, mission_name: str) -> bool:
     mission_tokens = {
         token
         for token in _tokenize_koreanish(mission_name)
-        if token not in _OVERLAP_STOPWORDS
+        if token not in _OVERLAP_STOPWORDS and not _is_numeric_unit_token(token)
     }
-    message_tokens = _tokenize_koreanish(message)
+    message_tokens = {
+        token
+        for token in _tokenize_koreanish(message)
+        if not _is_numeric_unit_token(token)
+    }
     return bool(mission_tokens & message_tokens)
+
+
+def _is_numeric_unit_token(token: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|세트)?", token or ""))
 
 
 def _extract_numeric(text: str, goal) -> float | None:
