@@ -64,6 +64,7 @@ from rag import search_rag
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
 from sheets import cancel_mission_result, update_mission_result
+from submit_validator import build_submit_validation_response
 
 _FAKE_STREAM_CHARS = 4
 _FAKE_STREAM_DELAY_SEC = 0.1
@@ -1953,13 +1954,17 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     exec_results = ExecResults()
     pending_submit_args = None
+    submit_validation = None
 
     if student_id and fn_calls:
-        exec_results, fn_calls, pending_submit_args, combo = await run_in_threadpool(
+        exec_results, fn_calls, pending_submit_args, combo, submit_validation = await run_in_threadpool(
             step_execute,
             student_id,
             fn_calls,
             combo,
+            body.message,
+            mission_title,
+            mission_id,
         )
     elif fn_calls:
         print("[DB] skipped: missing student_id")
@@ -1967,6 +1972,35 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         detected_function = None
     if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
         await _cleanup_completed_mission_change(student_id, body.session_id)
+
+    if submit_validation and not submit_validation.should_execute:
+        ai_message = build_submit_validation_response(submit_validation, mission_title)
+        print(f"[Validator.submit] response={_short(ai_message)!r}")
+        if not is_greet:
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, None)
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+        if not is_greet:
+            background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
+        debug = {
+            "intent": intent,
+            "clarify_reason": clarify_reason,
+            "fn_args": fn_args,
+            "submit_validation": submit_validation.to_debug(),
+            "violations": detect_violations(ai_message, body.message if not is_greet else ""),
+            "system_prompt": "",
+            "history_turns": 0,
+            "model": OLLAMA_MODEL,
+            "timing": {"intent_ms": intent_ms, "qwen_ms": qwen_ms, "llm_ms": 0},
+            "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
+        }
+        return {
+            "response": ai_message,
+            "mission_completed": False,
+            "detected_function": None,
+            "sources": [],
+            "ui_action": None,
+            "debug": debug,
+        }
 
     # 서버 주도 대체 수행 판정 (eq_submit인 경우 판정 후 즉시 submit 처리)
     eq_judgment: dict | None = None
@@ -2095,6 +2129,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "result_type": exec_results.submit.result_type,
             "db_changed": exec_results.submit.db_changed,
         }
+    if submit_validation:
+        debug["submit_validation"] = submit_validation.to_debug()
     xp_award = _award_mission_xp_if_success(exec_results, student_id, mission_id)
     _attach_xp_award_to_debug(debug, xp_award)
 
@@ -2505,13 +2541,17 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         print(f"[Route] student={student_id or '-'} combo={combo or '-'} calls={_fn_list(fn_calls)}")
         exec_results = ExecResults()
         pending_submit_args = None
+        submit_validation = None
 
         if student_id and fn_calls:
-            exec_results, fn_calls, pending_submit_args, combo = await run_in_threadpool(
+            exec_results, fn_calls, pending_submit_args, combo, submit_validation = await run_in_threadpool(
                 step_execute,
                 student_id,
                 fn_calls,
                 combo,
+                body.message,
+                current_mission_title,
+                mission_id,
             )
         elif fn_calls:
             print("[DB] skipped: missing student_id")
@@ -2519,6 +2559,38 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             detected_function = None
         if exec_results.adjustment and exec_results.adjustment.status is AdjustmentStatus.CHANGED:
             await _cleanup_completed_mission_change(student_id, body.session_id)
+
+        if submit_validation and not submit_validation.should_execute:
+            ai_message = build_submit_validation_response(submit_validation, current_mission_title)
+            print(f"[Validator.submit] response={_short(ai_message)!r}")
+            await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, None)
+            await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
+            background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
+            async for event in _fake_stream_template_response(ai_message):
+                yield event
+            total_ms = round((time.perf_counter() - t_total) * 1000)
+            yield _done_sse(
+                None,
+                {
+                    "intent": intent,
+                    "clarify_reason": clarify_reason,
+                    "fn_args": fn_args,
+                    "submit_validation": submit_validation.to_debug(),
+                    "violations": detect_violations(ai_message, body.message),
+                    "system_prompt": "",
+                    "history_turns": 0,
+                    "model": OLLAMA_MODEL,
+                    "timing": {
+                        "intent_ms": intent_ms,
+                        "qwen_ms": qwen_ms,
+                        "rag_ms": rag_ms,
+                        "gen_ms": 0,
+                        "total_ms": total_ms,
+                    },
+                    "rag_hits": {"chunks": len(rag_result["chunks"]), "faqs": len(rag_result["faqs"])},
+                },
+            )
+            return
 
         # 서버 주도 대체 수행 판정
         eq_judgment: dict | None = None
@@ -2694,6 +2766,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 "result_type": exec_results.submit.result_type,
                 "db_changed": exec_results.submit.db_changed,
             }
+        if submit_validation:
+            debug_payload["submit_validation"] = submit_validation.to_debug()
         xp_award = _award_mission_xp_if_success(exec_results, student_id, mission_id)
         _attach_xp_award_to_debug(debug_payload, xp_award)
         if not is_greet:

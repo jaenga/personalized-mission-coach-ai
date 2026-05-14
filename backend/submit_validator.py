@@ -21,6 +21,13 @@ class SubmitValidationResult:
     def should_execute(self) -> bool:
         return self.action == "execute" and self.result_type in {"success", "fail"}
 
+    def to_debug(self) -> dict:
+        return {
+            "action": self.action,
+            "result_type": self.result_type,
+            "reason": self.reason,
+        }
+
 
 HARD_TEMPORAL = ("어제", "엊그제", "지난번", "저번", "예전")
 SOFT_TEMPORAL = ("이미", "아까")

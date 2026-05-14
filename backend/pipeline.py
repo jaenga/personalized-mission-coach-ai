@@ -22,6 +22,7 @@ from hint_builder import (
     build_equivalency_result_hint,
     EQUIVALENCY_SUBMIT_TAG_INSTRUCTION,
 )
+from submit_validator import SubmitValidationResult, validate_submit_candidate
 
 
 # ── 멀티펑션 조합 상수 + 헬퍼 (main.py에서 이동) ────────────────────────────
@@ -407,9 +408,12 @@ def step_execute(
     student_id: int,
     fn_calls: list[tuple[str, dict]],
     combo: str,
-) -> tuple[ExecResults, list[tuple[str, dict]], dict | None, str]:
+    user_message: str = "",
+    mission_title: str = "",
+    mission_id: int | None = None,
+) -> tuple[ExecResults, list[tuple[str, dict]], dict | None, str, SubmitValidationResult | None]:
     """
-    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args, effective_combo) 반환.
+    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args, effective_combo, submit_validation) 반환.
     cancel은 실행 후 fn_calls에서 제거.
     reorder는 cancel 제거 후 적용.
     """
@@ -417,10 +421,11 @@ def step_execute(
     print(f"[DB] start student={student_id} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     results = ExecResults()
     pending_submit_args: dict | None = None
+    submit_validation: SubmitValidationResult | None = None
 
     if combo == "conflict":
         print("[DB] skipped: conflict")
-        return results, fn_calls, None, combo
+        return results, fn_calls, None, combo, None
 
     # db_branch는 cancel 실행 전에 "원래 직전 액션"을 검증해야 한다.
     if combo == "db_branch":
@@ -430,7 +435,7 @@ def step_execute(
         print(f"[DB] branch expected={expected} last={last_action}")
         if last_action != expected:
             print("[DB] branch mismatch -> conflict")
-            return results, fn_calls, None, "conflict"
+            return results, fn_calls, None, "conflict", None
 
     # 1. cancel 분리 + 실행 + fn_calls에서 제거
     if any(fn == "cancel_mission_action" for fn, _ in fn_calls):
@@ -448,13 +453,29 @@ def step_execute(
                 pending_submit_args = args  # LLM 판단 후 실행
                 print(f"[DB] submit deferred for equivalency")
             else:
-                results.submit = execute_submit(student_id, args)
+                submit_validation = validate_submit_candidate(
+                    user_message=user_message,
+                    mission_name=mission_title,
+                    mission_id=mission_id,
+                    qwen_args=args,
+                )
+                print(
+                    "[Validator.submit] "
+                    f"action={submit_validation.action} "
+                    f"result={submit_validation.result_type or '-'} "
+                    f"reason={submit_validation.reason or '-'}"
+                )
+                if submit_validation.should_execute:
+                    results.submit = execute_submit(
+                        student_id,
+                        {**args, "result_type": submit_validation.result_type},
+                    )
         elif fn == "request_mission_adjustment":
             results.adjustment = execute_adjustment(student_id, args)
         # equivalency, mission_info, history → DB write 없음
 
     print(f"[DB] done combo={combo or '-'} {_exec_label(results)}")
-    return results, fn_calls, pending_submit_args, combo
+    return results, fn_calls, pending_submit_args, combo, submit_validation
 
 
 def _build_function_hint(
