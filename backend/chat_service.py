@@ -64,7 +64,11 @@ from rag import search_rag
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
 from sheets import cancel_mission_result, update_mission_result
-from submit_validator import build_submit_validation_response, should_promote_to_submit_path
+from submit_validator import (
+    build_submit_validation_response,
+    contains_db_completion_phrase,
+    should_promote_to_submit_path,
+)
 
 _FAKE_STREAM_CHARS = 4
 _FAKE_STREAM_DELAY_SEC = 0.1
@@ -739,6 +743,24 @@ def _filter_ai_response(text: str) -> str:
     if replaced:
         print("[Guard] AI output filtered")
     return result or text
+
+
+def _exec_results_db_changed(exec_results: ExecResults | None) -> bool:
+    if not exec_results:
+        return False
+    return any(
+        bool(getattr(result, "db_changed", False))
+        for result in (exec_results.submit, exec_results.adjustment, exec_results.cancel)
+        if result is not None
+    )
+
+
+_DB_COMPLETION_FALLBACK = "앗, 지금 기록이 잘 안 됐어. 다시 말해줄 수 있어?"
+
+
+def _unsafe_gemma_db_completion(gemma_text: str, exec_results: ExecResults | None) -> bool:
+    """Gemma 생성분만 검사한다. 서버 ACK가 섞인 최종 응답에는 쓰지 않는다."""
+    return bool(gemma_text and not _exec_results_db_changed(exec_results) and contains_db_completion_phrase(gemma_text))
 
 
 FORBIDDEN_WORDS = ["엄마", "아빠", "부모님", "가족", "형", "언니", "오빠", "동생", "친구", "선생님"]
@@ -2077,6 +2099,10 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
         ai_message = _filter_ai_response(ai_message)
         llm_only = ai_message
+        if _unsafe_gemma_db_completion(llm_only, exec_results):
+            print(f"[Guard] unsafe Gemma DB completion fallback source={_short(llm_only)!r}")
+            ai_message = _DB_COMPLETION_FALLBACK
+            llm_only = ai_message
         if not eq_submit and action_ack and action_ack.mode is ResponseMode.PREFIX_WITH_GEMMA:
             ai_message = _prepend_db_action_ack(ai_message, exec_results)
     print(f"[Chat] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
@@ -2659,6 +2685,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         ai_message = ""
         llm_message = ""
         prefix_buffer_mode = bool(server_prefix) and not eq_submit
+        buffer_for_completion_guard = False
 
         if mission_change_guard_result and not fn_calls:
             ai_message = mission_change_guard_result["message"]
@@ -2674,6 +2701,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 ai_message = f"{server_prefix}\n"
                 async for event in _fake_stream_template_response(ai_message):
                     yield event
+            buffer_for_completion_guard = not eq_submit and not server_prefix and not _exec_results_db_changed(exec_results)
 
             token_buf = ""
             lookahead_limit = len(server_prefix) + 10 if server_prefix else 0
@@ -2689,7 +2717,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                             cleaned = _strip_leading_ack(lookahead_buf, server_prefix)
                             prefix_echo_handled = True
                             ai_message += cleaned
-                            if cleaned.strip():
+                            if cleaned.strip() and not buffer_for_completion_guard:
                                 yield f"data: {_json.dumps({'type': 'token', 'content': cleaned}, ensure_ascii=False)}\n\n"
                         continue
 
@@ -2704,19 +2732,20 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                                 yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
                             token_buf = ""
                     else:
-                        yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+                        if not buffer_for_completion_guard:
+                            yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
                 return
             if not prefix_echo_handled and lookahead_buf:
                 cleaned = _strip_leading_ack(lookahead_buf, server_prefix)
                 ai_message += cleaned
-                if cleaned.strip():
+                if cleaned.strip() and not buffer_for_completion_guard:
                     yield f"data: {_json.dumps({'type': 'token', 'content': cleaned}, ensure_ascii=False)}\n\n"
             elif token_buf:
                 for tag in tag_markers:
                     token_buf = token_buf.replace(tag, "")
-                if token_buf.strip():
+                if token_buf.strip() and not buffer_for_completion_guard:
                     yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
 
         gen_ms = round((time.perf_counter() - t_gen) * 1000)
@@ -2745,6 +2774,13 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     async for event in _fake_stream_template_response(finalize_suffix):
                         yield event
             ai_message = finalized_message
+        elif buffer_for_completion_guard:
+            if _unsafe_gemma_db_completion(llm_message, exec_results):
+                print(f"[Guard] unsafe Gemma DB completion fallback source={_short(llm_message)!r}")
+                ai_message = _DB_COMPLETION_FALLBACK
+            if ai_message.strip():
+                async for event in _fake_stream_template_response(ai_message):
+                    yield event
         print(f"[Stream] -> mode={_response_mode_label(action_ack, eq_submit)} response={_short(ai_message)!r}")
 
         total_ms = round((time.perf_counter() - t_total) * 1000)
