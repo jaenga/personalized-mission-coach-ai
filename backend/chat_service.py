@@ -68,6 +68,7 @@ from submit_validator import (
     build_submit_validation_response,
     contains_db_completion_phrase,
     should_promote_to_submit_path,
+    validate_submit_candidate,
 )
 
 _FAKE_STREAM_CHARS = 4
@@ -829,13 +830,24 @@ def _finalize_equivalency_response(
     student_id: int | None,
     pending_submit_args: dict | None,
     exec_results: ExecResults,
+    user_message: str = "",
+    mission_title: str = "",
+    mission_id: int | None = None,
 ) -> str:
     """[APPROVED]/[DENIED] 태그 제거 후, 실제 저장 결과를 응답에 반영."""
     if "[APPROVED]" in ai_message:
         ai_message = ai_message.replace("[APPROVED]", "").strip()
         if student_id and pending_submit_args:
-            submit_result = execute_submit(student_id, pending_submit_args)
-            exec_results.submit = submit_result
+            validation = _validate_and_execute_submit(
+                student_id,
+                pending_submit_args,
+                user_message,
+                mission_title,
+                mission_id,
+                exec_results,
+            )
+            if validation and not validation.should_execute:
+                return build_submit_validation_response(validation, mission_title)
             ack = build_action_ack(exec_results)
             if not ack:
                 return ai_message
@@ -846,6 +858,35 @@ def _finalize_equivalency_response(
         return ai_message.replace("[DENIED]", "").strip()
 
     return ai_message
+
+
+def _validate_and_execute_submit(
+    student_id: int,
+    pending_submit_args: dict,
+    user_message: str,
+    mission_title: str,
+    mission_id: int | None,
+    exec_results: ExecResults,
+):
+    validation = validate_submit_candidate(
+        user_message=user_message,
+        mission_name=mission_title,
+        mission_id=mission_id,
+        qwen_args=pending_submit_args,
+    )
+    print(
+        "[Validator.submit] equivalency "
+        f"action={validation.action} "
+        f"result={validation.result_type or '-'} "
+        f"reason={validation.reason or '-'}"
+    )
+    if validation.should_execute:
+        exec_results.submit = execute_submit(
+            student_id,
+            {**pending_submit_args, "result_type": validation.result_type},
+        )
+        print(f"[Equivalency] submit executed: {exec_results.submit.status}")
+    return validation
 
 
 def _prepend_db_action_ack(ai_message: str, exec_results: ExecResults | None) -> str:
@@ -2040,9 +2081,17 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             eq_judgment = await judge_mission_equivalency(judge_prompt, body.message)
             print(f"[Equivalency] judgment={eq_judgment}")
             if eq_judgment.get("approved") and not eq_judgment.get("need_clarification"):
-                submit_result = await run_in_threadpool(execute_submit, student_id, pending_submit_args)
-                exec_results.submit = submit_result
-                print(f"[Equivalency] submit executed: {submit_result.status}")
+                submit_validation = await run_in_threadpool(
+                    _validate_and_execute_submit,
+                    student_id,
+                    pending_submit_args,
+                    body.message,
+                    mission_title,
+                    mission_id,
+                    exec_results,
+                )
+                if submit_validation and not submit_validation.should_execute:
+                    eq_judgment = {"approved": False, "need_clarification": True}
             pending_submit_args = None  # 판정 완료, 태그 경로 비활성화
 
     system_prompt = await run_in_threadpool(
@@ -2095,6 +2144,9 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 student_id,
                 pending_submit_args,
                 exec_results,
+                body.message,
+                mission_title,
+                mission_id,
             )
 
         ai_message = _filter_ai_response(ai_message)
@@ -2637,9 +2689,17 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 eq_judgment = await judge_mission_equivalency(judge_prompt, body.message)
                 print(f"[Equivalency] judgment={eq_judgment}")
                 if eq_judgment.get("approved") and not eq_judgment.get("need_clarification"):
-                    submit_result = await run_in_threadpool(execute_submit, student_id, pending_submit_args)
-                    exec_results.submit = submit_result
-                    print(f"[Equivalency] submit executed: {submit_result.status}")
+                    submit_validation = await run_in_threadpool(
+                        _validate_and_execute_submit,
+                        student_id,
+                        pending_submit_args,
+                        body.message,
+                        current_mission_title,
+                        mission_id,
+                        exec_results,
+                    )
+                    if submit_validation and not submit_validation.should_execute:
+                        eq_judgment = {"approved": False, "need_clarification": True}
                 pending_submit_args = None  # 판정 완료, 태그 경로 비활성화
 
         system_prompt = await run_in_threadpool(
@@ -2767,6 +2827,9 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 student_id,
                 pending_submit_args,
                 exec_results,
+                body.message,
+                current_mission_title,
+                mission_id,
             )
             if finalized_message.startswith(visible_before_finalize):
                 finalize_suffix = finalized_message[len(visible_before_finalize):]
