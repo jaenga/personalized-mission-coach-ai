@@ -64,7 +64,7 @@ from rag import search_rag
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
 from sheets import cancel_mission_result, update_mission_result
-from submit_validator import build_submit_validation_response
+from submit_validator import build_submit_validation_response, should_promote_to_submit_path
 
 _FAKE_STREAM_CHARS = 4
 _FAKE_STREAM_DELAY_SEC = 0.1
@@ -1856,6 +1856,9 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 "debug": {"intent": "CANCEL_NEGATION_GUARD", "timing": {}},
             }
         intent, intent_ms = await step_classify(body.message, mission_title)
+        if intent in ("A", "D") and should_promote_to_submit_path(body.message, mission_title, mission_id):
+            print("[Route] promoted to B by submit report detector")
+            intent = "B"
         if intent == "B" and "취소" in body.message:
             norm = normalize_b_input(body.message, mission_title, mission_id)
             if norm.should_clarify:
@@ -2429,6 +2432,9 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 yield _done_sse(None, {"intent": "CANCEL_NEGATION_GUARD", "timing": {}})
                 return
             intent, intent_ms = await step_classify(body.message, current_mission_title)
+            if intent in ("A", "D") and should_promote_to_submit_path(body.message, current_mission_title, mission_id):
+                print("[Route] promoted to B by submit report detector (stream)")
+                intent = "B"
             if intent == "B" and "취소" in body.message:
                 norm = normalize_b_input(body.message, current_mission_title, mission_id)
                 if norm.should_clarify:
