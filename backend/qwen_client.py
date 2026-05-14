@@ -22,6 +22,12 @@ _FUNCTION_NAME_ALIASES = {
 }
 
 _CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
+_EXPLICIT_SUBMIT_REPORT_RE = re.compile(
+    r"미션\s*(?:성공|실패|완료)"
+    r"|오늘\s*미션\s*(?:성공|실패|완료)"
+    r"|(?:성공|실패|완료|끝냈|다\s*했|다했|수행했|해냈)"
+    r"|(?:못\s*했|못했|안\s*했|안했|까먹)"
+)
 
 AVAILABLE_FUNCTIONS: list[dict] = [
     {
@@ -286,6 +292,11 @@ def _coerce_function_calls(
         return calls
     calls = _coerce_history_call(user_message, calls)
     coerced = [_coerce_function_call(user_message, call) for call in calls]
+    if not _EXPLICIT_SUBMIT_REPORT_RE.search(user_message or ""):
+        before = len(coerced)
+        coerced = [call for call in coerced if call[0] != "submit_mission_result"]
+        if before != len(coerced):
+            print("[Function] dropped submit call without explicit submit report")
     if not _CANCEL_REQUEST_RE.search(user_message or ""):
         before = len(coerced)
         coerced = [call for call in coerced if call[0] != "cancel_mission_action"]

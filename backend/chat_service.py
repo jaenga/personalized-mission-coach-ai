@@ -332,7 +332,7 @@ def _is_current_mission_status_question(message: str | None) -> bool:
 def _current_mission_status_message(mission_row: dict | None, *, changed_question: bool = False) -> str:
     mission_name = (mission_row or {}).get("mission_name")
     if not mission_name:
-        return "지금 오늘 미션을 아직 불러오지 못했어. 잠시 뒤에 다시 확인해줘!"
+        return "지금 오늘 미션을 아직 불러오지 못했어. 😣 잠시 뒤에 다시 확인해줘!"
     if changed_question:
         return f'아직 말로만 나온 미션으로 바뀐 건 아니야. 지금 오늘 미션은 "{mission_name}"야.'
     return f'지금 오늘 미션은 "{mission_name}"야.'
@@ -532,7 +532,7 @@ def _save_natural_language_confirmation_pending(
                 },
                 "on_no": {
                     "fn": "submit_mission_result",
-                    "args": {"result_type": "failure"},
+                    "args": {"result_type": "fail"},
                 },
                 "original_user_message": user_message,
                 "clarify_reason": clarify_reason,
@@ -590,7 +590,7 @@ def _prepare_mission_change_guard(student_id: int | None, user_message: str, fn_
             if has_checkin_today(student_id):
                 guard_result = {
                     "type": "already_submitted",
-                    "message": "오늘 미션 결과를 이미 저장해서 지금은 미션을 바꿀 수 없어. 바꾸고 싶으면 먼저 방금 기록을 취소해줘!",
+                    "message": "오늘 미션 결과를 이미 저장해서 지금은 미션을 바꿀 수 없어. 바꾸고 싶으면 먼저 방금 기록을 취소해줘! 🙂",
                 }
                 return guard_result, []
             save_mission_adjustment(
@@ -631,7 +631,7 @@ def _prepare_mission_change_guard(student_id: int | None, user_message: str, fn_
                 if has_checkin_today(student_id):
                     guard_result = {
                         "type": "already_submitted",
-                        "message": "오늘 미션 결과를 이미 저장해서 지금은 미션을 바꿀 수 없어. 바꾸고 싶으면 먼저 방금 기록을 취소해줘!",
+                        "message": "오늘 미션 결과를 이미 저장해서 지금은 미션을 바꿀 수 없어. 바꾸고 싶으면 먼저 방금 기록을 취소해줘! 🙂",
                     }
                     return guard_result, []
                 save_mission_adjustment(
@@ -666,7 +666,7 @@ def _prepare_mission_change_guard(student_id: int | None, user_message: str, fn_
         # 유사 미션도 없음: 찾지 못했음 안내
         guard_result = {
             "type": "not_found",
-            "message": f'아직 "{candidate_text}"에 맞는 미션은 찾지 못했어. 다른 미션으로 바꾸고 싶으면 "다른 미션으로 바꿔줘"라고 말해줘!',
+            "message": f'아직 "{candidate_text}"에 맞는 미션은 찾지 못했어. 다른 미션으로 바꾸고 싶으면 "다른 미션으로 바꿔줘"라고 말해줘! 😉',
         }
         return guard_result, []
 
@@ -1338,7 +1338,7 @@ async def _handle_negative_activity_request(
     }
     ui_action = await create_replacement_mission_input_action(student_id, session_id, payload)
     excluded_label = activity_keys[0]
-    response = f"{excluded_label}는 빼고 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘."
+    response = f"{excluded_label}는 빼고 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘. 😁"
     return {
         "response": response,
         "mission_completed": False,
@@ -1387,7 +1387,7 @@ async def _handle_replacement_mission_input(
             active_for_payload = updated_action or {**active_ui, "payload": updated_payload}
             excluded_label = negative_keys[0]
             return {
-                "response": f"{excluded_label}는 빼고 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘.",
+                "response": f"{excluded_label}는 빼고 어떤 미션으로 바꿔줄까? 하고 싶은 미션이나 조건을 말해줘. 😁",
                 "mission_completed": False,
                 "detected_function": "awaiting_replacement_mission",
                 "sources": [],
@@ -1817,7 +1817,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                     "activity_key": mission_row.get("activity_key"),
                 }
                 ui_action = await create_mission_change_reason_action(student_id, body.session_id, payload)
-                ai_message = "미션을 왜 바꾸고 싶은지 나에게 알려줄 수 있을까?"
+                ai_message = "미션을 왜 바꾸고 싶은지 나에게 알려줄 수 있을까? ☺️"
                 print(f"[MissionChange] ui_action created mission_id={mission_row.get('mission_id')} action_id={ui_action.get('action_id')}")
                 await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, "mission_change_reason")
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
@@ -1842,7 +1842,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     if not is_greet:
         if _CANCEL_NEGATION_RE.search(body.message):
-            cancel_negation_message = "알겠어, 취소하지 않을게!"
+            cancel_negation_message = "알겠어, 취소하지 않을게! 😊"
             print("[Guard] cancel negation detected -> fixed response")
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message)
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", cancel_negation_message)
@@ -1914,6 +1914,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", clarify_response)
         if not is_greet:
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
+        await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
         return {
             "response": clarify_response,
             "mission_completed": False,
@@ -2045,7 +2046,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
 
     if not is_greet:
         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
-    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_only or ai_message)
+    await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
     if not is_greet:
         await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
     if not is_greet:
@@ -2461,6 +2462,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
             async for event in _fake_stream_template_response(clarify_response):
                 yield event
+            await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
             total_ms = round((time.perf_counter() - t_total) * 1000)
             yield _done_sse(
                 None,
@@ -2696,10 +2698,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         _attach_xp_award_to_debug(debug_payload, xp_award)
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
-        llm_save = _filter_ai_response(
-            llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
-        )
-        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", llm_save or ai_message)
+        save_content = ai_message.strip()
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", save_content)
         if not is_greet:
             await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)

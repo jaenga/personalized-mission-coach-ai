@@ -68,7 +68,13 @@ def build_submit_hint(result: SubmitResult) -> str:
     result_kor = {"success": "완료", "fail": "수행 실패"}.get(result.result_type or "", "")
     if result.status is SubmitStatus.SAVED:
         if result.result_type == "success":
-            return f"아이가 미션을 성공했어. 짧게 칭찬해줘."
+            return (
+                "아이가 미션을 성공했어. "
+                "사용자 발화에 나온 시간, 장소, 방법, 함께한 사람, 구체적 행동이 있으면 그중 1~2개를 언급해서 칭찬해줘. "
+                "감정이나 이유는 추측하지 말고, 아이가 실제로 한 행동 자체를 인정해줘. "
+                "사용자가 결과를 직접 말한 경우에는 '~면 좋겠다'처럼 바라거나 추측하지 말고, 말한 결과를 그대로 인정한다. "
+                "2~3문장으로 답해줘."
+            )
         return f"아이가 미션 결과를 제출했어. 결과: {result_kor}. 따뜻하게 받아줘."
     if result.status is SubmitStatus.ALREADY_SUBMITTED:
         return "아이가 미션 결과를 다시 제출하려 했어. 짧게 응원 한 마디만 해줘."

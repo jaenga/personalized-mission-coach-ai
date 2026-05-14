@@ -256,7 +256,7 @@ def _confirmation_branch(payload: dict, decision: str) -> dict:
         }
     return {
         "fn": "submit_mission_result",
-        "args": {**_submit_args_from_payload(payload), "result_type": "failure"},
+        "args": {**_submit_args_from_payload(payload), "result_type": "fail"},
     }
 
 
