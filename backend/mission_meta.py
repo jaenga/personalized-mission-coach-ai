@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -21,6 +22,55 @@ class MissionMeta:
     success_kw: list[str] = field(default_factory=list)
 
 
+_NUMBER_KO = {
+    "한": 1,
+    "두": 2,
+    "세": 3,
+    "네": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+}
+
+
+def extract_numeric(text: str, goal: NumericGoal) -> float | None:
+    unit_map = {
+        "회": "회",
+        "번": "회",
+        "개": "회",
+        "분": "분",
+        "시간": "분",
+        "초": "초",
+        "ml": "ml",
+        "mL": "ml",
+        "L": "ml",
+        "l": "ml",
+        "리터": "ml",
+        "잔": "ml",
+        "컵": "ml",
+    }
+    goal_unit = unit_map.get(goal.unit, goal.unit)
+    pattern = re.compile(
+        r"(\d+(?:\.\d+)?|" + "|".join(_NUMBER_KO.keys()) + r")\s*"
+        r"(분|초|시간|회|번|개|잔|컵|L|l|ml|mL|리터)"
+    )
+    for match in pattern.finditer(text or ""):
+        raw_num, raw_unit = match.group(1), match.group(2)
+        if unit_map.get(raw_unit, raw_unit) != goal_unit:
+            continue
+
+        val = float(_NUMBER_KO.get(raw_num, raw_num))
+        if raw_unit == "시간":
+            val *= 60
+        elif raw_unit in goal.unit_aliases:
+            val *= goal.unit_aliases[raw_unit]
+        return val
+    return None
+
+
 MISSION_META: dict[int, MissionMeta] = {
     2: MissionMeta(
         type="perform",
@@ -37,7 +87,7 @@ MISSION_META: dict[int, MissionMeta] = {
         type="perform",
         numeric=NumericGoal(50, "회"),
         target_kw=["줄넘기", "줄넘"],
-        success_kw=["뛰었", "했어", "했음"],
+        success_kw=["뛰었"],
     ),
     25: MissionMeta(type="perform", numeric=NumericGoal(10, "분")),
     29: MissionMeta(type="perform", numeric=NumericGoal(25, "번")),
@@ -83,7 +133,7 @@ MISSION_META: dict[int, MissionMeta] = {
     153: MissionMeta(type="perform", numeric=NumericGoal(10, "분")),
     159: MissionMeta(
         type="perform",
-        target_kw=["숙제", "공부", "과제", "게임"],
+        target_kw=["숙제", "공부", "과제"],
         success_kw=["끝냈", "끝났", "먼저", "마쳤"],
     ),
     168: MissionMeta(

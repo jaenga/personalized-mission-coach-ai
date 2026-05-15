@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from mission_meta import MISSION_META
+from mission_meta import MISSION_META, extract_numeric
 
 SubmitValidationAction = Literal["execute", "clarify", "block"]
 SubmitResultType = Literal["success", "fail"]
@@ -164,11 +164,12 @@ def validate_submit_candidate(
     if _QUALIFIER_RE.search(text):
         return _result("clarify", "clarify_partial")
 
-    if mission_type == "prohibit":
-        if has_keyword and has_negation:
+    if mission_type == "prohibit" and has_keyword:
+        if has_negation:
             return _execute("success", "validated_prohibit_negation")
-        if has_keyword and _CONSUME_OR_SCREEN_RE.search(text):
+        if _CONSUME_OR_SCREEN_RE.search(text):
             return _execute("fail", "validated_prohibit_consumed")
+        return _result("clarify", "clarify_negation")
 
     if has_negation:
         if _EXPLICIT_FAIL_RE.search(text):
@@ -192,7 +193,11 @@ def validate_submit_candidate(
         return _result("clarify", "clarify_no_keyword")
 
     if mission_type == "limit" and meta and meta.numeric and has_numeric:
-        return _execute("success" if requested_type != "fail" else "fail", "validated_limit_numeric")
+        reported = extract_numeric(text, meta.numeric)
+        if reported is None:
+            return _result("clarify", "clarify_number_only")
+        result_type = "success" if reported <= meta.numeric.threshold else "fail"
+        return _execute(result_type, "validated_limit_numeric")
 
     if has_numeric or _EXPLICIT_SUCCESS_RE.search(text) or _COMPLETION_VERB_RE.search(text):
         return _execute("success", "validated_success")
@@ -229,8 +234,7 @@ def _has_mission_keyword(
     text = message or ""
     meta = MISSION_META.get(mission_id) if mission_id else None
     if meta:
-        keywords = [*meta.target_kw, *meta.success_kw]
-        if any(keyword and keyword in text for keyword in keywords):
+        if any(keyword and keyword in text for keyword in meta.target_kw):
             return True
     return _mission_overlap(text, mission_name)
 

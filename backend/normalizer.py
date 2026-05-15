@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from mission_meta import MISSION_META
+from mission_meta import MISSION_META, extract_numeric
 
 NormReason = Literal[
     "",
@@ -71,18 +71,6 @@ _SUBSTITUTE_SUCCESS_ACTION_RE = re.compile(
     r"걸었|걸어|갔|가봤|이용했|이용|올라갔|올랐|다녔"
 )
 
-_NUMBER_KO = {
-    "한": 1,
-    "두": 2,
-    "세": 3,
-    "네": 4,
-    "다섯": 5,
-    "여섯": 6,
-    "일곱": 7,
-    "여덟": 8,
-    "아홉": 9,
-    "열": 10,
-}
 _OVERLAP_STOPWORDS = frozenset({
     "안", "못", "하기", "오늘", "한", "의", "에", "을", "를", "이", "가", "은", "는", "도", "로", "와", "과", "매일", "하루",
     "대신", "작은", "큰", "개", "잔", "번", "분", "초",
@@ -112,40 +100,6 @@ def _mission_overlap(message: str, mission_name: str) -> bool:
 
 def _is_numeric_unit_token(token: str) -> bool:
     return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|세트)?", token or ""))
-
-
-def _extract_numeric(text: str, goal) -> float | None:
-    unit_map = {
-        "회": "회",
-        "번": "회",
-        "개": "회",
-        "분": "분",
-        "시간": "분",
-        "ml": "ml",
-        "mL": "ml",
-        "L": "ml",
-        "l": "ml",
-        "리터": "ml",
-        "잔": "ml",
-        "컵": "ml",
-    }
-    goal_unit = unit_map.get(goal.unit, goal.unit)
-    pattern = re.compile(
-        r"(\d+(?:\.\d+)?|" + "|".join(_NUMBER_KO.keys()) + r")\s*"
-        r"(분|시간|회|번|개|잔|컵|L|l|ml|mL|리터)"
-    )
-    for match in pattern.finditer(text):
-        raw_num, raw_unit = match.group(1), match.group(2)
-        if unit_map.get(raw_unit, raw_unit) != goal_unit:
-            continue
-
-        val = float(_NUMBER_KO.get(raw_num, raw_num))
-        if raw_unit == "시간":
-            val *= 60
-        elif raw_unit in goal.unit_aliases:
-            val *= goal.unit_aliases[raw_unit]
-        return val
-    return None
 
 
 def normalize_b_input(
@@ -210,6 +164,8 @@ def normalize_b_input(
 
     mtype = meta.type if meta else "perform"
     has_target = bool(meta and any(kw in message for kw in meta.target_kw))
+    has_mission_overlap = _mission_overlap(message, mission_name)
+    has_mission_target = has_target or has_mission_overlap
     has_negation = bool(_NEGATION_VERB_RE.search(message))
 
     if mtype == "substitute" and meta:
@@ -242,14 +198,16 @@ def normalize_b_input(
     if _NUMERIC_REPORT_RE.search(message):
         if meta and meta.numeric:
             if mtype == "limit":
-                if not has_target:
+                if not has_mission_target:
                     return clarify("numeric")
-                reported = _extract_numeric(message, meta.numeric)
+                reported = extract_numeric(message, meta.numeric)
                 if reported is None:
                     return clarify("numeric")
                 return success() if reported <= meta.numeric.threshold else fail()
 
-            reported = _extract_numeric(message, meta.numeric)
+            if not has_mission_target:
+                return clarify("numeric")
+            reported = extract_numeric(message, meta.numeric)
             if reported is None:
                 return clarify("numeric")
             if reported >= meta.numeric.threshold:

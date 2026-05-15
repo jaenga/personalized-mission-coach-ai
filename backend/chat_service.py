@@ -518,13 +518,21 @@ def _hint_debug(intent: str, hint: str, llm_ms: int, ai_message: str) -> dict:
     }
 
 
+_NATURAL_LANGUAGE_CONFIRMATION_REASONS = frozenset({
+    "past_ambiguous",
+    "clarify_negation",
+    "clarify_partial",
+    "clarify_time_ambiguous",
+})
+
+
 def _save_natural_language_confirmation_pending(
     student_id: int | None,
     user_message: str,
     clarify_reason: str,
 ) -> None:
     """자연어 확인 질문을 보낸 턴이면 다음 턴 답변을 저장된 함수 실행과 연결한다."""
-    if not student_id or clarify_reason != "past_ambiguous":
+    if not student_id or clarify_reason not in _NATURAL_LANGUAGE_CONFIRMATION_REASONS:
         return
     try:
         pending = save_pending_action(
@@ -2042,6 +2050,12 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if submit_validation and not submit_validation.should_execute:
         ai_message = build_submit_validation_response(submit_validation, mission_title)
         print(f"[Validator.submit] response={_short(ai_message)!r}")
+        await run_in_threadpool(
+            _save_natural_language_confirmation_pending,
+            student_id,
+            body.message,
+            submit_validation.reason,
+        )
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, None)
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
@@ -2647,6 +2661,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         if submit_validation and not submit_validation.should_execute:
             ai_message = build_submit_validation_response(submit_validation, current_mission_title)
             print(f"[Validator.submit] response={_short(ai_message)!r}")
+            await run_in_threadpool(
+                _save_natural_language_confirmation_pending,
+                student_id,
+                body.message,
+                submit_validation.reason,
+            )
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, None)
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
