@@ -41,6 +41,18 @@ SUPPORTED_FUNCTIONS = {
     "none",
 }
 
+FUNCTION_ALIASES = {
+    "submit_mission_action": "submit_mission_result",
+    "submit": "submit_mission_result",
+    "mission_info": "get_mission_info",
+    "history": "get_user_history",
+    "equiv": "check_mission_equivalency",
+    "equivalency": "check_mission_equivalency",
+    "adjust": "request_mission_adjustment",
+    "cancel": "cancel_mission_action",
+    "cancel_mission": "cancel_mission_action",
+}
+
 NON_DB_FUNCTIONS = {"none", "get_mission_info", "check_mission_equivalency", "get_user_history"}
 DB_MARKER_TABLES = [
     "checkin_log",
@@ -60,6 +72,8 @@ ARG_KEY_ALIASES = {
     "cancel_type": {"cancel_type", "type"},
 }
 
+FUNCTION_ARG_KEYS = set().union(*ARG_KEY_ALIASES.values())
+
 
 def normalize_function_name(value: Any) -> str | None:
     """응답 payload/debug에서 함수명을 최대한 안정적으로 정규화한다."""
@@ -76,10 +90,17 @@ def normalize_function_name(value: Any) -> str | None:
     raw = str(value).strip()
     if not raw:
         return None
+    raw = FUNCTION_ALIASES.get(raw, raw)
     if raw in SUPPORTED_FUNCTIONS:
         return raw
+    lowered = raw.lower()
+    if lowered in FUNCTION_ALIASES:
+        return FUNCTION_ALIASES[lowered]
     for fn in SUPPORTED_FUNCTIONS:
         if fn != "none" and fn in raw:
+            return fn
+    for alias, fn in FUNCTION_ALIASES.items():
+        if re.search(rf"\b{re.escape(alias)}\b", lowered):
             return fn
     return None
 
@@ -149,6 +170,13 @@ def function_from_args(args: dict[str, Any]) -> str | None:
     return None
 
 
+def direct_function_args(d: dict[str, Any]) -> dict[str, Any]:
+    """debug/payload 최상위에 바로 놓인 함수 인자들을 모은다."""
+    if not isinstance(d, dict):
+        return {}
+    return {key: value for key, value in d.items() if key in FUNCTION_ARG_KEYS and value not in (None, "")}
+
+
 def extract_possible_args(payload: dict[str, Any], debug: dict[str, Any], expected_function: str) -> dict[str, Any]:
     """payload/debug에서 expected_function에 대응되는 args를 최대한 찾아낸다."""
     # 1) 명시적 function call 배열에서 우선 추출
@@ -158,6 +186,12 @@ def extract_possible_args(payload: dict[str, Any], debug: dict[str, Any], expect
 
     # 2) 자주 쓰는 args 필드 직접 확인
     for d in iter_dicts({"payload": payload, "debug": debug}):
+        direct_args = direct_function_args(d)
+        if direct_args:
+            inferred = function_from_args(direct_args)
+            if inferred == expected_function or expected_function == "none":
+                return direct_args
+
         for key in ("fn_args", "function_args", "arguments", "args", "parameters"):
             raw_args = d.get(key)
             if isinstance(raw_args, str):
@@ -320,13 +354,60 @@ def get_conn():
     return psycopg2.connect(get_database_url())
 
 
+TRANSIENT_DB_ERRORS = (psycopg2.OperationalError, psycopg2.InterfaceError)
+
+
+def run_db_transaction(label: str, work, *, attempts: int = 3):
+    """SSL 끊김 같은 일시적 DB 연결 오류는 새 연결로 재시도한다."""
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        conn = None
+        try:
+            conn = get_conn()
+            result = work(conn)
+            conn.commit()
+            return result
+        except TRANSIENT_DB_ERRORS as exc:
+            last_exc = exc
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            if attempt >= attempts:
+                raise
+            wait_sec = round(1.5 * attempt, 1)
+            print(f"[db-retry] {label} 연결 오류({type(exc).__name__}), {wait_sec}s 후 재시도 {attempt + 1}/{attempts}")
+            time.sleep(wait_sec)
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    if last_exc:
+        raise last_exc
+
+
 def kst_today_sql() -> str:
     return "(NOW() AT TIME ZONE 'Asia/Seoul')::date"
 
 
 def table_exists(cur, table_name: str) -> bool:
     cur.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
-    return cur.fetchone()[0] is not None
+    row = cur.fetchone()
+    if row is None:
+        return False
+    if isinstance(row, dict):
+        return next(iter(row.values())) is not None
+    return row[0] is not None
 
 
 def column_exists(cur, table_name: str, column_name: str) -> bool:
@@ -365,12 +446,11 @@ def delete_from_table_by_student_ids(cur, table_name: str, ids: list[int]) -> in
 
 
 def cleanup_test_data(*, force: bool = False) -> dict[str, int]:
-    deleted: dict[str, int] = {}
-    with get_conn() as conn:
+    def work(conn):
+        deleted: dict[str, int] = {}
         with conn.cursor() as cur:
             ids = test_student_ids(cur)
             if not ids:
-                conn.commit()
                 print("[cleanup] 삭제할 답변테스트용 학생이 없습니다.")
                 return deleted
 
@@ -419,15 +499,20 @@ def cleanup_test_data(*, force: bool = False) -> dict[str, int]:
                 (ids, TEST_STUDENT_MIN, TEST_STUDENT_MAX),
             )
             deleted["students"] = cur.rowcount
-        conn.commit()
+        return deleted
+
+    deleted = run_db_transaction("cleanup", work)
     print("[cleanup]", deleted)
     return deleted
 
 
-def setup_students() -> None:
-    with get_conn() as conn:
+def setup_students(cases: list[TestCase]) -> None:
+    def work(conn):
         with conn.cursor() as cur:
-            for n in range(1, TEST_CASE_COUNT + 1):
+            ids: list[int] = []
+            for case in cases:
+                n = case.idx + 1
+                ids.extend([case.chat_student_id, case.stream_student_id])
                 cur.execute(
                     """
                     INSERT INTO students (
@@ -441,7 +526,7 @@ def setup_students() -> None:
                         is_active = EXCLUDED.is_active,
                         student_note = EXCLUDED.student_note
                     """,
-                    (100 + n, f"채팅만{n:03d}", "1004", CHAT_NOTE),
+                    (case.chat_student_id, f"채팅만{n:03d}", "1004", CHAT_NOTE),
                 )
                 cur.execute(
                     """
@@ -456,25 +541,27 @@ def setup_students() -> None:
                         is_active = EXCLUDED.is_active,
                         student_note = EXCLUDED.student_note
                     """,
-                    (200 + n, f"스트림{n:03d}", "1005", STREAM_NOTE),
+                    (case.stream_student_id, f"스트림{n:03d}", "1005", STREAM_NOTE),
                 )
-            if table_exists(cur, "student_app_state"):
+            if ids and table_exists(cur, "student_app_state"):
                 cur.execute(
                     """
                     INSERT INTO student_app_state (student_id)
                     SELECT student_id FROM students
-                    WHERE student_id BETWEEN %s AND %s
+                    WHERE student_id = ANY(%s)
                       AND student_note LIKE '답변테스트용/%%'
                     ON CONFLICT (student_id) DO NOTHING
                     """,
-                    (TEST_STUDENT_MIN, TEST_STUDENT_MAX),
+                    (ids,),
                 )
-        conn.commit()
-    print("[setup] 테스트용 학생 200명 생성/갱신 완료")
+        return len(ids)
+
+    student_count = run_db_transaction("setup_students", work)
+    print(f"[setup] 테스트용 학생 {student_count}명 생성/갱신 완료")
 
 
 def setup_missions_and_sessions(cases: list[TestCase]) -> None:
-    with get_conn() as conn:
+    def work(conn):
         with conn.cursor() as cur:
             ids = []
             for case in cases:
@@ -560,12 +647,14 @@ def setup_missions_and_sessions(cases: list[TestCase]) -> None:
                             db_session_id,
                         ),
                     )
-        conn.commit()
-    print("[setup] 테스트 케이스별 오늘 미션/세션 배정 완료")
+        return len(ids)
+
+    student_count = run_db_transaction("setup_missions_and_sessions", work)
+    print(f"[setup] 테스트 케이스별 오늘 미션/세션 배정 완료 ({student_count}명)")
 
 
 def setup(cases: list[TestCase]) -> None:
-    setup_students()
+    setup_students(cases)
     setup_missions_and_sessions(cases)
 
 
@@ -651,6 +740,12 @@ def infer_function(
 
     # args만 있는 debug에서 추정. 단 submit은 DB 변경이 없으면 실행 함수로 보지 않는다.
     for d in iter_dicts({"payload": response_payload, "debug": debug}):
+        direct_args = direct_function_args(d)
+        if direct_args:
+            inferred = function_from_args(direct_args)
+            if inferred and inferred != "submit_mission_result":
+                return inferred
+
         for key in ("fn_args", "function_args", "arguments", "args", "parameters"):
             raw_args = d.get(key)
             if isinstance(raw_args, str):
@@ -708,9 +803,17 @@ def infer_response_type(
         return "mission_change"
 
     text = response_text or ""
+    if re.search(r"성공(?:으로)?\s*(?:기록|저장)|성공[!！]?\s*기록|성공 기록", text):
+        return "submit_success"
+    if re.search(r"실패(?:로)?\s*(?:기록|저장)|기록해뒀어", text):
+        return "submit_fail"
+    if re.search(r"미션(?:을)?\s*(?:바꿔|변경)|새 미션|오늘 미션은", text):
+        return "mission_change"
+    if re.search(r"아직 기록이 없어|이번 주 기록|주간 기록|기록을 알려", text):
+        return "info"
     if expected_response_type == "smalltalk" and not COMPLETION_ACK_RE.search(text):
         return "smalltalk"
-    if re.search(r"어떤|언제|얼마나|몇\s*(분|개|번|초|잔)|더 알려|확인|같이|말해줄래|알려줄래", text):
+    if re.search(r"어떤|언제|얼마나|몇\s*(분|개|번|초|잔)|더 알려|확인해볼까|확인|같이|말해줄래|알려줄래|오늘 한 거야", text):
         return "clarify"
     if re.search(r"알려줄게|기준|해야|해도 돼|먹어도 돼|마셔도 돼|오늘 미션|규칙|방법", text):
         return "info"
@@ -800,14 +903,21 @@ def flatten_result(
     elapsed_ms: float | None = None,
     first_token_ms: float | None = None,
     total_elapsed_ms: float | None = None,
+    before_db_markers: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     debug = response_payload.get("debug") if isinstance(response_payload.get("debug"), dict) else {}
     submit_validation = debug.get("submit_validation") if isinstance(debug.get("submit_validation"), dict) else {}
     checkin = get_checkin_result(student_id)
     db_markers = get_db_change_markers(student_id)
+    before_db_markers = before_db_markers or {}
+    marker_delta = {
+        table: db_markers.get(table, 0) - before_db_markers.get(table, 0)
+        for table in sorted(set(db_markers) | set(before_db_markers))
+    }
+    marker_changed = any(delta != 0 for delta in marker_delta.values())
     actual_function = infer_function(response_payload, debug, checkin, db_markers)
     actual_args = extract_actual_args(response_payload, debug, checkin, actual_function if actual_function != "none" else case.expected_function, case.expected_args)
-    actual_db_changed = bool(db_markers)
+    actual_db_changed = bool(db_markers) or marker_changed
     if actual_function in NON_DB_FUNCTIONS and not checkin:
         # 정보 조회류는 채팅 저장 외 미션 DB 변경을 기대하지 않는다.
         actual_db_changed = False
@@ -833,11 +943,12 @@ def flatten_result(
         "actual_validator_action": submit_validation.get("action", ""),
         "actual_validator_result_type": submit_validation.get("result_type", ""),
         "actual_validator_reason": submit_validation.get("reason", ""),
-        "actual_db_markers": db_markers,
+        "actual_db_markers": {"before": before_db_markers, "after": db_markers, "delta": marker_delta},
         "elapsed_ms": elapsed_ms if elapsed_ms is not None else "",
         "first_token_ms": first_token_ms if first_token_ms is not None else "",
         "total_elapsed_ms": total_elapsed_ms if total_elapsed_ms is not None else "",
         "actual_response": response_text,
+        "raw_error": "",
     }
     passed, error_type = compare_result(row)
     row["pass"] = passed
@@ -848,12 +959,13 @@ def flatten_result(
 def post_chat(base_url: str, case: TestCase, timeout: int) -> dict[str, Any]:
     session_id = f"reg-chat-{case.case_id}"
     payload = {"message": case.user_message, "session_id": session_id, "mission": case.mission_name}
+    before_markers = get_db_change_markers(case.chat_student_id)
     start = time.perf_counter()
     response = requests.post(f"{base_url.rstrip('/')}/chat", json=payload, timeout=timeout)
     elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
     response.raise_for_status()
     data = response.json()
-    text = data.get("response", "")
+    text = extract_response_text(data)
     return flatten_result(
         case=case,
         endpoint="/chat",
@@ -861,7 +973,16 @@ def post_chat(base_url: str, case: TestCase, timeout: int) -> dict[str, Any]:
         response_payload=data,
         response_text=text,
         elapsed_ms=elapsed_ms,
+        before_db_markers=before_markers,
     )
+
+
+def extract_response_text(payload: dict[str, Any]) -> str:
+    for key in ("response", "message", "content", "text", "answer"):
+        value = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(value, str):
+            return value
+    return ""
 
 
 def parse_sse_event(line: str) -> dict[str, Any] | None:
@@ -877,37 +998,96 @@ def parse_sse_event(line: str) -> dict[str, Any] | None:
         return None
 
 
+def parse_sse_block(lines: list[str]) -> dict[str, Any] | None:
+    data_parts: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(":"):
+            continue
+        if stripped.startswith("data:"):
+            data_parts.append(stripped[5:].strip())
+    if not data_parts:
+        return None
+    raw = "\n".join(data_parts).strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"type": "raw", "content": raw}
+
+
+def merge_stream_event_payload(done_payload: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = dict(done_payload or {})
+    payload.setdefault("type", "done" if done_payload else "stream")
+    payload["events"] = events
+    pipeline_events = [event for event in events if event.get("type") == "pipeline"]
+    if pipeline_events:
+        payload["pipeline_events"] = pipeline_events
+    if "debug" not in payload or not isinstance(payload.get("debug"), dict):
+        payload["debug"] = {}
+    return payload
+
+
 def post_stream(base_url: str, case: TestCase, timeout: int) -> dict[str, Any]:
     session_id = f"reg-stream-{case.case_id}"
     payload = {"message": case.user_message, "session_id": session_id, "mission": case.mission_name}
+    before_markers = get_db_change_markers(case.stream_student_id)
     start = time.perf_counter()
     first_token_ms: float | None = None
     tokens: list[str] = []
+    events: list[dict[str, Any]] = []
     done_payload: dict[str, Any] = {}
     with requests.post(f"{base_url.rstrip('/')}/chat/stream", json=payload, stream=True, timeout=timeout) as response:
         response.raise_for_status()
+        event_lines: list[str] = []
         for raw_line in response.iter_lines(decode_unicode=True):
-            if not raw_line:
+            if raw_line == "":
+                event = parse_sse_block(event_lines)
+                event_lines = []
+                if not event:
+                    continue
+            else:
+                event_lines.append(raw_line)
                 continue
-            event = parse_sse_event(raw_line)
-            if not event:
-                continue
-            if first_token_ms is None:
-                first_token_ms = round((time.perf_counter() - start) * 1000, 2)
+
+            events.append(event)
             if event.get("type") == "token":
+                if first_token_ms is None:
+                    first_token_ms = round((time.perf_counter() - start) * 1000, 2)
                 tokens.append(str(event.get("content", "")))
             elif event.get("type") == "done":
                 done_payload = event
+            elif event.get("type") in {"message", "response"}:
+                if first_token_ms is None:
+                    first_token_ms = round((time.perf_counter() - start) * 1000, 2)
+                tokens.append(str(event.get("content") or event.get("response") or event.get("message") or ""))
+
+        event = parse_sse_block(event_lines)
+        if event:
+            events.append(event)
+            if event.get("type") == "token":
+                if first_token_ms is None:
+                    first_token_ms = round((time.perf_counter() - start) * 1000, 2)
+                tokens.append(str(event.get("content", "")))
+            elif event.get("type") == "done":
+                done_payload = event
+            elif event.get("type") in {"message", "response"}:
+                if first_token_ms is None:
+                    first_token_ms = round((time.perf_counter() - start) * 1000, 2)
+                tokens.append(str(event.get("content") or event.get("response") or event.get("message") or ""))
     total_elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
     response_text = "".join(tokens)
+    stream_payload = merge_stream_event_payload(done_payload, events)
     return flatten_result(
         case=case,
         endpoint="/chat/stream",
         student_id=case.stream_student_id,
-        response_payload=done_payload,
+        response_payload=stream_payload,
         response_text=response_text,
         first_token_ms=first_token_ms or total_elapsed_ms,
         total_elapsed_ms=total_elapsed_ms,
+        before_db_markers=before_markers,
     )
 
 
@@ -953,6 +1133,7 @@ def run_stream(cases: list[TestCase], base_url: str, output_dir: Path, timeout: 
 
 
 def error_row(case: TestCase, endpoint: str, student_id: int, exc: Exception) -> dict[str, Any]:
+    error_type = classify_exception(exc)
     row = {
         "case_id": case.case_id,
         "endpoint": endpoint,
@@ -978,10 +1159,21 @@ def error_row(case: TestCase, endpoint: str, student_id: int, exc: Exception) ->
         "first_token_ms": "",
         "total_elapsed_ms": "",
         "pass": False,
-        "error_type": "REQUEST_ERROR",
+        "error_type": error_type,
         "actual_response": repr(exc),
+        "raw_error": repr(exc),
     }
     return row
+
+
+def classify_exception(exc: Exception) -> str:
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "REQUEST_TIMEOUT"
+    if isinstance(exc, requests.exceptions.HTTPError):
+        return "HTTP_ERROR"
+    if isinstance(exc, requests.exceptions.RequestException):
+        return "REQUEST_ERROR"
+    return f"SCRIPT_ERROR:{type(exc).__name__}"
 
 
 def chat_result_fields() -> list[str]:
@@ -990,7 +1182,7 @@ def chat_result_fields() -> list[str]:
         "user_message", "expected_function", "actual_function", "expected_args", "actual_args",
         "expected_db_changed", "actual_db_changed", "expected_response_type", "actual_response_type",
         "actual_validator_action", "actual_validator_result_type", "actual_validator_reason", "actual_db_markers",
-        "elapsed_ms", "pass", "error_type", "actual_response",
+        "elapsed_ms", "pass", "error_type", "actual_response", "raw_error",
     ]
 
 
@@ -1000,7 +1192,7 @@ def stream_result_fields() -> list[str]:
         "user_message", "expected_function", "actual_function", "expected_args", "actual_args",
         "expected_db_changed", "actual_db_changed", "expected_response_type", "actual_response_type",
         "actual_validator_action", "actual_validator_result_type", "actual_validator_reason", "actual_db_markers",
-        "first_token_ms", "total_elapsed_ms", "pass", "error_type", "actual_response",
+        "first_token_ms", "total_elapsed_ms", "pass", "error_type", "actual_response", "raw_error",
     ]
 
 
@@ -1009,6 +1201,26 @@ def read_result_csv(path: Path) -> list[dict[str, Any]]:
         return []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
+
+
+RESULT_FILE_NAMES = [
+    "demo_test_results_chat.csv",
+    "demo_test_results_stream.csv",
+    "failure_cases.csv",
+    "demo_safe_cases.csv",
+    "regression_summary.md",
+]
+
+
+def reset_results(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    removed = []
+    for name in RESULT_FILE_NAMES:
+        path = output_dir / name
+        if path.exists():
+            path.unlink()
+            removed.append(name)
+    print(f"[reset-results] 삭제: {', '.join(removed) if removed else '없음'}")
 
 
 def report(cases: list[TestCase], output_dir: Path) -> None:
@@ -1170,6 +1382,8 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--base-url", default=os.getenv("REGRESSION_BASE_URL", "http://127.0.0.1:8000"))
     parser.add_argument("--timeout", type=int, default=int(os.getenv("REGRESSION_TIMEOUT", "180")))
+    parser.add_argument("--limit", type=int, default=None, help="앞에서 N개 케이스만 실행/리포트. 예: --limit 5")
+    parser.add_argument("--reset-results", action="store_true", help="기존 회귀 결과 CSV/summary 파일 삭제")
     parser.add_argument("--reset", action="store_true", help="기존 답변테스트용 데이터를 삭제하고 시작")
     parser.add_argument("--setup", action="store_true", help="테스트용 학생 생성 및 오늘 미션 배정")
     parser.add_argument("--run-chat", action="store_true", help="/chat 100개 테스트 실행")
@@ -1182,7 +1396,15 @@ def main() -> None:
 
     load_env()
     cases = load_cases(args.cases)
+    if args.limit is not None:
+        if args.limit <= 0:
+            raise ValueError("--limit은 1 이상의 정수여야 합니다.")
+        cases = cases[: args.limit]
+        print(f"[limit] 앞에서 {len(cases)}개 케이스만 사용")
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.reset_results:
+        reset_results(args.output_dir)
 
     if args.reset:
         cleanup_test_data(force=True)
