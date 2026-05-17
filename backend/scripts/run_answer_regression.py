@@ -506,43 +506,35 @@ def cleanup_test_data(*, force: bool = False) -> dict[str, int]:
     return deleted
 
 
-def setup_students(cases: list[TestCase]) -> None:
+def iter_case_students(case: TestCase, endpoints: set[str]):
+    if "chat" in endpoints:
+        yield "chat", case.chat_student_id, f"채팅만{case.idx + 1:03d}", "1004", CHAT_NOTE
+    if "stream" in endpoints:
+        yield "stream", case.stream_student_id, f"스트림{case.idx + 1:03d}", "1005", STREAM_NOTE
+
+
+def setup_students(cases: list[TestCase], endpoints: set[str]) -> None:
     def work(conn):
         with conn.cursor() as cur:
             ids: list[int] = []
             for case in cases:
-                n = case.idx + 1
-                ids.extend([case.chat_student_id, case.stream_student_id])
-                cur.execute(
-                    """
-                    INSERT INTO students (
-                        student_id, student_name, age, gender, phone_number,
-                        location, is_active, student_note
+                for _endpoint_name, student_id, student_name, phone_number, student_note in iter_case_students(case, endpoints):
+                    ids.append(student_id)
+                    cur.execute(
+                        """
+                        INSERT INTO students (
+                            student_id, student_name, age, gender, phone_number,
+                            location, is_active, student_note
+                        )
+                        VALUES (%s, %s, NULL, '', %s, '', TRUE, %s)
+                        ON CONFLICT (student_id) DO UPDATE SET
+                            student_name = EXCLUDED.student_name,
+                            phone_number = EXCLUDED.phone_number,
+                            is_active = EXCLUDED.is_active,
+                            student_note = EXCLUDED.student_note
+                        """,
+                        (student_id, student_name, phone_number, student_note),
                     )
-                    VALUES (%s, %s, NULL, '', %s, '', TRUE, %s)
-                    ON CONFLICT (student_id) DO UPDATE SET
-                        student_name = EXCLUDED.student_name,
-                        phone_number = EXCLUDED.phone_number,
-                        is_active = EXCLUDED.is_active,
-                        student_note = EXCLUDED.student_note
-                    """,
-                    (case.chat_student_id, f"채팅만{n:03d}", "1004", CHAT_NOTE),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO students (
-                        student_id, student_name, age, gender, phone_number,
-                        location, is_active, student_note
-                    )
-                    VALUES (%s, %s, NULL, '', %s, '', TRUE, %s)
-                    ON CONFLICT (student_id) DO UPDATE SET
-                        student_name = EXCLUDED.student_name,
-                        phone_number = EXCLUDED.phone_number,
-                        is_active = EXCLUDED.is_active,
-                        student_note = EXCLUDED.student_note
-                    """,
-                    (case.stream_student_id, f"스트림{n:03d}", "1005", STREAM_NOTE),
-                )
             if ids and table_exists(cur, "student_app_state"):
                 cur.execute(
                     """
@@ -560,12 +552,12 @@ def setup_students(cases: list[TestCase]) -> None:
     print(f"[setup] 테스트용 학생 {student_count}명 생성/갱신 완료")
 
 
-def setup_missions_and_sessions(cases: list[TestCase]) -> None:
+def setup_missions_and_sessions(cases: list[TestCase], endpoints: set[str]) -> None:
     def work(conn):
         with conn.cursor() as cur:
             ids = []
             for case in cases:
-                ids.extend([case.chat_student_id, case.stream_student_id])
+                ids.extend(student_id for _endpoint_name, student_id, _student_name, _phone_number, _note in iter_case_students(case, endpoints))
 
             # 오늘 테스트 실행에 영향을 줄 수 있는 데이터만 정리한다.
             for table in [
@@ -614,7 +606,7 @@ def setup_missions_and_sessions(cases: list[TestCase]) -> None:
             values_sql = ", ".join(["%s", "%s", f"{kst_today_sql()}", "'assigned'"] + extra_values_sql)
 
             for case in cases:
-                for student_id in (case.chat_student_id, case.stream_student_id):
+                for _endpoint_name, student_id, _student_name, _phone_number, _note in iter_case_students(case, endpoints):
                     cur.execute(
                         f"""
                         INSERT INTO student_daily_missions ({columns_sql})
@@ -624,7 +616,7 @@ def setup_missions_and_sessions(cases: list[TestCase]) -> None:
                     )
 
             for case in cases:
-                for endpoint_name, student_id in (("chat", case.chat_student_id), ("stream", case.stream_student_id)):
+                for endpoint_name, student_id, student_name, _phone_number, _note in iter_case_students(case, endpoints):
                     session_key = f"reg-{endpoint_name}-{case.case_id}"
                     cur.execute(
                         "INSERT INTO chat_sessions (student_id, started_at) VALUES (%s, NOW()) RETURNING session_id",
@@ -643,7 +635,7 @@ def setup_missions_and_sessions(cases: list[TestCase]) -> None:
                         (
                             session_key,
                             student_id,
-                            f"채팅만{case.idx + 1:03d}" if endpoint_name == "chat" else f"스트림{case.idx + 1:03d}",
+                            student_name,
                             db_session_id,
                         ),
                     )
@@ -653,9 +645,9 @@ def setup_missions_and_sessions(cases: list[TestCase]) -> None:
     print(f"[setup] 테스트 케이스별 오늘 미션/세션 배정 완료 ({student_count}명)")
 
 
-def setup(cases: list[TestCase]) -> None:
-    setup_students(cases)
-    setup_missions_and_sessions(cases)
+def setup(cases: list[TestCase], endpoints: set[str]) -> None:
+    setup_students(cases, endpoints)
+    setup_missions_and_sessions(cases, endpoints)
 
 
 def get_checkin_result(student_id: int) -> dict[str, Any] | None:
@@ -1223,6 +1215,17 @@ def reset_results(output_dir: Path) -> None:
     print(f"[reset-results] 삭제: {', '.join(removed) if removed else '없음'}")
 
 
+def selected_setup_endpoints(args: argparse.Namespace) -> set[str]:
+    if args.run:
+        return {"chat", "stream"}
+    endpoints: set[str] = set()
+    if args.run_chat:
+        endpoints.add("chat")
+    if args.run_stream:
+        endpoints.add("stream")
+    return endpoints or {"chat", "stream"}
+
+
 def report(cases: list[TestCase], output_dir: Path) -> None:
     chat_rows = read_result_csv(output_dir / "demo_test_results_chat.csv")
     stream_rows = read_result_csv(output_dir / "demo_test_results_stream.csv")
@@ -1385,7 +1388,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="앞에서 N개 케이스만 실행/리포트. 예: --limit 5")
     parser.add_argument("--reset-results", action="store_true", help="기존 회귀 결과 CSV/summary 파일 삭제")
     parser.add_argument("--reset", action="store_true", help="기존 답변테스트용 데이터를 삭제하고 시작")
-    parser.add_argument("--setup", action="store_true", help="테스트용 학생 생성 및 오늘 미션 배정")
+    parser.add_argument("--setup", action="store_true", help="테스트용 학생 생성 및 오늘 미션 배정. --run-chat/--run-stream 선택 시 해당 endpoint만 준비")
     parser.add_argument("--run-chat", action="store_true", help="/chat 100개 테스트 실행")
     parser.add_argument("--run-stream", action="store_true", help="/chat/stream 100개 테스트 실행")
     parser.add_argument("--run", action="store_true", help="/chat과 /chat/stream 모두 실행")
@@ -1410,7 +1413,7 @@ def main() -> None:
         cleanup_test_data(force=True)
 
     if args.setup:
-        setup(cases)
+        setup(cases, selected_setup_endpoints(args))
 
     if args.run or args.run_chat:
         run_chat(cases, args.base_url, args.output_dir, args.timeout)
