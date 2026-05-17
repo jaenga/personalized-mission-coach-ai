@@ -52,7 +52,17 @@ _QUESTION_RE = re.compile(
 _NEGATION_VERB_RE = re.compile(
     r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안타|못타"
 )
-_EXPLICIT_FAIL_RE = re.compile(r"실패|못했|안했")
+_EXPLICIT_FAIL_RE = re.compile(
+    r"실패"
+    r"|못\s*했"
+    r"|안\s*했"
+    r"|못\s*함"
+    r"|안\s*함"
+    r"|못\s*끝"
+    r"|아예\s*못"
+    r"|까먹"
+    r"|패스\s*함"
+)
 _EMOTIONAL_RE = re.compile(r"하기 싫|못하겠|안해|못해|포기")
 _EXPLICIT_SUCCESS_RE = re.compile(r"성공|완료|해냈|끝냈|다 했|다했|클리어")
 _SUCCESS_RE = re.compile(
@@ -70,6 +80,8 @@ _CONSUME_PAST_RE = re.compile(
 _SUBSTITUTE_SUCCESS_ACTION_RE = re.compile(
     r"걸었|걸어|갔|가봤|이용했|이용|올라갔|올랐|다녔"
 )
+_SUBSTITUTE_AVOID_RE = re.compile(r"안\s*(?:타|탔|이용|씀)|대신")
+_SUBSTITUTE_ACTION_RE = re.compile(r"올라갔|내려갔|걸었|이용했|갔")
 
 _OVERLAP_STOPWORDS = frozenset({
     "안", "못", "하기", "오늘", "한", "의", "에", "을", "를", "이", "가", "은", "는", "도", "로", "와", "과", "매일", "하루",
@@ -169,11 +181,7 @@ def normalize_b_input(
     has_negation = bool(_NEGATION_VERB_RE.search(message))
 
     if mtype == "substitute" and meta:
-        has_success = (
-            any(kw in message for kw in meta.success_kw)
-            and _SUBSTITUTE_SUCCESS_ACTION_RE.search(message)
-        )
-        if has_success:
+        if _is_clear_substitute_success(message, meta):
             return success()
         if has_target and not has_negation:
             return fail()
@@ -234,3 +242,14 @@ def normalize_b_input(
         return clarify("past_ambiguous")
 
     return ok()
+
+
+def _is_clear_substitute_success(message: str, meta) -> bool:
+    text = message or ""
+    has_avoid_keyword = any(keyword and keyword in text for keyword in meta.target_kw)
+    return bool(
+        has_avoid_keyword
+        and _SUBSTITUTE_AVOID_RE.search(text)
+        and "계단" in text
+        and _SUBSTITUTE_ACTION_RE.search(text)
+    )

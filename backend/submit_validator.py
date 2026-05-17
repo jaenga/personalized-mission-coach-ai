@@ -70,8 +70,20 @@ _NEGATION_RE = re.compile(
 _CONSUME_OR_SCREEN_RE = re.compile(
     r"먹었|마셨|봤어|봤다|시청했|사용했|틀었|켰어|켰다"
 )
-_EXPLICIT_FAIL_RE = re.compile(r"실패|못했|안했|까먹|못\s*끝")
+_EXPLICIT_FAIL_RE = re.compile(
+    r"실패"
+    r"|못\s*했"
+    r"|안\s*했"
+    r"|못\s*함"
+    r"|안\s*함"
+    r"|못\s*끝"
+    r"|아예\s*못"
+    r"|까먹"
+    r"|패스\s*함"
+)
 _EXPLICIT_SUCCESS_RE = re.compile(r"미션\s*성공|오늘\s*미션\s*성공|성공했|미션\s*완료|오늘\s*미션\s*완료|완료했|끝냈|다\s*했|다했|수행했|해냈|클리어")
+_SUBSTITUTE_AVOID_RE = re.compile(r"안\s*(?:타|탔|이용|씀)|대신")
+_SUBSTITUTE_ACTION_RE = re.compile(r"올라갔|내려갔|걸었|이용했|갔")
 _QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에")
 _DB_COMPLETION_PHRASE_RE = re.compile(
     r"기록(?:했|해뒀|됐|되었|완료)"
@@ -138,6 +150,8 @@ def should_promote_to_submit_path(
     meta = MISSION_META.get(mission_id) if mission_id else None
     if meta and meta.type == "prohibit":
         return bool(_SCREEN_RESTRICTION_VERB_RE.search(user_message or "") or _NEGATION_RE.search(user_message or ""))
+    if meta and meta.type == "substitute":
+        return _is_clear_substitute_success(user_message, meta)
 
     return bool(_COMPLETION_VERB_RE.search(user_message or "") or contains_numeric_expression(user_message))
 
@@ -170,6 +184,9 @@ def validate_submit_candidate(
         if _CONSUME_OR_SCREEN_RE.search(text):
             return _execute("fail", "validated_prohibit_consumed")
         return _result("clarify", "clarify_negation")
+
+    if mission_type == "substitute" and meta and _is_clear_substitute_success(text, meta):
+        return _execute("success", "validated_success")
 
     if has_negation:
         if _EXPLICIT_FAIL_RE.search(text):
@@ -219,6 +236,17 @@ def _result(action: SubmitValidationAction, reason: str) -> SubmitValidationResu
 
 def _execute(result_type: SubmitResultType, reason: str) -> SubmitValidationResult:
     return SubmitValidationResult(action="execute", result_type=result_type, reason=reason)
+
+
+def _is_clear_substitute_success(message: str, meta) -> bool:
+    text = message or ""
+    has_avoid_keyword = any(keyword and keyword in text for keyword in meta.target_kw)
+    return bool(
+        has_avoid_keyword
+        and _SUBSTITUTE_AVOID_RE.search(text)
+        and "계단" in text
+        and _SUBSTITUTE_ACTION_RE.search(text)
+    )
 
 
 def _explicitly_mentions_mission(message: str) -> bool:
