@@ -16,8 +16,16 @@ COMMON_EQUIVALENCY_RULE = """
 - 행동, 양, 시간, 장소가 애매하면 바로 판정하지 말고 필요한 정보 1개만 짧게 물어본다.
 - 통증, 어지러움, 다침, 위험한 날씨나 장소가 있으면 판정보다 안전을 우선한다.
 - outdoor/school 조건은 날씨·안전 문제가 있으면 같은 시간/분량의 안전한 대체를 안내할 수 있다.
-""".strip()
 
+[DB 메타데이터 우선 규칙]
+- DB의 success_criteria, strict_requirements, target_metric, target_value, target_unit, time_condition을 우선 참고한다.
+- allowed_substitutes에 있는 행동이라도 strict_requirements를 어기면 approved하지 않는다.
+- denied_substitutes에 해당하면 approved하지 않는다.
+- clarify_triggers에 해당하면 decision은 clarify로 한다.
+- target_value는 숫자 비교 기준으로 사용한다. 숫자가 비어 있는 order/avoid 계열은 success_criteria와 strict_requirements를 기준으로 판단한다.
+- 애매하면 approved하지 말고 clarify한다.
+- 판단 우선순위는 mission_rule/시트 메타데이터 → sub_category 기준 → main_category 기준 → 공통 기준 순서로 따른다.
+""".strip()
 
 MAIN_CATEGORY_RULES = {
     "physical_activity": """
@@ -162,7 +170,8 @@ SUB_CATEGORY_RULES = {
     "video": """
 [video 세부 기준]
 - 유튜브, 쇼츠, 릴스, 틱톡, TV, OTT, 넷플릭스 등 영상 시청 제한이 핵심이다.
-- 유튜브 대신 TV/OTT/틱톡을 보는 것은 대체로 인정하지 않는다.
+- 유튜브 제한 미션에서 TV/OTT/틱톡/쇼츠/릴스를 보는 것은 대체로 인정하지 않는다.
+- 단, 이것은 "유튜브만 봐야 한다"는 뜻이 아니다. 다른 영상 앱도 제한 대상이라는 뜻이다.
 - 30분, 10분, 하루 종일 금지, 잠들기 1시간 전, 식사 전후 30분 등 조건을 따른다.
 - 영상 1개만, 프로그램 하나만, 자동재생 끄기, 추가 시청 금지 등 조건을 지켜야 한다.
 - 공부 학습 목적이나 건강 미션에 필요한 영상 시청은 예외적으로 인정한다.

@@ -29,7 +29,7 @@ class SubmitValidationResult:
         }
 
 
-HARD_TEMPORAL = ("어제", "엊그제", "지난번", "저번", "예전")
+HARD_TEMPORAL = ("어제", "그저께", "엊그제", "지난번", "저번", "예전", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
 SOFT_TEMPORAL = ("이미", "아까")
 SMALLTALK_EXACT = ("고마워", "그렇구나", "아하", "ㅋㅋ", "ㅎㅎ", "오케이", "알겠어")
 SMALLTALK_MAX_LEN = 10
@@ -68,7 +68,7 @@ _NEGATION_RE = re.compile(
     r"|안먹|못먹|안마|못마|안봤|못봤|안했|못했"
 )
 _CONSUME_OR_SCREEN_RE = re.compile(
-    r"먹었|마셨|봤어|봤다|시청했|사용했|틀었|켰어|켰다"
+    r"먹었|먹음|먹어버|먹었다|마셨|봤어|봤다|봄|시청했|사용했|틀었|켰어|켰다"
 )
 _EXPLICIT_FAIL_RE = re.compile(
     r"실패"

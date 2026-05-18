@@ -4,6 +4,8 @@ import json
 import time
 import httpx
 from dotenv import load_dotenv
+from equivalency_judgment import EquivalencyJudgment, normalize_decision
+from equivalency_normalizer import normalize_equivalency_text
 
 load_dotenv()
 
@@ -93,20 +95,65 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     return ai_message, call1_ms
 
 
-async def judge_mission_equivalency(judge_system_prompt: str, user_message: str) -> dict:
-    """대체 수행 판정 전용 호출. {"approved": bool, "need_clarification": bool} 반환.
-    LLM 실패 또는 파싱 실패 시 need_clarification=True 반환하여 안전하게 fallback.
+async def judge_mission_equivalency(judge_system_prompt: str, user_message: str) -> EquivalencyJudgment:
+    """대체 수행 판정 전용 호출.
+
+    Expected JSON:
+    {"decision": "approved|denied|clarify", "reason": "...", "reply": "...", "clarify_question": null|"..." }
+    Legacy {"approved": bool, "need_clarification": bool} responses are still accepted as a fallback.
     """
+    raw = None
     try:
-        raw = await generate_json_message(judge_system_prompt, user_message, timeout=15.0)
+        normalized = normalize_equivalency_text(user_message)
+        judge_user_message = user_message
+        if normalized != user_message:
+            judge_user_message = (
+                f"원문: {user_message}\n"
+                f"표준화 참고: {normalized}\n"
+                "표준화 참고는 단위 비교용일 뿐이고, 최종 판단은 시스템 기준으로 해."
+            )
+        raw = await generate_json_message(judge_system_prompt, judge_user_message, timeout=30.0)
         result = json.loads(raw)
-        return {
-            "approved": bool(result.get("approved", False)),
-            "need_clarification": bool(result.get("need_clarification", False)),
-        }
+        decision = normalize_decision(
+            result.get("decision"),
+            approved=result.get("approved"),
+            need_clarification=result.get("need_clarification"),
+        )
+        clarify_question = result.get("clarify_question")
+        if not isinstance(clarify_question, str) or not clarify_question.strip():
+            clarify_question = None
+        if decision == "clarify" and not clarify_question:
+            clarify_question = "무엇을 얼마나 했는지 조금만 더 알려줄래?"
+        reply = str(result.get("reply") or "").strip()
+        if not reply:
+            if decision == "approved":
+                reply = "응, 그 방법은 미션 기준에 맞아."
+            elif decision == "denied":
+                reply = "그 방법은 이번 미션 기준으로는 인정하기 어려워."
+            else:
+                reply = "조금만 더 알려줘야 정확히 볼 수 있어."
+        return EquivalencyJudgment(
+            decision=decision,
+            reason=str(result.get("reason") or "").strip(),
+            reply=reply,
+            clarify_question=clarify_question,
+            raw=result,
+        )
     except Exception as e:
-        print(f"[Equivalency] judge call failed: {e}")
-        return {"approved": False, "need_clarification": True}
+        raw_preview = ""
+        if raw is not None:
+            raw_preview = raw[:200].replace("\n", " ")
+        print(
+            f"[Equivalency] judge call failed: type={type(e).__name__} "
+            f"msg={e!r} raw_len={len(raw) if raw is not None else 0} "
+            f"raw_preview={raw_preview!r}"
+        )
+        return EquivalencyJudgment(
+            decision="clarify",
+            reason="json_parse_failed",
+            reply="조금만 더 알려줘야 정확히 볼 수 있어.",
+            clarify_question="무엇을 얼마나 했는지 알려줄래?",
+        )
 
 
 async def generate_json_message(system_prompt: str, user_message: str, timeout: float = 10.0) -> str:

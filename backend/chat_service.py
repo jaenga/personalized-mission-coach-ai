@@ -1,7 +1,9 @@
 import asyncio
+from dataclasses import asdict, is_dataclass
 import json as _json
 import random
 import re
+import sys
 import time
 
 from fastapi import BackgroundTasks, HTTPException
@@ -38,6 +40,7 @@ from activity_matcher import (
     select_replacement_mission,
 )
 from executor import AdjustmentStatus, CancelStatus, ExecResults, execute_adjustment, execute_submit
+from equivalency_service import EquivalencyService
 from memory_service import extract_and_save_memory
 from mission_ui_action_service import (
     create_mission_change_reason_action,
@@ -46,9 +49,8 @@ from mission_ui_action_service import (
     get_active_ui_action,
     rebuild_ui_action_payload,
 )
-from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream, judge_mission_equivalency
+from ollama_client import OLLAMA_MODEL, generate_chat_message, generate_chat_message_stream
 from pending_service import PendingOutcome, classify_mission_dislike, handle_pending_action
-from qwen_client import detect_history_call, detect_mission_info_call, detect_submit_report_call
 from pipeline import (
     classify_multi,
     is_equivalency_submit,
@@ -57,10 +59,10 @@ from pipeline import (
     step_execute,
     step_extract_functions,
 )
-from hint_builder import build_equivalency_judge_prompt
 from normalizer import normalize_b_input
 from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MAP
 from rag import search_rag
+from routing_service import MissionRouter
 from response_builder import ResponseMode, build_action_ack, build_conflict_ack
 from schemas import ChatRequest
 from sheets import cancel_mission_result, update_mission_result
@@ -74,6 +76,8 @@ from submit_validator import (
 _FAKE_STREAM_CHARS = 4
 _FAKE_STREAM_DELAY_SEC = 0.1
 _CHAT_CONTEXT_MESSAGE_LIMIT = 10
+_MISSION_ROUTER = MissionRouter()
+_EQUIVALENCY_SERVICE = EquivalencyService()
 _CLARIFY_TEMPLATE_REASONS = {
     "numeric",
     "numeric_no_count",
@@ -103,8 +107,18 @@ def _clarify_template(reason: str, user_message: str, mission_title: str) -> str
     return None
 
 
+def _json_default(value):
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if is_dataclass(value):
+        return asdict(value)
+    if hasattr(value, "value"):
+        return value.value
+    return str(value)
+
+
 def _sse(payload: dict) -> str:
-    return f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+    return f"data: {_json.dumps(payload, ensure_ascii=False, default=_json_default)}\n\n"
 
 
 def _done_sse(
@@ -178,6 +192,11 @@ def _short(text: str | None, limit: int = 90) -> str:
         return ""
     one_line = " ".join(str(text).split())
     return one_line if len(one_line) <= limit else one_line[: limit - 1] + "..."
+
+
+def _console_safe(text: str) -> str:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, errors="backslashreplace").decode(encoding, errors="replace")
 
 
 def _fn_label(fn: str, args: dict | None = None) -> str:
@@ -772,6 +791,106 @@ def _unsafe_gemma_db_completion(gemma_text: str, exec_results: ExecResults | Non
     return bool(gemma_text and not _exec_results_db_changed(exec_results) and contains_db_completion_phrase(gemma_text))
 
 
+_EQUIVALENCY_APPROVAL_RE = re.compile(
+    r"인정(?:돼|이야|할 수|될 수)|괜찮아|해도 돼|먹어도 돼|마셔도 돼|들어도 돼|봐도 돼|충분해|가능해"
+)
+_EQUIVALENCY_DENIAL_RE = re.compile(
+    r"안 돼|안돼|인정(?:이 )?(?:안|어려)|인정되지|인정할 수 없어|실패|해야 해|해야 돼"
+)
+# denied 답변에 반드시 들어가야 하는 명확한 거절 표현 (위 _DENIAL_RE 부분집합).
+# "~게 더 좋아"처럼 비교형으로 우회한 경우 잡기 위함.
+# "X보다는 Y", "Y를 해야 해" 같은 비교/명령조 표현도 거절 의도가 명백하면 인정한다.
+_EQUIVALENCY_CLEAR_DENIAL_RE = re.compile(
+    r"안\s*돼|"
+    r"인정(?:이\s*)?(?:안|어려|불가)|인정되지|인정할\s*수\s*없|"
+    r"보다는\s*[가-힣]+|"  # "물티슈보다는 비누로"
+    r"[가-힣]+(?:로|으로)\s*씻어야|"
+    r"[가-힣]+(?:을|를)\s*해야\s*해"  # "비누를 써야 해"
+)
+_EQUIVALENCY_MISLEADING_LIMIT_DENIAL_RE = re.compile(
+    r"(?:유튜브|쇼츠|릴스|틱톡|영상|게임|TV|티비|넷플릭스)(?:만|을?만)\s*(?:봐야|보면|해야|하면)"
+)
+# clarify인데도 Gemma가 단정적인 결론(approved/denied 어조)을 내릴 때 잡는다.
+_EQUIVALENCY_CLARIFY_VERDICT_RE = re.compile(
+    r"인정(?:돼|이야|할 수|될 수)|괜찮아|해도 돼|먹어도 돼|마셔도 돼|들어도 돼|봐도 돼|"
+    r"안 돼|안돼|인정(?:이 )?(?:안|어려)|불인정|실패|"
+    r"재미있을\s*거야|좋을\s*거야|문제없어|문제\s*없어"
+)
+
+
+def _equivalency_fallback_text(judgment: dict | None) -> str:
+    if not judgment:
+        return _EQUIVALENCY_CLARIFY_FALLBACK
+    reply = (judgment.get("reply") or "").strip()
+    decision = judgment.get("decision")
+    if decision == "approved":
+        return reply or "응, 그것도 괜찮아! 😊"
+    if decision == "denied":
+        reason = judgment.get("reason") or ""
+        reason_text = f"{reply} {reason}"
+        if re.search(r"릴스|쇼츠|틱톡|유튜브|영상|시청", reason_text):
+            target = _equivalency_video_target(reason_text)
+            if target:
+                return f"아쉽지만 {target}는 이번엔 안 돼~ {target}도 영상이라 제한에 포함돼 🥲"
+            return "아쉽지만 그건 이번엔 안 돼~ 그것도 영상이라 제한에 포함돼 🥲"
+        if reply and not reply.endswith(("?", "？")):
+            if reply.startswith(("아쉽지만", "음", "이번엔", "이번에는")):
+                return reply
+            return f"아쉽지만 {reply.rstrip('.')}"
+        return "아쉽지만 그건 이번 미션 기준으로는 안 돼~ 원래 기준이랑 조금 달라."
+    question = judgment.get("clarify_question") or ""
+    return question.strip() or _EQUIVALENCY_CLARIFY_FALLBACK
+
+
+def _equivalency_video_target(text: str) -> str | None:
+    # 원래 제한 대상인 "유튜브"보다 사용자가 제안한 대체 영상 앱을 우선한다.
+    for target in ("릴스", "쇼츠", "틱톡", "넷플릭스", "OTT", "TV", "티비"):
+        if target in text:
+            return target
+    if "유튜브" in text:
+        return "유튜브"
+    if "영상" in text or "시청" in text:
+        return None
+    return None
+
+
+def _ensure_equivalency_response_consistency(ai_message: str, judgment: dict | None) -> str:
+    if not judgment:
+        return ai_message
+    decision = judgment.get("decision")
+    text = ai_message or ""
+    conflict = False
+    if decision == "denied":
+        # approval 어조가 섞이면 충돌, 또는 명확한 거절 표현이 아예 없으면 모호하므로 fallback.
+        if _EQUIVALENCY_APPROVAL_RE.search(text):
+            conflict = True
+        elif _EQUIVALENCY_MISLEADING_LIMIT_DENIAL_RE.search(text):
+            conflict = True
+        elif not _EQUIVALENCY_CLEAR_DENIAL_RE.search(text):
+            conflict = True
+    elif decision == "approved" and _EQUIVALENCY_DENIAL_RE.search(text):
+        conflict = True
+    # clarify는 guard 제거. Gemma가 자연스럽게 답하면 그대로 노출 — judge가 잘못 clarify로 갔을 때
+    # 좋은 응답을 generic fallback으로 덮어쓰는 부작용을 막는다.
+    if not conflict:
+        return ai_message
+    fallback = _equivalency_fallback_text(judgment)
+    print(
+        f"[Equivalency] response guard decision={decision} "
+        f"source={_console_safe(_short(ai_message, 80))!r} "
+        f"fallback={_console_safe(_short(fallback, 80))!r}"
+    )
+    return fallback
+
+
+def _debug_judgment(judgment: dict | None):
+    if judgment is None:
+        return None
+    if hasattr(judgment, "to_dict"):
+        return judgment.to_dict()
+    return dict(judgment)
+
+
 FORBIDDEN_WORDS = ["엄마", "아빠", "부모님", "가족", "형", "언니", "오빠", "동생", "친구", "선생님"]
 
 
@@ -833,6 +952,62 @@ def _sync_sheet_bg(
         pass
 
 
+_EQUIVALENCY_CLARIFY_FALLBACK = "조금만 더 자세히 알려줄래? 어떤 행동을 얼마나 했는지 말해주면 좋아 😊"
+
+
+def _parse_equivalency_json(raw: str) -> dict | None:
+    """대체 수행 LLM 응답을 JSON으로 파싱. 실패 시 None.
+
+    {decision, reason, reply, clarify_question} 형태를 기대한다.
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+    # 코드펜스 제거
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    # JSON 객체 영역만 추출 (앞뒤 잡음 제거)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        data = _json.loads(text[start:end + 1])
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    decision = (data.get("decision") or "").strip().lower()
+    if decision not in ("approved", "denied", "clarify"):
+        return None
+    reply = (data.get("reply") or "").strip()
+    clarify_question = data.get("clarify_question")
+    if isinstance(clarify_question, str):
+        clarify_question = clarify_question.strip() or None
+    else:
+        clarify_question = None
+    return {
+        "decision": decision,
+        "reason": (data.get("reason") or "").strip(),
+        "reply": reply,
+        "clarify_question": clarify_question,
+    }
+
+
+def _equivalency_visible_text(parsed: dict | None) -> str:
+    """파싱된 JSON에서 사용자에게 보여줄 텍스트만 추출."""
+    if not parsed:
+        return _EQUIVALENCY_CLARIFY_FALLBACK
+    reply = parsed.get("reply") or ""
+    if parsed["decision"] == "clarify":
+        question = parsed.get("clarify_question") or ""
+        if reply and question and question not in reply:
+            return f"{reply} {question}".strip()
+        return (question or reply or _EQUIVALENCY_CLARIFY_FALLBACK).strip()
+    return reply.strip() or _EQUIVALENCY_CLARIFY_FALLBACK
+
+
 def _finalize_equivalency_response(
     ai_message: str,
     student_id: int | None,
@@ -842,9 +1017,21 @@ def _finalize_equivalency_response(
     mission_title: str = "",
     mission_id: int | None = None,
 ) -> str:
-    """[APPROVED]/[DENIED] 태그 제거 후, 실제 저장 결과를 응답에 반영."""
-    if "[APPROVED]" in ai_message:
-        ai_message = ai_message.replace("[APPROVED]", "").strip()
+    """LLM JSON 응답을 파싱해서 decision에 따라 submit 실행 여부를 정한다.
+
+    approved → execute_submit + reply 노출
+    denied   → DB 저장 없이 reply만 노출
+    clarify  → DB 저장 없이 clarify_question 노출
+    파싱 실패 → DB 저장 없이 clarify fallback 노출
+    """
+    parsed = _parse_equivalency_json(ai_message)
+    if parsed is None:
+        print(f"[Equivalency] JSON parse failed source={_short(ai_message)!r}")
+        return _EQUIVALENCY_CLARIFY_FALLBACK
+
+    visible = _equivalency_visible_text(parsed)
+
+    if parsed["decision"] == "approved":
         if student_id and pending_submit_args:
             validation = _validate_and_execute_submit(
                 student_id,
@@ -858,14 +1045,12 @@ def _finalize_equivalency_response(
                 return build_submit_validation_response(validation, mission_title)
             ack = build_action_ack(exec_results)
             if not ack:
-                return ai_message
-            return f"{ai_message}\n{ack.message}".strip()
-        return ai_message
+                return visible
+            return f"{visible}\n{ack.message}".strip()
+        return visible
 
-    if "[DENIED]" in ai_message:
-        return ai_message.replace("[DENIED]", "").strip()
-
-    return ai_message
+    # denied 또는 clarify → DB 저장하지 않음
+    return visible
 
 
 def _validate_and_execute_submit(
@@ -1942,27 +2127,13 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 detected_function = fn_calls[0][0] if fn_calls else None
                 fn_args = fn_calls[0][1] if fn_calls else {}
 
-        submit_report_call = None if fn_calls else detect_submit_report_call(body.message)
-        history_call = None if submit_report_call or fn_calls else detect_history_call(body.message)
-        mission_info_call = None if submit_report_call or history_call or fn_calls else detect_mission_info_call(body.message)
-        if submit_report_call:
-            intent = "B"
-            fn_calls = [submit_report_call]
-            detected_function = submit_report_call[0]
-            fn_args = submit_report_call[1]
-            print("[Route] submit report forced to submit_mission_result")
-        elif history_call:
-            intent = "B"
-            fn_calls = [history_call]
-            detected_function = history_call[0]
-            fn_args = history_call[1]
-            print("[Route] history query forced to get_user_history")
-        elif mission_info_call:
-            intent = "B"
-            fn_calls = [mission_info_call]
-            detected_function = mission_info_call[0]
-            fn_args = mission_info_call[1]
-            print("[Route] mission info query forced to get_mission_info")
+        route_decision = _MISSION_ROUTER.decide(body.message, fn_calls)
+        if route_decision:
+            intent = route_decision.intent
+            fn_calls = route_decision.fn_calls
+            detected_function = route_decision.detected_function
+            fn_args = route_decision.fn_args
+            print(route_decision.log_message)
 
         if intent == "B" and not fn_calls:
             norm = normalize_b_input(body.message, mission_title, mission_id)
@@ -2082,31 +2253,31 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             "debug": debug,
         }
 
-    # 서버 주도 대체 수행 판정 (eq_submit인 경우 판정 후 즉시 submit 처리)
-    eq_judgment: dict | None = None
+    # 서버 주도 대체 수행 판정
     eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
-    if eq_submit and pending_submit_args and student_id:
-        judge_prompt = await run_in_threadpool(
-            build_equivalency_judge_prompt, student_id, next(
-                (args for fn, args in fn_calls if fn == "check_mission_equivalency"), {}
-            )
+    eq_standalone = bool(fn_calls) and any(
+        fn == "check_mission_equivalency" for fn, _ in fn_calls
+    ) and not eq_submit
+    eq_result = await _EQUIVALENCY_SERVICE.resolve(
+        student_id=student_id,
+        fn_calls=fn_calls,
+        pending_submit_args=pending_submit_args,
+        user_message=body.message,
+        mission_title=mission_title,
+        mission_id=mission_id,
+        exec_results=exec_results,
+    )
+    eq_judgment = eq_result.judgment
+    pending_submit_args = eq_result.pending_submit_args
+    submit_validation = eq_result.submit_validation or submit_validation
+    if eq_judgment:
+        print(
+            f"[Equivalency] decision={eq_judgment.get('decision')} "
+            f"reason={_short(eq_judgment.get('reason'), 80)!r}"
         )
-        if judge_prompt:
-            eq_judgment = await judge_mission_equivalency(judge_prompt, body.message)
-            print(f"[Equivalency] judgment={eq_judgment}")
-            if eq_judgment.get("approved") and not eq_judgment.get("need_clarification"):
-                submit_validation = await run_in_threadpool(
-                    _validate_and_execute_submit,
-                    student_id,
-                    pending_submit_args,
-                    body.message,
-                    mission_title,
-                    mission_id,
-                    exec_results,
-                )
-                if submit_validation and not submit_validation.should_execute:
-                    eq_judgment = {"approved": False, "need_clarification": True}
-            pending_submit_args = None  # 판정 완료, 태그 경로 비활성화
+
+    # JSON 출력 모드: 서버 판정이 없을 때만 LLM이 JSON으로 응답한다
+    eq_json_mode = eq_result.json_mode
 
     system_prompt = await run_in_threadpool(
         step_build_hints,
@@ -2136,7 +2307,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             {"role": "user", "content": f"안녕! 오늘 미션 '{mission_title}'을 소개하고 응원해 줘."}
         ]
 
-    action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
+    action_ack = build_conflict_ack() if combo == "conflict" else (None if (eq_submit or eq_standalone) else build_action_ack(exec_results))
     llm_only = ""
     call1_ms = 0
     if mission_change_guard_result and not fn_calls:
@@ -2151,7 +2322,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Ollama 호출 실패: {e}")
 
-        if eq_submit:
+        if eq_json_mode:
             ai_message = await run_in_threadpool(
                 _finalize_equivalency_response,
                 ai_message,
@@ -2164,6 +2335,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             )
 
         ai_message = _filter_ai_response(ai_message)
+        if eq_judgment:
+            ai_message = _ensure_equivalency_response_consistency(ai_message, eq_judgment)
         llm_only = ai_message
         if _unsafe_gemma_db_completion(llm_only, exec_results):
             print(f"[Guard] unsafe Gemma DB completion fallback source={_short(llm_only)!r}")
@@ -2226,6 +2399,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         }
     if submit_validation:
         debug["submit_validation"] = submit_validation.to_debug()
+    if eq_judgment:
+        debug["equivalency_judgment"] = _debug_judgment(eq_judgment)
     xp_award = _award_mission_xp_if_success(exec_results, student_id, mission_id)
     _attach_xp_award_to_debug(debug, xp_award)
 
@@ -2539,27 +2714,13 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     detected_function = fn_calls[0][0] if fn_calls else None
                     fn_args = fn_calls[0][1] if fn_calls else {}
 
-            submit_report_call = None if fn_calls else detect_submit_report_call(body.message)
-            history_call = None if submit_report_call or fn_calls else detect_history_call(body.message)
-            mission_info_call = None if submit_report_call or history_call or fn_calls else detect_mission_info_call(body.message)
-            if submit_report_call:
-                intent = "B"
-                fn_calls = [submit_report_call]
-                detected_function = submit_report_call[0]
-                fn_args = submit_report_call[1]
-                print("[Route] submit report forced to submit_mission_result")
-            elif history_call:
-                intent = "B"
-                fn_calls = [history_call]
-                detected_function = history_call[0]
-                fn_args = history_call[1]
-                print("[Route] history query forced to get_user_history")
-            elif mission_info_call:
-                intent = "B"
-                fn_calls = [mission_info_call]
-                detected_function = mission_info_call[0]
-                fn_args = mission_info_call[1]
-                print("[Route] mission info query forced to get_mission_info")
+            route_decision = _MISSION_ROUTER.decide(body.message, fn_calls)
+            if route_decision:
+                intent = route_decision.intent
+                fn_calls = route_decision.fn_calls
+                detected_function = route_decision.detected_function
+                fn_args = route_decision.fn_args
+                print(route_decision.log_message)
             intent_label = {"A": "일반 대화", "B": "미션 액션", "C": "정보 조회", "D": "의도 불명확"}.get(intent, intent)
             yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'intent', 'value': intent, 'label': intent_label, 'ms': intent_ms}, ensure_ascii=False)}\n\n"
 
@@ -2697,30 +2858,30 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             return
 
         # 서버 주도 대체 수행 판정
-        eq_judgment: dict | None = None
         eq_submit = is_equivalency_submit(fn_calls) if fn_calls else False
-        if eq_submit and pending_submit_args and student_id:
-            judge_prompt = await run_in_threadpool(
-                build_equivalency_judge_prompt, student_id, next(
-                    (args for fn, args in fn_calls if fn == "check_mission_equivalency"), {}
-                )
+        eq_standalone = bool(fn_calls) and any(
+            fn == "check_mission_equivalency" for fn, _ in fn_calls
+        ) and not eq_submit
+        eq_result = await _EQUIVALENCY_SERVICE.resolve(
+            student_id=student_id,
+            fn_calls=fn_calls,
+            pending_submit_args=pending_submit_args,
+            user_message=body.message,
+            mission_title=current_mission_title,
+            mission_id=mission_id,
+            exec_results=exec_results,
+        )
+        eq_judgment = eq_result.judgment
+        pending_submit_args = eq_result.pending_submit_args
+        submit_validation = eq_result.submit_validation or submit_validation
+        if eq_judgment:
+            print(
+                f"[Equivalency] decision={eq_judgment.get('decision')} "
+                f"reason={_short(eq_judgment.get('reason'), 80)!r}"
             )
-            if judge_prompt:
-                eq_judgment = await judge_mission_equivalency(judge_prompt, body.message)
-                print(f"[Equivalency] judgment={eq_judgment}")
-                if eq_judgment.get("approved") and not eq_judgment.get("need_clarification"):
-                    submit_validation = await run_in_threadpool(
-                        _validate_and_execute_submit,
-                        student_id,
-                        pending_submit_args,
-                        body.message,
-                        current_mission_title,
-                        mission_id,
-                        exec_results,
-                    )
-                    if submit_validation and not submit_validation.should_execute:
-                        eq_judgment = {"approved": False, "need_clarification": True}
-                pending_submit_args = None  # 판정 완료, 태그 경로 비활성화
+
+        # JSON 출력 모드: 서버 판정이 없을 때만 LLM이 JSON으로 응답
+        eq_json_mode = eq_result.json_mode
 
         system_prompt = await run_in_threadpool(
             step_build_hints,
@@ -2754,9 +2915,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         yield f"data: {_json.dumps({'type': 'pipeline', 'stage': 'generating'}, ensure_ascii=False)}\n\n"
 
         t_gen = time.perf_counter()
-        tag_markers = ("[APPROVED]", "[DENIED]")
-        # eq_submit은 위에서 이미 계산됨; pending_submit_args=None이면 태그 판정 경로 비활성
-        action_ack = build_conflict_ack() if combo == "conflict" else (None if eq_submit else build_action_ack(exec_results))
+        action_ack = build_conflict_ack() if combo == "conflict" else (None if (eq_submit or eq_standalone) else build_action_ack(exec_results))
         server_prefix = (
             action_ack.message
             if action_ack and action_ack.mode is ResponseMode.PREFIX_WITH_GEMMA
@@ -2781,9 +2940,12 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 ai_message = f"{server_prefix}\n"
                 async for event in _fake_stream_template_response(ai_message):
                     yield event
-            buffer_for_completion_guard = not eq_submit and not server_prefix and not _exec_results_db_changed(exec_results)
+            # eq_json_mode이면 JSON 원문 노출 방지를 위해 끝까지 버퍼링한다
+            buffer_for_completion_guard = (
+                not eq_submit and not server_prefix and not _exec_results_db_changed(exec_results)
+            )
+            suppress_token_emit = eq_json_mode or buffer_for_completion_guard
 
-            token_buf = ""
             lookahead_limit = len(server_prefix) + 10 if server_prefix else 0
             lookahead_buf = ""
             prefix_echo_handled = not prefix_buffer_mode
@@ -2797,50 +2959,25 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                             cleaned = _strip_leading_ack(lookahead_buf, server_prefix)
                             prefix_echo_handled = True
                             ai_message += cleaned
-                            if cleaned.strip() and not buffer_for_completion_guard:
+                            if cleaned.strip() and not suppress_token_emit:
                                 yield f"data: {_json.dumps({'type': 'token', 'content': cleaned}, ensure_ascii=False)}\n\n"
                         continue
 
                     ai_message += token
-                    if eq_submit:
-                        token_buf += token
-                        for tag in tag_markers:
-                            if tag in token_buf:
-                                token_buf = token_buf.replace(tag, "")
-                        if "[" not in token_buf:
-                            if token_buf:
-                                yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
-                            token_buf = ""
-                    else:
-                        if not buffer_for_completion_guard:
-                            yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+                    if not suppress_token_emit:
+                        yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
                 return
             if not prefix_echo_handled and lookahead_buf:
                 cleaned = _strip_leading_ack(lookahead_buf, server_prefix)
                 ai_message += cleaned
-                if cleaned.strip() and not buffer_for_completion_guard:
+                if cleaned.strip() and not suppress_token_emit:
                     yield f"data: {_json.dumps({'type': 'token', 'content': cleaned}, ensure_ascii=False)}\n\n"
-            elif token_buf:
-                for tag in tag_markers:
-                    token_buf = token_buf.replace(tag, "")
-                if token_buf.strip() and not buffer_for_completion_guard:
-                    yield f"data: {_json.dumps({'type': 'token', 'content': token_buf}, ensure_ascii=False)}\n\n"
 
         gen_ms = round((time.perf_counter() - t_gen) * 1000)
 
-        if "[APPROVED]" in llm_message:
-            print("[Equiv] approved")
-        elif "[DENIED]" in llm_message:
-            print("[Equiv] denied")
-        elif eq_submit:
-            print(f"[Equiv] missing tag tail={_short(llm_message[-80:])!r}")
-
-        if eq_submit:
-            visible_before_finalize = (
-                llm_message.replace("[APPROVED]", "").replace("[DENIED]", "").strip()
-            )
+        if eq_json_mode:
             finalized_message = await run_in_threadpool(
                 _finalize_equivalency_response,
                 llm_message,
@@ -2851,16 +2988,19 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 current_mission_title,
                 mission_id,
             )
-            if finalized_message.startswith(visible_before_finalize):
-                finalize_suffix = finalized_message[len(visible_before_finalize):]
-                if finalize_suffix.strip():
-                    async for event in _fake_stream_template_response(finalize_suffix):
-                        yield event
+            if eq_judgment:
+                finalized_message = _ensure_equivalency_response_consistency(finalized_message, eq_judgment)
             ai_message = finalized_message
+            print(f"[Equiv] json finalized={_short(finalized_message)!r}")
+            if finalized_message.strip():
+                async for event in _fake_stream_template_response(finalized_message):
+                    yield event
         elif buffer_for_completion_guard:
             if _unsafe_gemma_db_completion(llm_message, exec_results):
                 print(f"[Guard] unsafe Gemma DB completion fallback source={_short(llm_message)!r}")
                 ai_message = _DB_COMPLETION_FALLBACK
+            if eq_judgment:
+                ai_message = _ensure_equivalency_response_consistency(ai_message, eq_judgment)
             if ai_message.strip():
                 async for event in _fake_stream_template_response(ai_message):
                     yield event
@@ -2893,6 +3033,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             }
         if submit_validation:
             debug_payload["submit_validation"] = submit_validation.to_debug()
+        if eq_judgment:
+            debug_payload["equivalency_judgment"] = _debug_judgment(eq_judgment)
         xp_award = _award_mission_xp_if_success(exec_results, student_id, mission_id)
         _attach_xp_award_to_debug(debug_payload, xp_award)
         if not is_greet:

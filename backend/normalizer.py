@@ -36,6 +36,7 @@ _ADJUSTMENT_CANCEL_RE = re.compile(
     r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
+_HARD_TEMPORAL_RE = re.compile(r"어제|그저께|엊그제|지난번|저번|예전|수요일|월요일|화요일|목요일|금요일|토요일|일요일")
 _B_COMMAND_RE = re.compile(
     r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
 )
@@ -133,6 +134,8 @@ def normalize_b_input(
 
     if _CANCEL_NEGATION_RE.search(message):
         return clarify("")
+    if _HARD_TEMPORAL_RE.search(message):
+        return clarify("past_ambiguous")
     if _ADJUSTMENT_CANCEL_RE.search(message):
         return ok("미션 변경 취소해줘")
     if _CANCEL_TARGET_RE.search(message):

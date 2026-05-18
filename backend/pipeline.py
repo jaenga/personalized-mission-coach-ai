@@ -515,12 +515,12 @@ def _build_function_hint(
         for fn, args in ordered:
             if fn == "submit_mission_result" and eq_submit:
                 continue  # submit 힌트 스킵 (판정 결과 또는 태그로 처리)
+            if fn == "check_mission_equivalency" and eq_judgment is not None:
+                hints.append(build_equivalency_result_hint(eq_judgment))
+                continue
             hints.append(build_one_hint(student_id, fn, args, exec_results))
         if eq_submit:
-            if eq_judgment is not None:
-                # 서버 판정 결과가 있으면 결과 기반 hint 사용
-                hints.append(build_equivalency_result_hint(eq_judgment))
-            else:
+            if eq_judgment is None:
                 # fallback: 태그 방식 유지
                 hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
     else:

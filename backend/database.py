@@ -20,6 +20,16 @@ DEMO_MISSION_IDS = [
     2, 12, 16, 25, 29, 38, 43, 51, 62,
     67, 71, 87, 96, 112, 153, 159, 168, 192,
 ]
+_DEMO_MISSION_METADATA_COLUMNS = (
+    "success_criteria",
+    "strict_requirements",
+    "target_metric",
+    "target_value",
+    "target_unit",
+    "time_condition",
+    "allowed_substitutes",
+    "denied_substitutes",
+)
 
 
 def get_conn():
@@ -51,15 +61,23 @@ def init_db():
                 ALTER TABLE missions
                 ADD COLUMN IF NOT EXISTS activity_key TEXT
             """)
-            cur.execute("DELETE FROM demo_mission")
+            # demo_mission 시트 메타데이터 컬럼 (값은 DB에서 직접 관리)
+            for col in _DEMO_MISSION_METADATA_COLUMNS:
+                cur.execute(
+                    f"ALTER TABLE demo_mission ADD COLUMN IF NOT EXISTS {col} TEXT"
+                )
+            # mission_id/is_active만 동기화. 메타데이터 컬럼은 보존(DB에서 직접 관리).
             for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO demo_mission (order_no, mission_id, is_active)
                     VALUES (%s, %s, TRUE)
                     ON CONFLICT (order_no) DO UPDATE
                         SET mission_id = EXCLUDED.mission_id,
                             is_active = TRUE
-                """, (idx, mission_id))
+                    """,
+                    (idx, mission_id),
+                )
             cur.execute("SELECT to_regclass('public.student_daily_missions')")
             if cur.fetchone()[0]:
                 cur.execute("""
@@ -956,9 +974,13 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
                 SELECT m.mission_id, m.mission_name, m.category, m.difficulty,
                        m.main_category, m.sub_category,
                        m.mission_location, m.reward_xp, m.mission_group,
-                       m.mission_rule, m.mission_description, m.activity_key, sdm.status
+                       m.mission_rule, m.mission_description, m.activity_key, sdm.status,
+                       dm.success_criteria, dm.strict_requirements,
+                       dm.target_metric, dm.target_value, dm.target_unit,
+                       dm.time_condition, dm.allowed_substitutes, dm.denied_substitutes
                 FROM student_daily_missions sdm
                 JOIN missions m ON sdm.mission_id = m.mission_id
+                LEFT JOIN demo_mission dm ON dm.mission_id = m.mission_id
                 WHERE sdm.student_id = %s AND sdm.assigned_date = %s
                 """,
                 (student_id, today),

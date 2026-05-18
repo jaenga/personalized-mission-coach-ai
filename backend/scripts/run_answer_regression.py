@@ -287,6 +287,8 @@ class TestCase:
     expected_args: dict[str, Any]
     expected_db_changed: bool
     expected_response_type: str
+    expected_decision: str
+    expected_submit: bool
     case_type: str
     note: str
     demo_safe: bool
@@ -304,6 +306,28 @@ def parse_bool(value: str | bool | None) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"true", "1", "yes", "y"}
+
+
+def infer_expected_decision(row: dict[str, str]) -> str:
+    explicit = (row.get("expected_decision") or "").strip().lower()
+    if explicit:
+        return explicit
+    case_type = (row.get("case_type") or "").strip().lower()
+    if "equivalency_allowed" in case_type:
+        return "approved"
+    if "equivalency_denied" in case_type:
+        return "denied"
+    if "equivalency_clarify" in case_type:
+        return "clarify"
+    return ""
+
+
+def infer_expected_response_type(row: dict[str, str]) -> str:
+    explicit = (row.get("expected_response_type") or "").strip()
+    case_type = (row.get("case_type") or "").strip().lower()
+    if "equivalency_clarify" in case_type:
+        return "clarify"
+    return explicit
 
 
 def load_cases(path: Path) -> list[TestCase]:
@@ -327,7 +351,9 @@ def load_cases(path: Path) -> list[TestCase]:
                     expected_function=normalize_function_name(row.get("expected_function") or "none") or "none",
                     expected_args=expected_args,
                     expected_db_changed=parse_bool(row.get("expected_db_changed")),
-                    expected_response_type=(row.get("expected_response_type") or "").strip(),
+                    expected_response_type=infer_expected_response_type(row),
+                    expected_decision=infer_expected_decision(row),
+                    expected_submit=parse_bool(row.get("expected_submit")) if row.get("expected_submit") not in (None, "") else normalize_function_name(row.get("expected_function") or "none") == "submit_mission_result",
                     case_type=(row.get("case_type") or "").strip(),
                     note=row.get("note", ""),
                     demo_safe=parse_bool(row.get("demo_safe")),
@@ -841,9 +867,14 @@ def compare_result(row: dict[str, Any]) -> tuple[bool, str]:
     actual_db_changed = parse_bool(row.get("actual_db_changed"))
     expected_response_type = row.get("expected_response_type") or ""
     actual_response_type = row.get("actual_response_type") or ""
+    expected_decision = (row.get("expected_decision") or "").strip().lower()
+    actual_decision = (row.get("actual_decision") or "").strip().lower()
+    expected_submit_raw = row.get("expected_submit")
 
-    expected_submit = expected_function == "submit_mission_result"
-    actual_submit = actual_function == "submit_mission_result" or bool(actual_db_changed and actual_args.get("result_type"))
+    expected_submit = parse_bool(expected_submit_raw) if expected_submit_raw not in (None, "") else expected_function == "submit_mission_result"
+    actual_submit = parse_bool(row.get("actual_submit")) if row.get("actual_submit") not in (None, "") else (
+        actual_function == "submit_mission_result" or bool(actual_db_changed and actual_args.get("result_type"))
+    )
 
     if expected_submit and not actual_submit:
         errors.append("SUBMIT_FAILED")
@@ -869,6 +900,9 @@ def compare_result(row: dict[str, Any]) -> tuple[bool, str]:
 
     if expected_response_type != actual_response_type:
         errors.append("WRONG_RESPONSE_TYPE")
+
+    if expected_decision and expected_decision != actual_decision:
+        errors.append("WRONG_DECISION")
 
     if has_confirm_ack_without_db(row.get("actual_response", ""), actual_db_changed):
         errors.append("NO_DB_BUT_CONFIRM_ACK")
@@ -899,6 +933,7 @@ def flatten_result(
 ) -> dict[str, Any]:
     debug = response_payload.get("debug") if isinstance(response_payload.get("debug"), dict) else {}
     submit_validation = debug.get("submit_validation") if isinstance(debug.get("submit_validation"), dict) else {}
+    equivalency_judgment = debug.get("equivalency_judgment") if isinstance(debug.get("equivalency_judgment"), dict) else {}
     checkin = get_checkin_result(student_id)
     db_markers = get_db_change_markers(student_id)
     before_db_markers = before_db_markers or {}
@@ -914,6 +949,7 @@ def flatten_result(
         # 정보 조회류는 채팅 저장 외 미션 DB 변경을 기대하지 않는다.
         actual_db_changed = False
     actual_response_type = infer_response_type(response_text, response_payload, debug, checkin, case.expected_response_type, actual_function)
+    actual_submit = actual_function == "submit_mission_result" or bool(actual_db_changed and actual_args.get("result_type"))
 
     row = {
         "case_id": case.case_id,
@@ -932,6 +968,10 @@ def flatten_result(
         "actual_db_changed": actual_db_changed,
         "expected_response_type": case.expected_response_type,
         "actual_response_type": actual_response_type,
+        "expected_decision": case.expected_decision,
+        "actual_decision": (equivalency_judgment.get("decision") or "").strip().lower(),
+        "expected_submit": case.expected_submit,
+        "actual_submit": actual_submit,
         "actual_validator_action": submit_validation.get("action", ""),
         "actual_validator_result_type": submit_validation.get("result_type", ""),
         "actual_validator_reason": submit_validation.get("reason", ""),
@@ -1143,6 +1183,10 @@ def error_row(case: TestCase, endpoint: str, student_id: int, exc: Exception) ->
         "actual_db_changed": False,
         "expected_response_type": case.expected_response_type,
         "actual_response_type": "error",
+        "expected_decision": case.expected_decision,
+        "actual_decision": "",
+        "expected_submit": case.expected_submit,
+        "actual_submit": False,
         "actual_validator_action": "",
         "actual_validator_result_type": "",
         "actual_validator_reason": "",
@@ -1173,6 +1217,7 @@ def chat_result_fields() -> list[str]:
         "case_id", "endpoint", "test_student_id", "mission_id", "mission_name", "case_type", "demo_safe",
         "user_message", "expected_function", "actual_function", "expected_args", "actual_args",
         "expected_db_changed", "actual_db_changed", "expected_response_type", "actual_response_type",
+        "expected_decision", "actual_decision", "expected_submit", "actual_submit",
         "actual_validator_action", "actual_validator_result_type", "actual_validator_reason", "actual_db_markers",
         "elapsed_ms", "pass", "error_type", "actual_response", "raw_error",
     ]
@@ -1183,6 +1228,7 @@ def stream_result_fields() -> list[str]:
         "case_id", "endpoint", "test_student_id", "mission_id", "mission_name", "case_type", "demo_safe",
         "user_message", "expected_function", "actual_function", "expected_args", "actual_args",
         "expected_db_changed", "actual_db_changed", "expected_response_type", "actual_response_type",
+        "expected_decision", "actual_decision", "expected_submit", "actual_submit",
         "actual_validator_action", "actual_validator_result_type", "actual_validator_reason", "actual_db_markers",
         "first_token_ms", "total_elapsed_ms", "pass", "error_type", "actual_response", "raw_error",
     ]
@@ -1286,8 +1332,16 @@ def report(cases: list[TestCase], output_dir: Path) -> None:
 
 
 def failure_summary(row: dict[str, Any], error_type: str) -> dict[str, Any]:
-    expected = f"{row.get('expected_function')} / {row.get('expected_args')} / db_changed={row.get('expected_db_changed')} / {row.get('expected_response_type')}"
-    actual = f"{row.get('actual_function')} / {row.get('actual_args')} / db_changed={row.get('actual_db_changed')} / {row.get('actual_response_type')}"
+    expected = (
+        f"{row.get('expected_function')} / {row.get('expected_args')} / "
+        f"db_changed={row.get('expected_db_changed')} / {row.get('expected_response_type')} / "
+        f"decision={row.get('expected_decision', '')}"
+    )
+    actual = (
+        f"{row.get('actual_function')} / {row.get('actual_args')} / "
+        f"db_changed={row.get('actual_db_changed')} / {row.get('actual_response_type')} / "
+        f"decision={row.get('actual_decision', '')}"
+    )
     return {
         "case_id": row.get("case_id", ""),
         "endpoint": row.get("endpoint", ""),
@@ -1315,6 +1369,8 @@ def why_it_matters(error_type: str) -> str:
         return "/chat과 /chat/stream 결과가 달라 시연 화면에서만 오류가 날 수 있음"
     if "VALIDATOR_MISMATCH" in error_type:
         return "submit validator의 execute/clarify/block 판단이 기대와 다름"
+    if "WRONG_DECISION" in error_type:
+        return "동치 판정 decision이 기대와 달라 잘못 인정하거나 거절할 수 있음"
     return "기대 결과와 실제 결과가 일치하지 않음"
 
 

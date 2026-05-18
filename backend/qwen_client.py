@@ -22,11 +22,31 @@ _FUNCTION_NAME_ALIASES = {
 }
 
 _CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
+_PAST_RESULT_TIME_RE = re.compile(r"어제|그저께|엊그제|지난번|저번|예전|수요일|월요일|화요일|목요일|금요일|토요일|일요일")
 _EXPLICIT_SUBMIT_REPORT_RE = re.compile(
     r"미션\s*(?:성공|실패|완료)"
     r"|오늘\s*미션\s*(?:성공|실패|완료)"
     r"|(?:성공|실패|완료|끝냈|다\s*했|다했|수행했|해냈)"
     r"|(?:못\s*했|못했|안\s*했|안했|까먹)"
+    r"|(?:먹음|마심|참았|먹어버|해버|봄|안\s*먹|안\s*봤|안\s*탔|씻었|닦았|올라갔)"
+)
+_EQUIVALENCY_QUESTION_RE = re.compile(
+    r"대신|말고|없어서|없으면|다른|바꿔서|같은\s*걸로|쳐줘|봐줘|인정"
+    r"|성공(?:이야|임|인가|으로)"
+    r"|실패(?:야|임|인가)"
+    r"|(?:하면|하면은|면)\s*(?:돼|되|괜찮|인정)"
+    r"|해도\s*(?:돼|되|괜찮|인정)"
+    r"|먹어도\s*(?:돼|되|괜찮|인정)"
+    r"|마셔도\s*(?:돼|되|괜찮|인정)"
+    r"|봐도\s*(?:돼|되|괜찮|인정)"
+    r"|걸어도\s*(?:돼|되|괜찮|인정)"
+    r"|씻어도\s*(?:돼|되|괜찮|인정)"
+    r"|타도\s*(?:돼|되|괜찮|인정)"
+    r"|들어도\s*(?:돼|되|괜찮|인정)"
+    r"|올라가도\s*(?:돼|되|괜찮|인정)"
+    r"|에서\s*(?:해도|해도돼|해도되|돼|되|괜찮)"
+    r"|후에\s*(?:해도|해도돼|해도되|돼|되|괜찮)"
+    r"|전에\s*(?:해도|해도돼|해도되|돼|되|괜찮)"
 )
 
 AVAILABLE_FUNCTIONS: list[dict] = [
@@ -208,6 +228,7 @@ _SYSTEM_PROMPT = """당신은 어린이 건강 습관 코치 앱의 AI입니다.
 - 어제 기록 → query_type="daily_summary", target_date="yesterday"
 - 그저께 기록 → query_type="daily_summary", target_date="day_before_yesterday"
 - 구체적인 대체 행동/장소/시간을 언급하면 → check_mission_equivalency
+- "대신", "말고", "해도 돼?", "인정돼?", "같은 걸로 봐줘?", "집/복도/학교/저녁/아침에 해도 돼?"처럼 대체 가능성을 묻는 말은 규칙 질문이 아니라 check_mission_equivalency
 - 성공/실패/제출/기록 취소 → cancel_mission_action(cancel_type="submit")
 - 미션 변경 취소/바꾼 거 취소 → cancel_mission_action(cancel_type="adjustment")
 - 최근 작업 취소/되돌려줘 → cancel_mission_action(cancel_type="latest")
@@ -283,14 +304,26 @@ def _coerce_function_calls(
     user_message: str,
     calls: list[tuple[str, dict]],
 ) -> list[tuple[str, dict]]:
+    if _is_past_result_statement(user_message):
+        return []
+    strong_equivalency_call = detect_strong_equivalency_call(user_message)
+    if strong_equivalency_call:
+        return [strong_equivalency_call]
+    submit_report_call = detect_submit_report_call(user_message)
+    if submit_report_call:
+        return [submit_report_call]
+    adjustment_call = detect_mission_adjustment_call(user_message)
+    if adjustment_call:
+        return [adjustment_call]
+    calls = _coerce_history_call(user_message, calls)
+    if calls and calls[0][0] == "get_user_history":
+        return calls
     mission_info_call = detect_mission_info_call(user_message)
     if mission_info_call:
         calls = [mission_info_call]
-    submit_report_call = detect_submit_report_call(user_message)
-    if submit_report_call:
-        calls = [submit_report_call]
-        return calls
-    calls = _coerce_history_call(user_message, calls)
+    weak_equivalency_call = detect_weak_equivalency_call(user_message)
+    if weak_equivalency_call and not mission_info_call:
+        return [weak_equivalency_call]
     coerced = [_coerce_function_call(user_message, call) for call in calls]
     if not _EXPLICIT_SUBMIT_REPORT_RE.search(user_message or ""):
         before = len(coerced)
@@ -365,13 +398,92 @@ _MISSION_INFO_RE = re.compile(
 )
 
 
+# "strong" equivalency: 사용자가 "대신/말고/대체" 같은 명시적 대체 의도 키워드를 쓴 경우.
+# 이건 진짜 동치 질문이므로 다른 라우팅보다 우선해야 한다.
+_STRONG_EQUIVALENCY_SIGNAL_RE = re.compile(r"대신에?|말고|대체로?")
+
+
+def _classify_equivalency_type(text: str) -> str:
+    place_patterns = (
+        r"(?:집|학교|운동장|복도|밖|야외|교실|방|거실).{0,8}(?:에서|으로|로|말고)",
+        r"(?:집|학교).{0,4}계단",
+    )
+    time_patterns = (
+        r"(?:아침(?!밥)|저녁|밤|낮).{0,10}(?:후에|전에|시간|걸어도|해도|돼|되|괜찮|인정)",
+        r"(?:(?<!전)후에|전에|전에만|뒤에|나중에|있다가|조금\s*있다가).{0,12}(?:해도|돼|되|괜찮|인정|성공|실패|마셔도|씻어도)",
+        r"(?:기상|잠들기|외출|직후|직전).{0,12}(?:해도|돼|되|괜찮|인정|성공|실패)",
+        r"\d+\s*분.{0,8}(?:넘|초과|이면|보면\s*실패|실패)",
+    )
+    if any(re.search(pattern, text) for pattern in place_patterns):
+        return "place"
+    if any(re.search(pattern, text) for pattern in time_patterns):
+        return "time"
+    return "behavior"
+
+
+def _equivalency_call_common_guards(text: str, compact: str) -> bool:
+    """equivalency 라우팅 공통 가드. True면 매칭 차단."""
+    if not _EQUIVALENCY_QUESTION_RE.search(text):
+        return True
+    if detect_mission_info_call(text):
+        return True
+    if any(word in compact for word in ("미션변경", "바꿔줘", "교체해줘", "쉬운걸로", "어려운걸로")):
+        return True
+    if any(word in compact for word in ("기록", "조회", "요약", "취소", "되돌려")):
+        return True
+    return False
+
+
+def detect_strong_equivalency_call(user_message: str) -> tuple[str, dict] | None:
+    """명시적 대체 의도("대신/말고/대체")가 있는 진짜 동치 질문만 잡는다."""
+    text = user_message or ""
+    compact = text.replace(" ", "")
+    if _equivalency_call_common_guards(text, compact):
+        return None
+    if not _STRONG_EQUIVALENCY_SIGNAL_RE.search(text):
+        return None
+    eq_type = _classify_equivalency_type(text)
+    return ("check_mission_equivalency", {"equivalency_type": eq_type})
+
+
+def detect_weak_equivalency_call(user_message: str) -> tuple[str, dict] | None:
+    """대체 의도 키워드 없이 의문문("성공이야?/인정돼?")만 있는 경우.
+
+    submit_report/get_mission_info detector 뒤에 호출되어 fallback 역할.
+    """
+    text = user_message or ""
+    compact = text.replace(" ", "")
+    if _equivalency_call_common_guards(text, compact):
+        return None
+    if _STRONG_EQUIVALENCY_SIGNAL_RE.search(text):
+        # 이미 strong이 잡혔어야 함. 여기까지 오면 호출 순서 잘못이지만 안전하게 처리.
+        eq_type = _classify_equivalency_type(text)
+        return ("check_mission_equivalency", {"equivalency_type": eq_type})
+    eq_type = _classify_equivalency_type(text)
+    return ("check_mission_equivalency", {"equivalency_type": eq_type})
+
+
+# 하위 호환: 기존 호출 코드는 strong+weak 합쳐서 본다.
+def detect_equivalency_call(user_message: str) -> tuple[str, dict] | None:
+    return detect_strong_equivalency_call(user_message) or detect_weak_equivalency_call(user_message)
+
+
 def detect_mission_info_call(user_message: str) -> tuple[str, dict] | None:
     text = user_message or ""
     compact = text.replace(" ", "")
     if any(word in compact for word in ("마감", "기한", "언제까지", "몇시까지", "몇시까지야")):
         return ("get_mission_info", {"query_type": "deadline"})
-    if any(word in compact for word in ("인증", "인정", "제출규칙", "판정", "성공기준", "실패기준")):
+    if any(word in compact for word in ("인증방법", "인증규칙", "인정기준", "제출규칙", "판정기준", "성공기준", "실패기준")):
         return ("get_mission_info", {"query_type": "general_rule"})
+    if re.search(r"(얼마나|몇\s*분|몇\s*개|몇\s*번|몇\s*회).{0,12}(해야|하면|걸어야|걸으면|올라가야|오르면|마셔야|먹어야|봐야|보면)", text):
+        return ("get_mission_info", {"query_type": "general_rule"})
+    if re.search(r"(만\s*)?(해도|하면|먹어도|마셔도|봐도|씻으면|닦으면).{0,8}(돼|되나|되냐|성공|괜찮)", text):
+        if not any(word in compact for word in ("대신", "말고", "대체", "없어서", "없는데")):
+            return ("get_mission_info", {"query_type": "general_rule"})
+    if re.search(r"(아무거나|시리얼|한\s*잔|한잔|손만|양치만|바닥만|꼭|이나|그렇게나).{0,12}(돼|해야|성공|되나|되냐)", text):
+        return ("get_mission_info", {"query_type": "general_rule"})
+    if "아까" in text and "오늘" in text and re.search(r"성공|미션", text):
+        return ("get_mission_info", {"query_type": "today"})
 
     has_date = (
         "오늘" in text
@@ -404,9 +516,28 @@ def detect_mission_info_call(user_message: str) -> tuple[str, dict] | None:
     return None
 
 
+def detect_mission_adjustment_call(user_message: str) -> tuple[str, dict] | None:
+    text = user_message or ""
+    compact = text.replace(" ", "")
+    if any(word in compact for word in ("취소", "되돌려", "철회")):
+        return None
+    if re.search(r"쉬운걸로|쉽게(?:바꿔|해줘)|너무어려|어려워서|힘들어서|너무힘들|힘든데", compact):
+        return ("request_mission_adjustment", {"adjustment_type": "easier"})
+    if re.search(r"싫은데|하기싫|다른거|다른걸|다른미션|바꿔줘|변경해줘|교체해줘|빡세", compact):
+        return ("request_mission_adjustment", {"adjustment_type": "change"})
+    return None
+
+
 def detect_submit_report_call(user_message: str) -> tuple[str, dict] | None:
     text = user_message or ""
     compact = text.replace(" ", "")
+
+    if _is_past_result_statement(text):
+        return None
+
+    if any(word in compact for word in ("성공이야", "성공인가", "성공맞아", "성공임")):
+        if any(word in compact for word in ("했는데", "했어", "했어요", "끝냈", "다했", "수행했", "해냈")):
+            return ("submit_mission_result", {"result_type": "success"})
 
     is_question = (
         "?" in text
@@ -435,6 +566,12 @@ def detect_submit_report_call(user_message: str) -> tuple[str, dict] | None:
         "안했어",
         "까먹",
         "못끝",
+        "패스함",
+        "탔어",
+        "먹어버",
+        "해버",
+        "봤어",
+        "봄",
     ]
     success_words = [
         "미션성공",
@@ -447,7 +584,32 @@ def detect_submit_report_call(user_message: str) -> tuple[str, dict] | None:
         "다했",
         "다했어",
         "수행했",
+        "먹음",
+        "마심",
+        "참았",
+        "안먹",
+        "안봤",
+        "안탔",
+        "씻었",
+        "닦았",
+        "올라갔",
+        "끝내고",
     ]
+
+    if re.search(r"(엘리베이터|엘레베이터|엘베|승강기).{0,12}(탔|이용)", compact):
+        if re.search(r"안(?:탔|타고|이용)|대신", compact) and "계단" in compact:
+            return ("submit_mission_result", {"result_type": "success"})
+        return ("submit_mission_result", {"result_type": "fail"})
+    if re.search(r"(과자|쿠키|포카칩|스낵).{0,12}(안먹|참았)", compact):
+        return ("submit_mission_result", {"result_type": "success"})
+    if re.search(r"(과자|쿠키|포카칩|스낵).{0,12}(먹어버|먹었|먹음|먹었다)", compact):
+        return ("submit_mission_result", {"result_type": "fail"})
+    if re.search(r"(손씻|손을씻|손씻었|손만씻|씻었)", compact) and not is_question:
+        return ("submit_mission_result", {"result_type": "success"})
+    if re.search(r"(아침밥|아침).{0,8}(먹음|먹었)", compact):
+        return ("submit_mission_result", {"result_type": "success"})
+    if re.search(r"(물).{0,8}(마심|마셨어|마셨)", compact):
+        return ("submit_mission_result", {"result_type": "success"})
 
     if any(word in compact for word in fail_words):
         return ("submit_mission_result", {"result_type": "fail"})
@@ -455,6 +617,13 @@ def detect_submit_report_call(user_message: str) -> tuple[str, dict] | None:
         return ("submit_mission_result", {"result_type": "success"})
 
     return None
+
+
+def _is_past_result_statement(user_message: str) -> bool:
+    text = user_message or ""
+    if "오늘" in text:
+        return False
+    return bool(_PAST_RESULT_TIME_RE.search(text) and re.search(r"성공|했|먹|마셨|봤|봄|안\s*먹|안\s*봤", text))
 
 
 _HISTORY_QUERY_RE = re.compile(

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from database import _kst_today, get_student_mission_db, get_user_history_db, resolve_mission_query_date
 from category_prompts import get_category_equivalency_prompt
+from equivalency_extractor import extract_user_facts, format_user_facts_hint
+from equivalency_numeric import compare_numeric_target, format_numeric_comparison_hint
 from prompts import EQUIVALENCY_JUDGE_PROMPT
 from executor import (
     SubmitStatus, SubmitResult,
@@ -41,23 +43,34 @@ _FN_LABELS = {
 }
 
 EQUIVALENCY_SUBMIT_TAG_INSTRUCTION = """
-===== 필수 태그 (반드시 지켜) =====
+===== 필수 JSON 출력 (반드시 지켜) =====
 아이가 대체 수행이 인정되면 성공으로 제출하겠다고 했어.
-너의 답변 텍스트 마지막 줄에 반드시 아래 태그 중 하나를 붙여.
+너는 반드시 아래 형식의 JSON만 출력해. 마크다운, 설명 문장, 태그(예: [APPROVED], [DENIED])는 절대 출력하지 마.
 
-중요:
-- 아직 기록이 완료된 것은 아니야. "기록했어", "저장됐어"처럼 이미 저장된 것처럼 말하지 마.
-- 인정 가능/불가 판단만 먼저 알려줘.
+출력 형식:
+{
+  "decision": "approved | denied | clarify",
+  "reason": "판단 이유",
+  "reply": "아이에게 보여줄 짧은 답변",
+  "clarify_question": "clarify일 때만 질문, 아니면 null"
+}
 
-인정 가능 → [APPROVED]
-인정 불가 → [DENIED]
+규칙:
+- 반드시 JSON만 출력한다.
+- 마크다운, 설명 문장, [APPROVED], [DENIED] 태그는 출력하지 않는다.
+- decision 값은 반드시 "approved", "denied", "clarify" 중 하나만 사용한다.
+- expected_submit은 decision이 approved일 때만 true가 될 수 있다.
+- 판단이 조금이라도 부족하면 approved 대신 clarify를 선택한다.
+- 아직 기록이 완료된 것은 아니야. reply에서 "기록했어", "저장됐어"처럼 이미 저장된 것처럼 말하지 마.
 
-예시:
-"좋아, 그것도 충분히 인정될 수 있어! 😊
-[APPROVED]"
+예시 (인정):
+{"decision":"approved","reason":"조건 충족","reply":"좋아, 그것도 충분히 인정될 수 있어! 😊","clarify_question":null}
 
-"아쉽지만 이번에는 조금 달라서 인정이 어려워.
-[DENIED]"
+예시 (불인정):
+{"decision":"denied","reason":"strict_requirements 위반","reply":"아쉽지만 이번에는 조금 달라서 인정이 어려워.","clarify_question":null}
+
+예시 (되묻기):
+{"decision":"clarify","reason":"행동이 불명확","reply":"조금 더 알려줄래?","clarify_question":"몇 분 동안 했어?"}
 =================================
 """.strip()
 
@@ -154,6 +167,36 @@ def build_cancel_hint(result: CancelResult) -> str:
 
 # ── 읽기 전용 힌트 (DB SELECT만, write 없음) ─────────────────────────────────
 
+_MISSION_METADATA_LABELS = [
+    ("success_criteria", "성공 인정 기준"),
+    ("strict_requirements", "절대 어기면 안 되는 조건"),
+    ("target_metric", "기준 종류"),
+    ("target_value", "기준 값"),
+    ("target_unit", "단위"),
+    ("time_condition", "시간 조건"),
+    ("allowed_substitutes", "인정 가능한 대체"),
+    ("denied_substitutes", "불인정 대체"),
+]
+
+def _format_mission_metadata(mission: dict) -> str:
+    """demo_mission 메타데이터를 LLM 프롬프트용 텍스트 블록으로 변환.
+
+    값이 모두 비어 있으면 빈 문자열을 반환한다.
+    """
+    lines: list[str] = []
+    for key, label in _MISSION_METADATA_LABELS:
+        value = mission.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        lines.append(f"- {label}: {text}")
+    if not lines:
+        return ""
+    return "[시트 메타데이터]\n" + "\n".join(lines)
+
+
 def build_equivalency_hint(student_id: int, fn_args: dict) -> str:
     today = _kst_today()
     mission = get_student_mission_db(student_id, today)
@@ -175,11 +218,15 @@ def build_equivalency_hint(student_id: int, fn_args: dict) -> str:
     ]
     if mission.get("mission_rule"):
         lines.append(f"수행 규칙: {mission['mission_rule']}")
+    metadata_block = _format_mission_metadata(mission)
+    if metadata_block:
+        lines.append("")
+        lines.append(metadata_block)
     lines.append(f"\n{category_prompt}")
     return "\n".join(lines)
 
 
-def build_equivalency_judge_prompt(student_id: int, fn_args: dict) -> str | None:
+def build_equivalency_judge_prompt(student_id: int, fn_args: dict, user_message: str = "") -> str | None:
     """판정용 LLM 시스템 프롬프트 구성. 미션 없으면 None 반환."""
     today = _kst_today()
     mission = get_student_mission_db(student_id, today)
@@ -197,17 +244,83 @@ def build_equivalency_judge_prompt(student_id: int, fn_args: dict) -> str | None
     ]
     if mission.get("mission_rule"):
         lines.append(f"수행 규칙: {mission['mission_rule']}")
+    # 메타데이터는 전체 컬럼 유지: avoid/order/meal_completion 같은 미션은 numeric block이
+    # 빈 문자열이라 target_*도 metadata에 있어야 한다. time_condition도 mission_rule에 빠질 수 있어 유지.
+    metadata_block = _format_mission_metadata(mission)
+    if metadata_block:
+        lines.append("")
+        lines.append(metadata_block)
+    facts_block = format_user_facts_hint(extract_user_facts(user_message))
+    if facts_block:
+        lines.append("")
+        lines.append(facts_block)
+    numeric_block = format_numeric_comparison_hint(compare_numeric_target(user_message, mission))
+    if numeric_block:
+        lines.append("")
+        lines.append(numeric_block)
     lines.append(f"\n{category_prompt}")
     return "\n".join(lines)
 
 
 def build_equivalency_result_hint(judgment: dict) -> str:
     """판정 결과를 Gemma 응답용 hint 텍스트로 변환."""
-    if judgment.get("need_clarification"):
-        return "아이가 어떤 대체 행동을 하려는지 불명확해. 구체적으로 어떤 행동인지 한 문장으로만 되물어봐."
-    if judgment.get("approved"):
-        return "아이의 대체 수행이 인정됐어. 미션 성공으로 기록됐어. 아이를 짧고 따뜻하게 칭찬해줘."
-    return "아이의 대체 수행은 기준에 맞지 않아 인정이 안 됐어. 아이에게 부드럽게 알려주고, 원래 미션이나 다른 방법을 가볍게 제안해줘."
+    decision = judgment.get("decision") or (
+        "approved" if judgment.get("approved") else "clarify" if judgment.get("need_clarification") else "denied"
+    )
+    reason = judgment.get("reason") or ""
+    judge_reply = judgment.get("reply") or ""
+    clarify_question = judgment.get("clarify_question") or ""
+
+    lines = [
+        "[대체 수행 판정 결과]",
+        f"decision: {decision}",
+    ]
+    if reason:
+        lines.append(f"reason: {reason}")
+    if judge_reply:
+        lines.append(f"judge_reply: {judge_reply}")
+    if clarify_question:
+        lines.append(f"clarify_question: {clarify_question}")
+
+    lines.extend([
+        "",
+        "위 판정 결과를 바꾸지 말고, 아이에게 보여줄 최종 답변만 자연스럽게 써줘.",
+        "토미 말투처럼 친구에게 말하듯 부드럽고 따뜻하게 말해 반말로, 1~2문장으로 짧게 답해.",
+        "DB 저장/기록/제출이 완료됐다고 말하지 마.",
+        "판정과 반대로 말하지 마. approved가 아니면 인정됐다고 말하지 마.",
+        "judge_reply가 있으면 그 의미를 최우선으로 유지하고, 없는 사실을 덧붙이지 마.",
+        "decision이 denied이면 '괜찮아', '인정돼', '해도 돼'처럼 승인으로 들리는 표현을 절대 쓰지 마.",
+        "decision이 approved이면 '안 돼', '인정이 어려워', '실패'처럼 불인정으로 들리는 표현을 절대 쓰지 마.",
+        "decision이 clarify이면 답을 확정하지 말고 필요한 정보 하나만 물어봐.",
+        # 추가 질문 금지: approved/denied는 이미 판정이 끝났으므로 양·시간·방법을 되묻지 않는다.
+        "decision이 approved 또는 denied이면 답변에 절대로 질문을 붙이지 마. '얼마나', '몇 분', '몇 개', '언제', '어디서' 같은 되묻기 표현은 금지.",
+        "approved/denied 답변은 평서문으로만 끝내. 물음표(?)로 끝나지 않게 해.",
+        "clarify일 때만 질문을 한 개 한다. 그 외에는 질문 금지.",
+        # 사진/영상 인증 금지: 이 앱은 채팅으로만 수행을 확인한다.
+        "이 앱은 채팅으로만 수행을 확인한다. '보여줘', '사진', '영상', '녹화', '녹음', '찍어줘' 같은 표현은 답변에 절대 쓰지 마.",
+        "'어떻게 했는지 보여줘', '영상으로 알려줘' 같은 시각 인증 요구도 금지.",
+        "이모지가 어색하거나 강제로 끼워 넣는 느낌이면 빼는 게 낫다. 모든 답변에 이모지가 있을 필요는 없다.",
+    ])
+
+    if decision == "approved":
+        lines.append("대체 수행이 인정 가능한 경우야. 따뜻하게 괜찮다고 한 마디만 하고 끝내. 추가 확인 질문은 절대 하지 마.")
+    elif decision == "clarify":
+        lines.append("정보가 부족한 경우야. clarify_question이 있으면 그 질문 하나만 부드럽게 물어봐.")
+    else:
+        # denied 답변에는 명확한 거절 표현이 들어가야 한다.
+        # 단 토미 친구 말투를 유지: 차갑게 단정하는 톤이 아니라, 부드럽게 안내하는 거절.
+        lines.extend([
+            "대체 수행이 인정되지 않는 경우야. 추가 질문은 하지 마.",
+            "답변 안에는 반드시 명확한 거절 표현을 넣어. 예: '안 돼', '그건 안 돼', '인정이 어려워'.",
+            "단, 친구처럼 부드럽고 따뜻하게 말해. '아쉽지만~' 같은 완충 표현을 앞에 써서 톤을 부드럽게 해.",
+            "차갑게 단정만 하지 말고, 거절 후에는 원래 미션 기준을 한 문장으로 짧게 안내해.",
+            "제한/금지/줄이기 미션에서는 '원래 대상을 해야 해', '유튜브만 봐야 해'처럼 반대로 말하지 마.",
+            "영상 제한 미션에서 릴스/쇼츠/틱톡을 거절할 때는 '그것도 영상이라 제한에 포함돼'라는 의미로 말해.",
+            "'~하는 게 더 좋아', '~하면 좋아' 같은 비교형 권장 표현만으로 거절을 우회하지 마. 사용자가 거절인지 못 알아들어.",
+            "예시 1: '아쉽지만 물티슈만으로는 안 돼~ 비누로 30초 이상 씻어야 해.'",
+            "예시 2: '음 그건 안 돼! 비누 쓰는 게 미션 핵심이거든~'",
+        ])
+    return "\n".join(lines)
 
 
 def build_mission_info_hint(student_id: int, fn_args: dict) -> str:
@@ -216,6 +329,26 @@ def build_mission_info_hint(student_id: int, fn_args: dict) -> str:
     if query_type == "deadline":
         return f"아이가 제출 마감 시간을 물어봤어. 마감은 {DEADLINE_TEXT}이야. 친절하게 안내해줘."
     if query_type == "general_rule":
+        mission = get_student_mission_db(student_id, _kst_today()) if student_id is not None else None
+        if mission:
+            lines = [
+                "아이가 오늘 미션의 성공 기준이나 수행 조건을 물어봤어.",
+                "앱 전체 규칙보다 아래 오늘 미션 정보를 우선해서 답해.",
+                "질문과 관련된 조건만 1~2문장으로 짧게 말해.",
+                "사진이나 영상 인증 이야기는 사용자가 묻지 않았으면 하지 마.",
+                "",
+                f"미션명: {mission.get('mission_name', '')}",
+            ]
+            if mission.get("mission_rule"):
+                lines.append(f"수행 규칙: {mission['mission_rule']}")
+            metadata_block = _format_mission_metadata(mission)
+            if metadata_block:
+                lines.append("")
+                lines.append(metadata_block)
+            lines.append("")
+            lines.append("예: 목표가 50회인데 아이가 30회를 물으면 30회로는 부족하고 50회를 해야 한다고 말한다.")
+            lines.append("예: 계단 미션의 기준을 물으면 몇 층/몇 분/어떤 행동인지 오늘 미션 규칙에 있는 기준만 말한다.")
+            return "\n".join(lines)
         return f"아이가 앱 규칙을 물어봤어. 아래 규칙을 친절하게 안내해줘.\n\n{GENERAL_RULE_TEXT}"
 
     target_date = fn_args.get("target_date", "today")
