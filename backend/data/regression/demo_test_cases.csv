@@ -52,7 +52,7 @@ D050,96,오늘 과일 1번 먹기,과일 먹기,오늘 과일 먹기 까먹음,s
 D051,96,오늘 과일 1번 먹기,과일 먹기,과일은 아무거나 먹어도 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
 D052,96,오늘 과일 1번 먹기,과일 먹기,사과 한 입 먹었어,none,{},0,clarify,ambiguous,,0
 D053,112,잠들기 전 양치하기,양치하기,양치했다! 이제 잘게 오늘 성공,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
-D054,112,잠들기 전 양치하기,양치하기,오늘 양치 안 할래,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D054,112,잠들기 전 양치하기,양치하기,오늘 양치 안 할래,none,{},0,clarify,ambiguous,,0
 D055,112,잠들기 전 양치하기,양치하기,양치만 하면 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
 D056,112,잠들기 전 양치하기,양치하기,양치 귀찮아,none,{},0,clarify,ambiguous,,0
 D057,153,방 정리 10분 하기,정리 정돈,방 정리 10분 완료,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0

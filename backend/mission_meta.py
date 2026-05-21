@@ -93,7 +93,11 @@ MISSION_META: dict[int, MissionMeta] = {
     29: MissionMeta(type="perform", numeric=NumericGoal(25, "번")),
     38: MissionMeta(type="perform", numeric=NumericGoal(12, "분")),
     43: MissionMeta(type="perform", numeric=NumericGoal(10, "분")),
-    51: MissionMeta(type="perform"),
+    51: MissionMeta(
+        type="perform",
+        target_kw=["밥", "아침밥", "아침"],
+        success_kw=["먹었", "먹었어", "먹음"],
+    ),
     62: MissionMeta(
         type="perform",
         numeric=NumericGoal(30, "초"),
@@ -121,7 +125,7 @@ MISSION_META: dict[int, MissionMeta] = {
     96: MissionMeta(
         type="perform",
         numeric=NumericGoal(1, "회", {"번": 1, "개": 1}),
-        target_kw=["과일", "사과", "바나나", "귤", "딸기", "포도"],
+        target_kw=["과일", "사과", "바나나", "귤", "딸기", "포도", "키위", "수박", "복숭아", "오렌지", "망고"],
         success_kw=["먹었", "먹었어", "먹음"],
     ),
     112: MissionMeta(

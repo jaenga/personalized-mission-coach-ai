@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from starlette.concurrency import run_in_threadpool
 
@@ -92,6 +93,13 @@ class EquivalencyService:
             )
             if submit_validation and not submit_validation.should_execute:
                 judgment = self._clarify_from_submit_validation(submit_validation)
+        elif eq_standalone and self._is_approved(judgment) and self._looks_like_completed_equivalency_report(user_message):
+            exec_results.submit = await run_in_threadpool(
+                execute_submit,
+                student_id,
+                {"result_type": "success"},
+            )
+            print("[Equivalency] standalone approved report -> submit executed")
 
         return EquivalencyResult(
             judgment=judgment,
@@ -130,6 +138,14 @@ class EquivalencyService:
     @staticmethod
     def _is_approved(judgment: EquivalencyJudgment) -> bool:
         return judgment.approved and not judgment.need_clarification
+
+    @staticmethod
+    def _looks_like_completed_equivalency_report(user_message: str) -> bool:
+        text = (user_message or "").replace(" ", "")
+        return bool(
+            re.search(r"(했어|했어요|했음|했는데|했|올라갔|내려갔|걸었|먹었|마셨|봤|탔|이용했|끝냈|완료)", text)
+            and re.search(r"(성공|인정|맞아|되는|돼|되나|되나요|괜찮)", text)
+        )
 
     @staticmethod
     def _clarify_from_submit_validation(validation: SubmitValidationResult) -> EquivalencyJudgment:

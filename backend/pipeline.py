@@ -208,6 +208,11 @@ _ADJUSTMENT_CANCEL_RE = re.compile(
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
 _CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
+_ADJUSTMENT_REQUEST_RE = re.compile(
+    r"바꿔|변경|교체|다른\s*(?:미션|거|걸)"
+    r"|쉬운\s*(?:걸로|미션)|쉽게\s*(?:바꿔|해줘|변경)"
+    r"|너무\s*어려|어려워서|힘들어서|너무\s*힘들|힘든데"
+)
 # 행동+부정: 금지형 미션("과자 안 먹기")에서 성공일 수 있어 별도 처리
 # 주의: 못했/안했(일반 실패)은 여기 포함 안 함 → _FAIL_RE에서 처리
 _NEGATION_VERB_RE = re.compile(
@@ -447,6 +452,10 @@ def step_execute(
             print(f"[DB] dropped cancel without explicit cancel request: {_short(user_message)!r}")
         fn_calls = [(fn, args) for fn, args in fn_calls if fn != "cancel_mission_action"]
 
+    if any(fn == "request_mission_adjustment" for fn, _ in fn_calls) and not _has_explicit_adjustment_request(user_message):
+        print(f"[DB] dropped adjustment without explicit adjustment request: {_short(user_message)!r}")
+        fn_calls = [(fn, args) for fn, args in fn_calls if fn != "request_mission_adjustment"]
+
     # 3. 남은 fn_calls를 콤보에 따라 처리 (sequential이면 reorder 적용)
     ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
 
@@ -490,6 +499,10 @@ def _has_explicit_cancel_request(message: str) -> bool:
         or _CANCEL_TARGET_RE.search(message or "")
         or _CANCEL_REQUEST_RE.search(message or "")
     )
+
+
+def _has_explicit_adjustment_request(message: str) -> bool:
+    return bool(_ADJUSTMENT_REQUEST_RE.search((message or "").replace(" ", "")) or _ADJUSTMENT_REQUEST_RE.search(message or ""))
 
 
 def _build_function_hint(

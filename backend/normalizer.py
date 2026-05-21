@@ -51,11 +51,12 @@ _QUESTION_RE = re.compile(
     r"인지|어때요\??|어때\??)"
 )
 _NEGATION_VERB_RE = re.compile(
-    r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안타|못타"
+    r"안 ?먹었|안 ?먹고|못 ?먹었|안 ?마셨|못 ?마셨|안 ?봤|못 ?봤|안 ?봄|못 ?봄|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안봤|못봤|안타|못타"
 )
 _EXPLICIT_FAIL_RE = re.compile(
     r"실패"
     r"|못\s*했"
+    r"|못\s*마셨"
     r"|안\s*했"
     r"|못\s*함"
     r"|안\s*함"
@@ -67,14 +68,14 @@ _EXPLICIT_FAIL_RE = re.compile(
 _EMOTIONAL_RE = re.compile(r"하기 싫|못하겠|안해|못해|포기")
 _EXPLICIT_SUCCESS_RE = re.compile(r"성공|완료|해냈|끝냈|다 했|다했|클리어")
 _SUCCESS_RE = re.compile(
-    r"했어(?:요)?|먹었어(?:요)?|마셨어(?:요)?|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
+    r"했어(?:요)?|먹었어(?:요)?|먹음|마셨어(?:요)?|마심|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
 )
 _NUMERIC_REPORT_RE = re.compile(
     r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
     r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
 )
 _PAST_VERB_RE = re.compile(r"[가-힣]{1,8}(?:었|았|했|겼|켰|렸|웠|냈|봤)어(?:요)?")
-_QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에")
+_QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에|한\s*입")
 _CONSUME_PAST_RE = re.compile(
     r"먹었|먹었다|마셨|마셨다|봤어|봤다|시청했|사용했|틀었|켰어|켰다"
 )
@@ -197,6 +198,9 @@ def normalize_b_input(
     if mtype == "prohibit" and has_target and not has_negation and _CONSUME_PAST_RE.search(message):
         return fail()
 
+    if mtype == "limit" and has_mission_target and has_negation and not _NUMERIC_REPORT_RE.search(message):
+        return success()
+
     if _EMOTIONAL_RE.search(message) and not _EXPLICIT_FAIL_RE.search(message):
         return ok()
 
@@ -227,6 +231,10 @@ def normalize_b_input(
         return clarify("numeric")
 
     if meta and meta.numeric and _SUCCESS_RE.search(message):
+        if _QUALIFIER_RE.search(message):
+            return clarify("qualifier")
+        if has_mission_target and meta.success_kw and any(kw in message for kw in meta.success_kw):
+            return success()
         return clarify("numeric_no_count")
 
     if _EXPLICIT_SUCCESS_RE.search(message):

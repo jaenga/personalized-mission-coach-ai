@@ -46,13 +46,12 @@ FALLBACK_RESPONSES = {
     "error_no_db": "앗, 지금 기록이 잘 안 됐어. 다시 말해줄 수 있어?",
 }
 
-_QUESTION_RE = re.compile(
-    r"\?"
-    r"|알려줘|어떻게|뭐야|뭐였|됐어|되었어|해줄\s*수\s*있|마셔도\s*돼|먹어도\s*돼|해도\s*돼"
+_QUESTION_INTENT_RE = re.compile(
+    r"알려줘|어떻게|뭐야|뭐였|됐어|되었어|해줄\s*수\s*있|마셔도\s*돼|먹어도\s*돼|해도\s*돼"
     r"|성공\s*기준|실패\s*기준|기록\s*(?:됐|되었|저장)"
 )
 _COMPLETION_VERB_RE = re.compile(
-    r"했어|했다|했음|했는데|마셨어|마셨|먹었어|걸었어|걸었|닦았어|씻었어|완료했어|다\s*했어|끝났어|끝냈|마쳤어|해냈|클리어"
+    r"했어|했다|했음|했는데|마셨어|마셨|마심|먹었어|먹음|걸었어|걸었|닦았어|씻었어|완료했어|다\s*했어|끝났어|끝냈|마쳤어|해냈|클리어"
 )
 _SCREEN_RESTRICTION_VERB_RE = re.compile(
     r"봤어|봤다|안\s*봤어|안\s*봤다|시청했어|시청했다|안\s*시청했어|시청\s*안"
@@ -62,7 +61,7 @@ _NUMERIC_RE = re.compile(
     r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
 )
 _NEGATION_RE = re.compile(
-    r"안\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
+    r"안\s*(?:먹었|먹고|마셨|봤|봄|보|했|탔|시청)"
     r"|못\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
     r"|먹지\s*않|마시지\s*않|보지\s*않|하지\s*않|시청\s*안"
     r"|안먹|못먹|안마|못마|안봤|못봤|안했|못했"
@@ -73,6 +72,7 @@ _CONSUME_OR_SCREEN_RE = re.compile(
 _EXPLICIT_FAIL_RE = re.compile(
     r"실패"
     r"|못\s*했"
+    r"|못\s*마셨"
     r"|안\s*했"
     r"|못\s*함"
     r"|안\s*함"
@@ -82,9 +82,10 @@ _EXPLICIT_FAIL_RE = re.compile(
     r"|패스\s*함"
 )
 _EXPLICIT_SUCCESS_RE = re.compile(r"미션\s*성공|오늘\s*미션\s*성공|성공했|미션\s*완료|오늘\s*미션\s*완료|완료했|끝냈|다\s*했|다했|수행했|해냈|클리어")
+_FUTURE_REFUSAL_RE = re.compile(r"안\s*(?:할래|하겠|하려고)|하지\s*않을래|못\s*하겠|하기\s*싫")
 _SUBSTITUTE_AVOID_RE = re.compile(r"안\s*(?:타|탔|이용|씀)|대신")
 _SUBSTITUTE_ACTION_RE = re.compile(r"올라갔|내려갔|걸었|이용했|갔")
-_QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에")
+_QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에|한\s*입")
 _DB_COMPLETION_PHRASE_RE = re.compile(
     r"기록(?:했|해뒀|됐|되었|완료)"
     r"|저장(?:했|해뒀|됐|되었)"
@@ -113,13 +114,28 @@ def has_submit_blocker(message: str) -> tuple[str, str] | None:
         return "clarify", "clarify_time_ambiguous"
     if is_smalltalk(text):
         return "block", "block_smalltalk"
-    if _QUESTION_RE.search(text.replace(" ", "")) or _QUESTION_RE.search(text):
+    if _FUTURE_REFUSAL_RE.search(text):
+        return "clarify", "clarify_negation"
+    if _QUESTION_INTENT_RE.search(text.replace(" ", "")) or _QUESTION_INTENT_RE.search(text):
+        return "block", "block_question"
+    if "?" in text and not _has_report_signal_with_question(text):
         return "block", "block_question"
     return None
 
 
 def contains_numeric_expression(message: str) -> bool:
     return bool(_NUMERIC_RE.search(message or ""))
+
+
+def _has_report_signal_with_question(message: str) -> bool:
+    text = message or ""
+    if not contains_numeric_expression(text):
+        return False
+    return bool(
+        _COMPLETION_VERB_RE.search(text)
+        or _CONSUME_OR_SCREEN_RE.search(text)
+        or _NEGATION_RE.search(text)
+    )
 
 
 def contains_db_completion_phrase(gemma_text: str) -> bool:
@@ -150,6 +166,12 @@ def should_promote_to_submit_path(
     meta = MISSION_META.get(mission_id) if mission_id else None
     if meta and meta.type == "prohibit":
         return bool(_SCREEN_RESTRICTION_VERB_RE.search(user_message or "") or _NEGATION_RE.search(user_message or ""))
+    if meta and meta.type == "limit":
+        return bool(
+            contains_numeric_expression(user_message)
+            or _NEGATION_RE.search(user_message or "")
+            or _COMPLETION_VERB_RE.search(user_message or "")
+        )
     if meta and meta.type == "substitute":
         return _is_clear_substitute_success(user_message, meta)
 
@@ -187,6 +209,9 @@ def validate_submit_candidate(
 
     if mission_type == "substitute" and meta and _is_clear_substitute_success(text, meta):
         return _execute("success", "validated_success")
+
+    if mission_type == "limit" and has_keyword and has_negation and not has_numeric:
+        return _execute("success", "validated_limit_negation")
 
     if has_negation:
         if _EXPLICIT_FAIL_RE.search(text):
