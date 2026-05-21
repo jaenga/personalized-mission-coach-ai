@@ -61,7 +61,7 @@ _NUMERIC_RE = re.compile(
     r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
 )
 _NEGATION_RE = re.compile(
-    r"안\s*(?:먹었|먹고|마셨|봤|봄|보|했|탔|시청)"
+    r"안\s*(?:먹었|먹고|하고|마셨|봤|봄|보|했|탔|시청)"
     r"|못\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
     r"|먹지\s*않|마시지\s*않|보지\s*않|하지\s*않|시청\s*안"
     r"|안먹|못먹|안마|못마|안봤|못봤|안했|못했"
@@ -79,6 +79,7 @@ _EXPLICIT_FAIL_RE = re.compile(
     r"|못\s*끝"
     r"|아예\s*못"
     r"|까먹"
+    r"|해버림"
     r"|패스\s*함"
 )
 _EXPLICIT_SUCCESS_RE = re.compile(r"미션\s*성공|오늘\s*미션\s*성공|성공했|미션\s*완료|오늘\s*미션\s*완료|완료했|끝냈|다\s*했|다했|수행했|해냈|클리어")
@@ -175,7 +176,11 @@ def should_promote_to_submit_path(
     if meta and meta.type == "substitute":
         return _is_clear_substitute_success(user_message, meta)
 
-    return bool(_COMPLETION_VERB_RE.search(user_message or "") or contains_numeric_expression(user_message))
+    return bool(
+        _COMPLETION_VERB_RE.search(user_message or "")
+        or _EXPLICIT_FAIL_RE.search(user_message or "")
+        or contains_numeric_expression(user_message)
+    )
 
 
 def validate_submit_candidate(

@@ -521,9 +521,9 @@ def detect_mission_adjustment_call(user_message: str) -> tuple[str, dict] | None
     compact = text.replace(" ", "")
     if any(word in compact for word in ("취소", "되돌려", "철회")):
         return None
-    if re.search(r"쉬운걸로|쉽게(?:바꿔|해줘)|너무어려|어려워서|힘들어서|너무힘들|힘든데", compact):
+    if re.search(r"쉬운걸로|쉽게(?:바꿔|해줘|변경)", compact):
         return ("request_mission_adjustment", {"adjustment_type": "easier"})
-    if re.search(r"싫은데|하기싫|다른거|다른걸|다른미션|바꿔줘|변경해줘|교체해줘|빡세", compact):
+    if re.search(r"다른거|다른걸|다른미션|바꿔줘|변경해줘|교체해줘", compact):
         return ("request_mission_adjustment", {"adjustment_type": "change"})
     return None
 

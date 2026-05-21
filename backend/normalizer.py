@@ -51,7 +51,7 @@ _QUESTION_RE = re.compile(
     r"인지|어때요\??|어때\??)"
 )
 _NEGATION_VERB_RE = re.compile(
-    r"안 ?먹었|안 ?먹고|못 ?먹었|안 ?마셨|못 ?마셨|안 ?봤|못 ?봤|안 ?봄|못 ?봄|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안봤|못봤|안타|못타"
+    r"안 ?먹었|안 ?먹고|안 ?하고|못 ?먹었|안 ?마셨|못 ?마셨|안 ?봤|못 ?봤|안 ?봄|못 ?봄|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안봤|못봤|안타|못타"
 )
 _EXPLICIT_FAIL_RE = re.compile(
     r"실패"
@@ -63,9 +63,10 @@ _EXPLICIT_FAIL_RE = re.compile(
     r"|못\s*끝"
     r"|아예\s*못"
     r"|까먹"
+    r"|해버림"
     r"|패스\s*함"
 )
-_EMOTIONAL_RE = re.compile(r"하기 싫|못하겠|안해|못해|포기")
+_EMOTIONAL_RE = re.compile(r"하기\s*싫|안해|못해|포기|빡세|싫은데")
 _EXPLICIT_SUCCESS_RE = re.compile(r"성공|완료|해냈|끝냈|다 했|다했|클리어")
 _SUCCESS_RE = re.compile(
     r"했어(?:요)?|먹었어(?:요)?|먹음|마셨어(?:요)?|마심|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
@@ -145,6 +146,8 @@ def normalize_b_input(
         return ok("더 쉬운 미션으로 바꿔줘")
     if _TOO_DIFFICULT_RE.search(message):
         return clarify("difficulty")
+    if _EMOTIONAL_RE.search(message) and not _EXPLICIT_FAIL_RE.search(message):
+        return ok()
     if _HARDER_RE.search(message):
         return ok("더 어려운 미션으로 바꿔줘")
     if _CHANGE_RE.search(message):

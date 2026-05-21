@@ -1171,7 +1171,18 @@ def classify_mission_change_shortcut(message: str) -> str | None:
     if _MISSION_CHANGE_NEGATION_RE.search(compact) or _CANCEL_REQUEST_RE.search(compact):
         return None
 
-    too_hard_patterns = [
+    explicit_easier_patterns = [
+        r"쉬운.*미션.*바꿔",
+        r"쉬운.*걸로.*바꿔",
+        r"쉬운걸로",
+        r"쉬운.*미션.*줘",
+        r"더쉬운.*(거|걸|미션).*줘",
+        r"쉽게.*바꿔",
+    ]
+    if _has_any(compact, explicit_easier_patterns):
+        return "too_hard"
+
+    difficulty_patterns = [
         r"너무어려",
         r"미션이어렵",
         r"미션어려",
@@ -1180,15 +1191,9 @@ def classify_mission_change_shortcut(message: str) -> str | None:
         r"이미션힘들",
         r"미션힘들",
         r"못하겠",
-        r"쉬운.*미션.*바꿔",
-        r"쉬운.*걸로.*바꿔",
-        r"쉬운걸로",
-        r"쉬운.*미션.*줘",
-        r"더쉬운.*(거|걸|미션).*줘",
-        r"쉽게.*바꿔",
     ]
-    if _has_any(compact, too_hard_patterns):
-        return "too_hard"
+    if _has_any(compact, difficulty_patterns):
+        return "difficulty"
 
     dislike_patterns = [
         r"노잼",
@@ -1196,8 +1201,6 @@ def classify_mission_change_shortcut(message: str) -> str | None:
         r"미션싫",
         r"이미션싫",
         r"오늘미션싫",
-        r"싫어$",
-        r"싫다$",
     ]
     if _has_any(compact, dislike_patterns):
         return "dislike"
@@ -1219,6 +1222,15 @@ def classify_mission_change_shortcut(message: str) -> str | None:
         return "cant_do"
 
     return None
+
+
+def _is_soft_emotional_mission_complaint(message: str) -> bool:
+    compact = _compact_ko(message)
+    if not compact:
+        return False
+    if re.search(r"바꿔|바꾸|변경|교체|다른거|다른걸|다른미션|쉬운걸|쉬운미션", compact):
+        return False
+    return bool(re.search(r"하기싫|싫은데|빡세", compact))
 
 
 def _action_payload(active_ui: dict | None) -> dict:
@@ -1393,6 +1405,20 @@ async def _handle_mission_change_shortcut(
                 "shortcut_type": shortcut_type,
                 "adjustment_status": exec_results.adjustment.status.value if exec_results.adjustment else None,
                 "memory_saved": bool(memory),
+            },
+        }
+
+    if shortcut_type == "difficulty":
+        return {
+            "response": "조금 어렵게 느껴졌구나. 쉬운 미션으로 바꿔줄까? 아니면 오늘 미션으로 계속 해볼래? 🧐",
+            "mission_completed": False,
+            "detected_function": None,
+            "sources": [],
+            "ui_action": None,
+            "debug": {
+                "intent": "MISSION_CHANGE_SHORTCUT",
+                "shortcut_type": shortcut_type,
+                "adjustment_status": None,
             },
         }
 
@@ -1577,6 +1603,13 @@ async def _handle_negative_activity_request(
     user_message: str,
     mission_row: dict,
 ) -> dict | None:
+    if should_promote_to_submit_path(
+        user_message,
+        mission_row.get("mission_name") or "",
+        mission_row.get("mission_id"),
+    ):
+        return None
+
     if not is_negative_activity_request(user_message):
         return None
 
@@ -2006,7 +2039,7 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
                 await run_in_threadpool(_save_message_safe, body.session_id, "assistant", shortcut_result["response"])
                 return shortcut_result
 
-    if not is_greet and student_id and mission_row:
+    if not is_greet and student_id and mission_row and not _is_soft_emotional_mission_complaint(body.message):
         if await classify_mission_dislike(body.message, mission_title):
             payload = {
                 "mission_id": mission_row.get("mission_id"),
@@ -2612,7 +2645,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                     yield _done_sse(shortcut_result.get("ui_action"), debug_payload)
                     return
 
-        if not is_greet and student_id and mission_row:
+        if not is_greet and student_id and mission_row and not _is_soft_emotional_mission_complaint(body.message):
             dislike_started = time.perf_counter()
             if await classify_mission_dislike(body.message, current_mission_title):
                 payload = {
