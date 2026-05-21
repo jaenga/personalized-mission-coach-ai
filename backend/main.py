@@ -33,7 +33,7 @@ from app_services import (
 )
 from chat_service import process_chat, process_chat_stream
 from intent_router import close_intent_router_client
-from ollama_client import close_ollama_client
+from ollama_client import close_ollama_client, stop_autostarted_ollama
 from qwen_client import close_qwen_client
 from schemas import (
     ChatRequest,
@@ -70,6 +70,7 @@ async def shutdown():
     await close_ollama_client()
     await close_intent_router_client()
     await close_qwen_client()
+    stop_autostarted_ollama()
 
 
 @app.post("/verify-student")

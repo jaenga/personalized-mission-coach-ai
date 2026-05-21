@@ -39,6 +39,7 @@ from memory_service import extract_and_save_memory
 from mission_personalization import replace_current_mission_after_onboarding
 from mission_ui_action_service import get_active_ui_action, rebuild_ui_action_payload, resolve_mission_ui_action_request
 from starlette.concurrency import run_in_threadpool
+from ollama_client import ensure_ollama_server
 from rag import preload_model
 from qwen_client import preload_qwen
 from sheets import generate_daily_status
@@ -58,6 +59,7 @@ from schemas import (
 
 def startup_tasks() -> None:
     init_db()
+    ensure_ollama_server()
     preload_model()
     preload_qwen()
     if DEMO_MODE:

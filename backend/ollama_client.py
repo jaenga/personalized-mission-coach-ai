@@ -1,7 +1,10 @@
 import os
 import re
 import json
+import shutil
+import subprocess
 import time
+from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
 from equivalency_judgment import EquivalencyJudgment, normalize_decision
@@ -11,9 +14,67 @@ load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+OLLAMA_AUTOSTART = os.getenv("OLLAMA_AUTOSTART", "true").lower() not in {"0", "false", "no"}
+OLLAMA_STARTUP_TIMEOUT = float(os.getenv("OLLAMA_STARTUP_TIMEOUT", "15"))
 
 
 _client: httpx.AsyncClient | None = None
+_ollama_process: subprocess.Popen | None = None
+
+
+def _is_local_ollama_url() -> bool:
+    parsed = urlparse(OLLAMA_BASE_URL)
+    return parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def _ollama_is_ready(timeout: float = 1.0) -> bool:
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags")
+            response.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_ollama_server() -> None:
+    global _ollama_process
+
+    if _ollama_is_ready():
+        print(f"[Ollama] server ready: {OLLAMA_BASE_URL}")
+        return
+
+    if not OLLAMA_AUTOSTART:
+        print("[Ollama] server not reachable and OLLAMA_AUTOSTART=false")
+        return
+
+    if not _is_local_ollama_url():
+        print(f"[Ollama] autostart skipped for non-local URL: {OLLAMA_BASE_URL}")
+        return
+
+    ollama_bin = shutil.which("ollama")
+    if not ollama_bin:
+        print("[Ollama] autostart skipped: ollama command not found")
+        return
+
+    print("[Ollama] server not reachable; starting `ollama serve`")
+    _ollama_process = subprocess.Popen(
+        [ollama_bin, "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    deadline = time.perf_counter() + OLLAMA_STARTUP_TIMEOUT
+    while time.perf_counter() < deadline:
+        if _ollama_is_ready():
+            print(f"[Ollama] server started: {OLLAMA_BASE_URL}")
+            return
+        if _ollama_process.poll() is not None:
+            print(f"[Ollama] `ollama serve` exited early with code {_ollama_process.returncode}")
+            return
+        time.sleep(0.5)
+
+    print(f"[Ollama] startup timed out after {OLLAMA_STARTUP_TIMEOUT:g}s")
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -28,6 +89,22 @@ async def close_ollama_client() -> None:
     if _client and not _client.is_closed:
         await _client.aclose()
     _client = None
+
+
+def stop_autostarted_ollama() -> None:
+    global _ollama_process
+    if not _ollama_process or _ollama_process.poll() is not None:
+        _ollama_process = None
+        return
+
+    print("[Ollama] stopping autostarted server")
+    _ollama_process.terminate()
+    try:
+        _ollama_process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _ollama_process.kill()
+        _ollama_process.wait(timeout=5)
+    _ollama_process = None
 
 
 def strip_markdown(text: str) -> str:
