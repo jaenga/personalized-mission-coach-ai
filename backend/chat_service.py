@@ -549,6 +549,8 @@ def _save_natural_language_confirmation_pending(
     student_id: int | None,
     user_message: str,
     clarify_reason: str,
+    mission_name: str = "",
+    mission_id: int | None = None,
 ) -> None:
     """자연어 확인 질문을 보낸 턴이면 다음 턴 답변을 저장된 함수 실행과 연결한다."""
     if not student_id or clarify_reason not in _NATURAL_LANGUAGE_CONFIRMATION_REASONS:
@@ -569,6 +571,8 @@ def _save_natural_language_confirmation_pending(
                 },
                 "original_user_message": user_message,
                 "clarify_reason": clarify_reason,
+                "mission_name": mission_name,
+                "mission_id": mission_id,
             },
         )
         print(f"[Pending] natural_language_confirmation created id={pending.get('id')} reason={clarify_reason}")
@@ -2160,7 +2164,14 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", clarify_response)
         if not is_greet:
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
-        await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
+        await run_in_threadpool(
+            _save_natural_language_confirmation_pending,
+            student_id,
+            body.message,
+            clarify_reason,
+            mission_title,
+            mission_id,
+        )
         return {
             "response": clarify_response,
             "mission_completed": False,
@@ -2226,6 +2237,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
             student_id,
             body.message,
             submit_validation.reason,
+            mission_title,
+            mission_id,
         )
         if not is_greet:
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, None)
@@ -2350,7 +2363,14 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
         await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, detected_function)
     await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
     if not is_greet:
-        await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
+        await run_in_threadpool(
+            _save_natural_language_confirmation_pending,
+            student_id,
+            body.message,
+            clarify_reason,
+            mission_title,
+            mission_id,
+        )
     if not is_greet:
         background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
@@ -2757,7 +2777,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
             async for event in _fake_stream_template_response(clarify_response):
                 yield event
-            await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
+            await run_in_threadpool(
+                _save_natural_language_confirmation_pending,
+                student_id,
+                body.message,
+                clarify_reason,
+                current_mission_title,
+                mission_id,
+            )
             total_ms = round((time.perf_counter() - t_total) * 1000)
             yield _done_sse(
                 None,
@@ -2827,6 +2854,8 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
                 student_id,
                 body.message,
                 submit_validation.reason,
+                current_mission_title,
+                mission_id,
             )
             await run_in_threadpool(_save_message_safe, body.session_id, "user", body.message, None)
             await run_in_threadpool(_save_message_safe, body.session_id, "assistant", ai_message)
@@ -3042,7 +3071,14 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
         save_content = ai_message.strip()
         await run_in_threadpool(_save_message_safe, body.session_id, "assistant", save_content)
         if not is_greet:
-            await run_in_threadpool(_save_natural_language_confirmation_pending, student_id, body.message, clarify_reason)
+            await run_in_threadpool(
+                _save_natural_language_confirmation_pending,
+                student_id,
+                body.message,
+                clarify_reason,
+                current_mission_title,
+                mission_id,
+            )
             background_tasks.add_task(extract_and_save_memory, student_id, body.message, False)
 
         mission_status = None

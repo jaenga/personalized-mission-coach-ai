@@ -207,6 +207,7 @@ _ADJUSTMENT_CANCEL_RE = re.compile(
     r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
+_CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
 # 행동+부정: 금지형 미션("과자 안 먹기")에서 성공일 수 있어 별도 처리
 # 주의: 못했/안했(일반 실패)은 여기 포함 안 함 → _FAIL_RE에서 처리
 _NEGATION_VERB_RE = re.compile(
@@ -439,8 +440,11 @@ def step_execute(
 
     # 1. cancel 분리 + 실행 + fn_calls에서 제거
     if any(fn == "cancel_mission_action" for fn, _ in fn_calls):
-        cancel_args = next((args for fn, args in fn_calls if fn == "cancel_mission_action"), {})
-        results.cancel = execute_cancel(student_id, cancel_args)
+        if _has_explicit_cancel_request(user_message):
+            cancel_args = next((args for fn, args in fn_calls if fn == "cancel_mission_action"), {})
+            results.cancel = execute_cancel(student_id, cancel_args)
+        else:
+            print(f"[DB] dropped cancel without explicit cancel request: {_short(user_message)!r}")
         fn_calls = [(fn, args) for fn, args in fn_calls if fn != "cancel_mission_action"]
 
     # 3. 남은 fn_calls를 콤보에 따라 처리 (sequential이면 reorder 적용)
@@ -476,6 +480,16 @@ def step_execute(
 
     print(f"[DB] done combo={combo or '-'} {_exec_label(results)}")
     return results, fn_calls, pending_submit_args, combo, submit_validation
+
+
+def _has_explicit_cancel_request(message: str) -> bool:
+    if _CANCEL_NEGATION_RE.search(message or ""):
+        return False
+    return bool(
+        _ADJUSTMENT_CANCEL_RE.search(message or "")
+        or _CANCEL_TARGET_RE.search(message or "")
+        or _CANCEL_REQUEST_RE.search(message or "")
+    )
 
 
 def _build_function_hint(

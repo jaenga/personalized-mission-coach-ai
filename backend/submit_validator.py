@@ -62,8 +62,8 @@ _NUMERIC_RE = re.compile(
     r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
 )
 _NEGATION_RE = re.compile(
-    r"안\s*(?:먹었|마셨|봤|보|했|탔|시청)"
-    r"|못\s*(?:먹었|마셨|봤|보|했|탔|시청)"
+    r"안\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
+    r"|못\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
     r"|먹지\s*않|마시지\s*않|보지\s*않|하지\s*않|시청\s*안"
     r"|안먹|못먹|안마|못마|안봤|못봤|안했|못했"
 )
@@ -200,6 +200,13 @@ def validate_submit_candidate(
     if requested_type not in {"success", "fail"}:
         requested_type = None
 
+    if mission_type == "limit" and meta and meta.numeric and has_numeric:
+        reported = extract_numeric(text, meta.numeric)
+        if reported is None:
+            return _result("clarify", "clarify_number_only")
+        result_type = "success" if reported <= meta.numeric.threshold else "fail"
+        return _execute(result_type, "validated_limit_numeric")
+
     if _EXPLICIT_FAIL_RE.search(text):
         return _execute("fail", "validated_fail")
 
@@ -208,13 +215,6 @@ def validate_submit_candidate(
 
     if not has_keyword and not _explicitly_mentions_mission(text):
         return _result("clarify", "clarify_no_keyword")
-
-    if mission_type == "limit" and meta and meta.numeric and has_numeric:
-        reported = extract_numeric(text, meta.numeric)
-        if reported is None:
-            return _result("clarify", "clarify_number_only")
-        result_type = "success" if reported <= meta.numeric.threshold else "fail"
-        return _execute(result_type, "validated_limit_numeric")
 
     if has_numeric or _EXPLICIT_SUCCESS_RE.search(text) or _COMPLETION_VERB_RE.search(text):
         return _execute("success", "validated_success")
