@@ -68,6 +68,12 @@ class OnboardingPreferencesRequest(BaseModel):
     restrictions: list[str] = Field(default_factory=list)
 
 
+class MissionPreferencesRequest(BaseModel):
+    student_id: int
+    preferred_activity_keys: list[str] = Field(default_factory=list)
+    disliked_activity_keys: list[str] = Field(default_factory=list)
+
+
 class UiActionButton(BaseModel):
     value: str
     label: str

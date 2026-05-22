@@ -15,6 +15,7 @@ from app_services import (
     get_student_health_note,
     get_student_app_state,
     get_student_lesson_progress,
+    get_mission_preferences,
     get_student_stats,
     get_today_mission,
     get_user_profile,
@@ -23,6 +24,7 @@ from app_services import (
     register_demo_student,
     resolve_mission_ui_action,
     save_mission_review,
+    save_mission_preferences,
     save_onboarding_preferences,
     save_user_profile,
     save_student_health_note,
@@ -43,6 +45,7 @@ from schemas import (
     LessonProgressRequest,
     LessonQuizCompleteRequest,
     MissionReviewRequest,
+    MissionPreferencesRequest,
     MissionUiActionResolveRequest,
     OnboardingPreferencesRequest,
     ProfileRequest,
@@ -176,6 +179,16 @@ def post_mission_review(body: MissionReviewRequest, background_tasks: Background
 @app.post("/onboarding-preferences")
 def post_onboarding_preferences(body: OnboardingPreferencesRequest):
     return save_onboarding_preferences(body)
+
+
+@app.get("/mission-preferences/{student_id}")
+def get_mission_preferences_route(student_id: int):
+    return get_mission_preferences(student_id)
+
+
+@app.post("/mission-preferences")
+def post_mission_preferences(body: MissionPreferencesRequest):
+    return save_mission_preferences(body)
 
 
 @app.post("/chat")

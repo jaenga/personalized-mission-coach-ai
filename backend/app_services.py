@@ -22,6 +22,7 @@ from database import (
     fetch_profile,
     delete_health_note,
     get_health_note,
+    get_activity_preferences,
     get_latest_chat_session,
     get_success_summary,
     get_student_by_credentials,
@@ -30,6 +31,7 @@ from database import (
     record_game_run,
     save_mission_review as save_mission_review_db,
     save_profile,
+    replace_activity_preferences,
     upsert_user_memory,
     upsert_health_note,
     upsert_lesson_progress,
@@ -50,6 +52,7 @@ from schemas import (
     LessonProgressRequest,
     LessonQuizCompleteRequest,
     MissionReviewRequest,
+    MissionPreferencesRequest,
     MissionUiActionResolveRequest,
     OnboardingPreferencesRequest,
     ProfileRequest,
@@ -332,6 +335,42 @@ def save_onboarding_preferences(body: OnboardingPreferencesRequest):
             "current_activity_key": replacement.get("current_activity_key"),
             "warning": replacement.get("warning"),
         },
+    }
+
+
+def get_mission_preferences(student_id: int):
+    return get_activity_preferences(student_id)
+
+
+def save_mission_preferences(body: MissionPreferencesRequest):
+    try:
+        saved = replace_activity_preferences(
+            body.student_id,
+            body.preferred_activity_keys,
+            body.disliked_activity_keys,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    replacement = {
+        "mission_changed": False,
+        "replace_reason": None,
+        "new_mission": None,
+    }
+    try:
+        replacement = replace_current_mission_after_onboarding(
+            body.student_id,
+            saved["disliked_activity_keys"],
+        )
+    except Exception as e:
+        print(f"[MissionPreferences] auto replacement failed: {type(e).__name__}: {e}")
+
+    return {
+        "ok": True,
+        **saved,
+        "mission_changed": bool(replacement.get("mission_changed")),
+        "replace_reason": replacement.get("replace_reason"),
+        "new_mission": replacement.get("new_mission"),
     }
 
 

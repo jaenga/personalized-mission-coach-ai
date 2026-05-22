@@ -392,6 +392,36 @@ export async function saveOnboardingPreferences({
   return res.json();
 }
 
+export async function fetchMissionPreferences(studentId) {
+  const res = await fetch(`/mission-preferences/${studentId}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "미션 취향 불러오기 실패");
+  }
+  return res.json();
+}
+
+export async function saveMissionPreferencesDb({
+  studentId,
+  preferredActivityKeys = [],
+  dislikedActivityKeys = [],
+}) {
+  const res = await fetch("/mission-preferences", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      preferred_activity_keys: preferredActivityKeys,
+      disliked_activity_keys: dislikedActivityKeys,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "미션 취향 저장 실패");
+  }
+  return res.json();
+}
+
 export async function fetchMissionByStudent(studentId) {
   const res = await fetch(`/mission?student_id=${studentId}`);
   if (!res.ok) throw new Error("미션 불러오기 실패");

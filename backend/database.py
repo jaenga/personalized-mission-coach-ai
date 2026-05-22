@@ -8,7 +8,7 @@ import uuid
 from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
 
-from activity_keys import normalize_activity_key
+from activity_keys import VALID_ACTIVITY_KEYS, normalize_activity_key
 
 load_dotenv()
 
@@ -2413,6 +2413,91 @@ def get_relevant_user_memories(student_id: int) -> list[dict]:
             """, (student_id,))
             rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+
+def get_activity_preferences(student_id: int) -> dict:
+    """Return explicit activity preference memories split by score polarity."""
+    if not student_id:
+        return {"preferred_activity_keys": [], "disliked_activity_keys": []}
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT subject, score
+                FROM user_memories
+                WHERE student_id = %s
+                  AND type = 'preference'
+                  AND subject = ANY(%s)
+                ORDER BY updated_at DESC, id DESC
+            """, (student_id, list(VALID_ACTIVITY_KEYS)))
+            rows = cur.fetchall()
+
+    preferred = []
+    disliked = []
+    for row in rows:
+        score = int(row.get("score") or 0)
+        subject = row.get("subject")
+        if score > 0:
+            preferred.append(subject)
+        elif score < 0:
+            disliked.append(subject)
+    return {
+        "preferred_activity_keys": preferred,
+        "disliked_activity_keys": disliked,
+    }
+
+
+def replace_activity_preferences(
+    student_id: int,
+    preferred_activity_keys: list[str] | None = None,
+    disliked_activity_keys: list[str] | None = None,
+) -> dict:
+    """Replace the student's explicit activity preferences with the provided set."""
+    if not student_id:
+        raise ValueError("student_id is required")
+
+    preferred = []
+    seen = set()
+    for value in preferred_activity_keys or []:
+        key = normalize_activity_key(value)
+        if key and key not in seen:
+            preferred.append(key)
+            seen.add(key)
+
+    disliked = []
+    disliked_seen = set()
+    for value in disliked_activity_keys or []:
+        key = normalize_activity_key(value)
+        if key and key not in seen and key not in disliked_seen:
+            disliked.append(key)
+            disliked_seen.add(key)
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                DELETE FROM user_memories
+                WHERE student_id = %s
+                  AND type = 'preference'
+                  AND subject = ANY(%s)
+            """, (student_id, list(VALID_ACTIVITY_KEYS)))
+
+            rows = []
+            for subject, score in [(key, 3) for key in preferred] + [(key, -3) for key in disliked]:
+                cur.execute("""
+                    INSERT INTO user_memories (student_id, subject, type, score, count, updated_at)
+                    VALUES (%s, %s, 'preference', %s, 0, NOW())
+                    RETURNING *
+                """, (student_id, subject, score))
+                row = cur.fetchone()
+                if row:
+                    rows.append(dict(row))
+        conn.commit()
+
+    return {
+        "preferred_activity_keys": preferred,
+        "disliked_activity_keys": disliked,
+        "memories": rows,
+    }
 
 
 # ── 멀티턴 pending actions ───────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import noticeImg from "../assets/tomato/settings/notice.png";
 import messageImg from "../assets/tomato/settings/message.png";
 import fireImg from "../assets/tomato/settings/fire.png";
 import healthNoteImg from "../assets/tomato/settings/health_note.png";
+import missionPreferenceImg from "../assets/tomato/settings/misicon.svg";
 import outImg from "../assets/tomato/settings/out.png";
 import warningImg from "../assets/tomato/settings/warning.png";
 import lv1Face from "../assets/tomato/_shared/Level/Lv1_face.svg";
@@ -174,6 +175,7 @@ export default function Settings({
   onBack,
   onNavigate,
   onOpenHealthNote,
+  onOpenMissionPreferences,
   onLogout,
   onWithdraw,
 }) {
@@ -313,13 +315,19 @@ export default function Settings({
           />
         </SectionCard>
 
-        {/* 건강 노트 */}
-        <SectionCard title="건강 노트">
+        {/* 맞춤 설정 */}
+        <SectionCard title="맞춤 설정">
           <Row
             label="건강 노트"
             icon={<IconBox src={healthNoteImg} bg="#DCEEDD" size={28} />}
             right={<ChevronRight />}
             onClick={onOpenHealthNote}
+          />
+          <Row
+            label="미션 취향"
+            icon={<IconBox src={missionPreferenceImg} bg="#FEE9E3" size={30} />}
+            right={<ChevronRight />}
+            onClick={onOpenMissionPreferences}
           />
         </SectionCard>
 
