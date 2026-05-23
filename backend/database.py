@@ -521,6 +521,114 @@ def init_db():
                 ON mission_ui_actions (student_id, session_id, status, created_at DESC)
                 WHERE status IN ('pending', 'pending_input')
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mission_correction_requests (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    checkin_id INTEGER REFERENCES checkin_log(checkin_id),
+                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
+                    target_date DATE NOT NULL,
+                    current_result TEXT NOT NULL CHECK (
+                        current_result IN ('success', 'failure', 'completed', 'fail', 'unsubmitted')
+                    ),
+                    requested_result TEXT NOT NULL CHECK (
+                        requested_result IN ('success', 'failure', 'fail', 'other')
+                    ),
+                    message TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+                        status IN ('pending', 'in_review', 'resolved', 'rejected')
+                    ),
+                    admin_note TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    resolved_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                ALTER TABLE mission_correction_requests
+                ALTER COLUMN checkin_id DROP NOT NULL
+            """)
+            cur.execute("""
+                DO $$
+                DECLARE
+                    constraint_name TEXT;
+                BEGIN
+                    SELECT conname
+                      INTO constraint_name
+                      FROM pg_constraint
+                     WHERE conrelid = 'mission_correction_requests'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%current_result%'
+                     LIMIT 1;
+
+                    IF constraint_name IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE mission_correction_requests DROP CONSTRAINT %I',
+                            constraint_name
+                        );
+                    END IF;
+
+                    ALTER TABLE mission_correction_requests
+                    ADD CONSTRAINT mission_correction_requests_current_result_check
+                    CHECK (current_result IN ('success', 'failure', 'completed', 'fail', 'unsubmitted'));
+                END $$;
+            """)
+            cur.execute("""
+                DO $$
+                DECLARE
+                    constraint_name TEXT;
+                BEGIN
+                    SELECT conname
+                      INTO constraint_name
+                      FROM pg_constraint
+                     WHERE conrelid = 'mission_correction_requests'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%requested_result%'
+                     LIMIT 1;
+
+                    IF constraint_name IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE mission_correction_requests DROP CONSTRAINT %I',
+                            constraint_name
+                        );
+                    END IF;
+
+                    ALTER TABLE mission_correction_requests
+                    ADD CONSTRAINT mission_correction_requests_requested_result_check
+                    CHECK (requested_result IN ('success', 'failure', 'fail', 'other'));
+                END $$;
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mission_correction_requests_student_created
+                    ON mission_correction_requests (student_id, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mission_correction_requests_status_created
+                    ON mission_correction_requests (status, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_feedback (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES students(student_id),
+                    feedback_type TEXT NOT NULL CHECK (
+                        feedback_type IN ('app_feedback', 'bug_report', 'inquiry', 'other')
+                    ),
+                    message TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+                        status IN ('pending', 'in_review', 'resolved', 'rejected')
+                    ),
+                    admin_note TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    resolved_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_feedback_student_created
+                    ON user_feedback (student_id, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_feedback_status_created
+                    ON user_feedback (status, created_at DESC)
+            """)
         conn.commit()
 
 
@@ -586,6 +694,8 @@ def delete_student_completely(student_id: int) -> bool:
             cur.execute("DELETE FROM user_memories WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM pending_actions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM pending_mission_suggestions WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM mission_correction_requests WHERE student_id = %s", (student_id,))
+            cur.execute("DELETE FROM user_feedback WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_change_logs WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_reviews WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_ui_actions WHERE student_id = %s", (student_id,))
@@ -2045,6 +2155,144 @@ def get_user_history_db(
         "need_clarification": False,
         "clarification_message": "",
     }
+
+
+def get_mission_records(
+    student_id: int,
+    from_date: str,
+    to_date: str,
+) -> list[dict]:
+    """배정된 미션을 날짜 범위로 조회한다. 제출이 없으면 unsubmitted로 내려준다. to_date는 exclusive."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT
+                       cl.checkin_id,
+                       sdm.student_id,
+                       sdm.mission_id,
+                       sdm.assigned_date::text AS target_date,
+                       COALESCE(cl.mission_result, 'unsubmitted') AS result,
+                       cl.result_reason,
+                       cl.created_at,
+                       sdm.status AS mission_status,
+                       m.mission_name,
+                       m.category,
+                       m.main_category,
+                       m.sub_category,
+                       m.difficulty
+                FROM student_daily_missions sdm
+                JOIN missions m ON sdm.mission_id = m.mission_id
+                LEFT JOIN LATERAL (
+                    SELECT cl.checkin_id, cl.mission_result, cl.result_reason, cl.created_at
+                    FROM checkin_log cl
+                    WHERE cl.student_id = sdm.student_id
+                      AND cl.mission_id = sdm.mission_id
+                      AND cl.checkin_date = sdm.assigned_date
+                      AND cl.function_called = 'submit_mission_result'
+                    ORDER BY cl.created_at DESC
+                    LIMIT 1
+                ) cl ON TRUE
+                WHERE sdm.student_id = %s
+                  AND sdm.assigned_date >= %s::date
+                  AND sdm.assigned_date < %s::date
+                ORDER BY sdm.assigned_date
+            """, (student_id, from_date, to_date))
+            return [dict(r) for r in cur.fetchall()]
+
+
+def create_mission_correction_request(
+    student_id: int,
+    checkin_id: int | None,
+    mission_id: int,
+    target_date: date,
+    current_result: str,
+    requested_result: str,
+    message: str | None = None,
+) -> dict | None:
+    """미션 결과는 변경하지 않고 관리자 확인용 요청만 저장한다."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if current_result == "unsubmitted":
+                cur.execute("""
+                    SELECT 1
+                    FROM student_daily_missions sdm
+                    WHERE sdm.student_id = %s
+                      AND sdm.mission_id = %s
+                      AND sdm.assigned_date = %s::date
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM checkin_log cl
+                          WHERE cl.student_id = sdm.student_id
+                            AND cl.mission_id = sdm.mission_id
+                            AND cl.checkin_date = sdm.assigned_date
+                            AND cl.function_called = 'submit_mission_result'
+                      )
+                    LIMIT 1
+                """, (student_id, mission_id, target_date))
+                if not cur.fetchone():
+                    return None
+                checkin_id = None
+            else:
+                if checkin_id is None:
+                    return None
+                cur.execute("""
+                    SELECT checkin_id
+                    FROM checkin_log
+                    WHERE checkin_id = %s
+                      AND student_id = %s
+                      AND mission_id = %s
+                      AND checkin_date = %s::date
+                      AND mission_result = %s
+                      AND function_called = 'submit_mission_result'
+                    LIMIT 1
+                """, (checkin_id, student_id, mission_id, target_date, current_result))
+                if not cur.fetchone():
+                    return None
+
+            cur.execute("""
+                INSERT INTO mission_correction_requests (
+                    student_id, checkin_id, mission_id, target_date,
+                    current_result, requested_result, message
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, student_id, checkin_id, mission_id,
+                          target_date::text, current_result, requested_result,
+                          message, status, admin_note, created_at, resolved_at
+            """, (
+                student_id,
+                checkin_id,
+                mission_id,
+                target_date,
+                current_result,
+                requested_result,
+                message.strip() if message and message.strip() else None,
+            ))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def create_user_feedback(
+    student_id: int,
+    feedback_type: str,
+    message: str,
+) -> dict | None:
+    """앱 소감/버그/문의는 관리자 확인용으로만 저장한다."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT 1 FROM students WHERE student_id = %s LIMIT 1", (student_id,))
+            if not cur.fetchone():
+                return None
+
+            cur.execute("""
+                INSERT INTO user_feedback (student_id, feedback_type, message)
+                VALUES (%s, %s, %s)
+                RETURNING id, student_id, feedback_type, message,
+                          status, admin_note, created_at, resolved_at
+            """, (student_id, feedback_type, message.strip()))
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
 
 
 _DIFFICULTY_ORDER = ["easy", "medium", "hard"]

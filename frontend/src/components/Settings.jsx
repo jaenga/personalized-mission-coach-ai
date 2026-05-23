@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { BottomNav } from "./Home.jsx";
 import heartImg from "../assets/tomato/_shared/heart.png";
+import hiImg from "../assets/tomato/_shared/hi.png";
 import noticeImg from "../assets/tomato/settings/notice.png";
 import messageImg from "../assets/tomato/settings/message.png";
+import feedbackImg from "../assets/tomato/settings/em.svg";
 import fireImg from "../assets/tomato/settings/fire.png";
 import healthNoteImg from "../assets/tomato/settings/health_note.png";
 import missionPreferenceImg from "../assets/tomato/settings/misicon.svg";
@@ -13,6 +15,7 @@ import lv2Face from "../assets/tomato/_shared/Level/Lv2_face.svg";
 import lv3Face from "../assets/tomato/_shared/Level/Lv3_face.svg";
 import lv4Face from "../assets/tomato/_shared/Level/Lv4_face.svg";
 import lv5Face from "../assets/tomato/_shared/Level/Lv5_face.svg";
+import { submitUserFeedback } from "../api.js";
 
 const LEVEL_FACES = {
   1: lv1Face,
@@ -144,13 +147,22 @@ function SectionCard({ title, children }) {
   );
 }
 
-function IconBox({ src, bg, size = 30 }) {
+function IconBox({ src, bg, size = 30, offsetX = 0, offsetY = 0 }) {
   return (
     <span
       className="flex items-center justify-center"
       style={{ width: 36, height: 36, borderRadius: 10, background: bg, flexShrink: 0 }}
     >
-      <img src={src} alt="" style={{ width: size, height: size, objectFit: "contain" }} />
+      <img
+        src={src}
+        alt=""
+        style={{
+          width: size,
+          height: size,
+          objectFit: "contain",
+          transform: `translate(${offsetX}px, ${offsetY}px)`,
+        }}
+      />
     </span>
   );
 }
@@ -163,10 +175,167 @@ function ChevronRight() {
   );
 }
 
+const FEEDBACK_TYPES = [
+  { value: "app_feedback", label: "앱 소감" },
+  { value: "bug_report", label: "버그 신고" },
+  { value: "inquiry", label: "문의" },
+  { value: "other", label: "기타" },
+];
+
+function FeedbackModal({
+  type,
+  message,
+  loading,
+  error,
+  submitted,
+  onTypeChange,
+  onMessageChange,
+  onClose,
+  onSubmit,
+}) {
+  const canSubmit = !loading && message.trim().length > 0;
+
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center"
+      style={{ zIndex: 60, padding: 24, background: "rgba(42, 30, 24, 0.28)" }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="font-sejong"
+        style={{
+          width: "100%",
+          maxWidth: 318,
+          borderRadius: 24,
+          background: "#FFF8F0",
+          border: "1px solid rgba(227, 93, 73, 0.32)",
+          boxShadow: "0 16px 36px rgba(80, 60, 40, 0.18)",
+          padding: "20px 18px 16px",
+          letterSpacing: "-0.43px",
+        }}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p style={{ fontSize: 13, color: "#E35D49", fontWeight: 700 }}>의견 보내기</p>
+            <h2 className="mt-1" style={{ fontSize: 19, fontWeight: 700, color: "#1f1f1f", lineHeight: "26px" }}>
+              토미에게 알려주세요
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="닫기"
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: 999,
+              border: "none",
+              background: "rgba(227, 93, 73, 0.1)",
+              color: "#A05F50",
+              fontSize: 20,
+              lineHeight: "30px",
+              padding: 0,
+              flexShrink: 0,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {submitted ? (
+          <div className="mt-5 text-center">
+            <img
+              src={hiImg}
+              alt=""
+              aria-hidden="true"
+              className="mx-auto mb-3"
+              style={{ width: 64, height: 64, objectFit: "contain" }}
+            />
+            <p style={{ fontSize: 16, fontWeight: 700, color: "#1f1f1f" }}>의견을 보냈어요</p>
+            <p className="mt-2" style={{ fontSize: 13, lineHeight: "20px", color: "#6f6862", wordBreak: "keep-all" }}>
+              앱 개선을 위해 확인할게요.
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 w-full font-sejong"
+              style={{ height: 42, borderRadius: 999, border: "none", background: "#E35D49", color: "#FFFFFF", fontSize: 14, fontWeight: 700 }}
+            >
+              확인
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {FEEDBACK_TYPES.map((item) => {
+                const selected = type === item.value;
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => onTypeChange(item.value)}
+                    className="font-sejong"
+                    style={{
+                      height: 40,
+                      borderRadius: 14,
+                      border: selected ? "1.5px solid #E35D49" : "1px solid rgba(227, 93, 73, 0.24)",
+                      background: selected ? "rgba(227, 93, 73, 0.1)" : "#FFFFFF",
+                      color: selected ? "#E35D49" : "#1f1f1f",
+                      fontSize: 13,
+                      fontWeight: selected ? 700 : 400,
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <textarea
+              value={message}
+              onChange={(e) => onMessageChange(e.target.value)}
+              placeholder="소감, 버그, 문의를 적어주세요"
+              className="mt-3 w-full font-sejong outline-none"
+              style={{
+                height: 118,
+                resize: "none",
+                borderRadius: 16,
+                border: "1px solid rgba(227, 93, 73, 0.24)",
+                background: "#FFFFFF",
+                padding: "12px 14px",
+                fontSize: 13,
+                lineHeight: "19px",
+                color: "#1f1f1f",
+              }}
+            />
+
+            <p className="mt-2" style={{ fontSize: 11, color: "#8a817b", lineHeight: "17px", wordBreak: "keep-all" }}>
+              보낸 의견은 앱 개선을 위해 확인돼요. 필요하면 기록 확인에 사용될 수 있어요.
+            </p>
+            {error && <p className="mt-2" style={{ fontSize: 12, color: "#E35D49" }}>{error}</p>}
+
+            <button
+              type="button"
+              onClick={onSubmit}
+              disabled={!canSubmit}
+              className="mt-4 w-full font-sejong disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ height: 42, borderRadius: 999, border: "none", background: "#E35D49", color: "#FFFFFF", fontSize: 14, fontWeight: 700 }}
+            >
+              {loading ? "보내는 중..." : "보내기"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────
    Settings — 메인
    ───────────────────────────────────────────────────────── */
 export default function Settings({
+  studentId,
   studentName = "민준",
   age = 10,
   level = 3,
@@ -183,6 +352,45 @@ export default function Settings({
   const [coachNoti, setCoachNoti] = useState(false);
   const [streakNoti, setStreakNoti] = useState(false);
   const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackType, setFeedbackType] = useState("app_feedback");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+
+  function openFeedback() {
+    setFeedbackOpen(true);
+    setFeedbackType("app_feedback");
+    setFeedbackMessage("");
+    setFeedbackError("");
+    setFeedbackSubmitted(false);
+  }
+
+  function closeFeedback() {
+    setFeedbackOpen(false);
+    setFeedbackError("");
+    setFeedbackSubmitted(false);
+  }
+
+  async function handleFeedbackSubmit() {
+    if (!studentId || feedbackMessage.trim().length === 0) return;
+    setFeedbackLoading(true);
+    setFeedbackError("");
+    try {
+      await submitUserFeedback({
+        studentId,
+        feedbackType,
+        message: feedbackMessage,
+      });
+      setFeedbackSubmitted(true);
+      setFeedbackMessage("");
+    } catch (err) {
+      setFeedbackError(err.message);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }
 
   return (
     <div
@@ -304,7 +512,7 @@ export default function Settings({
             right={<Toggle on={missionNoti} onChange={setMissionNoti} />}
           />
           <Row
-            label="코치 메시지"
+            label="메세지 알림"
             icon={<IconBox src={messageImg} bg="#DDEBFB" size={35} />}
             right={<Toggle on={coachNoti} onChange={setCoachNoti} />}
           />
@@ -331,6 +539,16 @@ export default function Settings({
           />
         </SectionCard>
 
+        {/* 의견 */}
+        <SectionCard title="의견">
+          <Row
+            label="의견 보내기"
+            icon={<IconBox src={feedbackImg} bg="#DCEEDD" size={18} offsetX={2} />}
+            right={<ChevronRight />}
+            onClick={openFeedback}
+          />
+        </SectionCard>
+
         {/* 계정 */}
         <SectionCard title="계정">
           <Row
@@ -349,6 +567,20 @@ export default function Settings({
       </div>
 
       <BottomNav active="settings" onChange={(key) => onNavigate?.(key)} />
+
+      {feedbackOpen && (
+        <FeedbackModal
+          type={feedbackType}
+          message={feedbackMessage}
+          loading={feedbackLoading}
+          error={feedbackError}
+          submitted={feedbackSubmitted}
+          onTypeChange={setFeedbackType}
+          onMessageChange={setFeedbackMessage}
+          onClose={closeFeedback}
+          onSubmit={handleFeedbackSubmit}
+        />
+      )}
 
       {withdrawConfirmOpen && (
         <div

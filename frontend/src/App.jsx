@@ -1055,6 +1055,7 @@ export default function App() {
       return (
         <div style={{ position: "relative" }}>
           <Home
+            studentId={profile?.student_id}
             studentName={profile?.student_name || "민준"}
             level={level}
             currentXp={currentXp}
@@ -1149,6 +1150,7 @@ export default function App() {
     case SCREENS.SETTINGS:
       return (
         <Settings
+          studentId={profile?.student_id}
           studentName={profile?.student_name || "민준"}
           level={level}
           heartCount={heartCount}

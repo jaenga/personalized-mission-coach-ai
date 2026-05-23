@@ -28,6 +28,7 @@ export default defineConfig({
       "/onboarding-preferences": backend,
       "/mission-review": backend,
       "/mission-ui-actions": backend,
+      "/user-feedback": backend,
     },
   },
 });
