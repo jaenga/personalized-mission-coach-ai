@@ -17,22 +17,26 @@ const STEPS = {
 function PlaceholderStep({ title, onNext }) {
   return (
     <div
-      className="mobile-frame"
+      className="mobile-frame flex flex-col items-center justify-center"
       onClick={onNext}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") onNext();
       }}
-      style={{ background: "#FFF3E7", cursor: "pointer" }}
+      style={{
+        background: "#FFF3E7",
+        cursor: "pointer",
+        padding: "clamp(24px, 8dvh, 72px) 24px calc(24px + env(safe-area-inset-bottom))",
+      }}
     >
       <div
-        className="absolute bg-white flex flex-col items-center justify-center text-center px-6"
+        className="bg-white flex flex-col items-center justify-center text-center px-6"
         style={{
-          left: 24,
-          top: 72,
-          width: 354,
-          height: 580,
+          width: "100%",
+          maxWidth: 354,
+          minHeight: 0,
+          flex: "1 1 auto",
           borderRadius: 24,
           border: "1px solid rgba(227, 93, 73, 0.25)",
         }}
@@ -55,19 +59,19 @@ function PlaceholderStep({ title, onNext }) {
           e.stopPropagation();
           onNext();
         }}
-        className="signup-submit absolute text-white font-sejong shadow-md flex items-center justify-center transition-all duration-200"
+        className="signup-submit text-white font-sejong shadow-md flex items-center justify-center transition-all duration-200"
         style={{
-          left: 56,
-          top: 704,
-          width: 290,
-          height: 45,
+          width: "min(100%, 290px)",
+          height: "clamp(42px, 5.2dvh, 45px)",
           borderRadius: 50,
           background: "#E35D49",
-          fontSize: 20,
+          fontSize: "clamp(17px, 2.3dvh, 20px)",
           fontWeight: 400,
           lineHeight: "22px",
           padding: 0,
           border: "none",
+          marginTop: "clamp(16px, 3dvh, 28px)",
+          flexShrink: 0,
         }}
       >
         계속하기
