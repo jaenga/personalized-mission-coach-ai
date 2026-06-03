@@ -54,6 +54,12 @@ subject는 반드시 아래 activity_key 목록 중 하나여야 한다.
 다른 설명 없이 JSON 하나만 출력해.
 """
 
+def _build_memory_extraction_prompt() -> str:
+    return MEMORY_EXTRACTION_SYSTEM_PROMPT.replace(
+        "{activity_keys}",
+        ", ".join(sorted(VALID_ACTIVITY_KEYS)),
+    )
+
 
 def should_skip_memory_extraction(
     student_id: int | None,
@@ -223,9 +229,7 @@ async def extract_and_save_memory(
     print(f"[Memory] extracting student={student_id} message={user_message[:80]!r}")
     started_at = time.perf_counter()
     try:
-        prompt = MEMORY_EXTRACTION_SYSTEM_PROMPT.format(
-            activity_keys=", ".join(sorted(VALID_ACTIVITY_KEYS))
-        )
+        prompt = _build_memory_extraction_prompt()
         raw = await generate_json_message(
             prompt,
             f"발화: {user_message}",

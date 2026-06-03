@@ -2,6 +2,7 @@
 venv/
 backend/venv/
 __pycache__/
+personalized-mission-coach-ai-integration-qa-soft-cancel-equivalency/
 *.pyc
 .env
 .env.local
