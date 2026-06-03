@@ -1,0 +1,101 @@
+﻿case_id,mission_id,mission_name,activity_key,user_message,expected_function,expected_args,expected_db_changed,expected_response_type,case_type,note,demo_safe
+D001,2,점심 먹고 10분 걷기,걷기,나 점심 먹고 10분 걸었어!,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D002,2,점심 먹고 10분 걷기,걷기,오늘 점심 먹고 걷는 거 못 했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D003,2,점심 먹고 10분 걷기,걷기,점심 먹고 얼마나 걸어야 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D004,2,점심 먹고 10분 걷기,걷기,10분 하긴 했는데 그럼 된건가,none,{},0,clarify,ambiguous,,0
+D005,12,엘리베이터 대신 계단으로 걷기,계단 이용하기,오늘 엘리베이터 안 타고 계단으로 올라갔어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D006,12,엘리베이터 대신 계단으로 걷기,계단 이용하기,나 오늘 그냥 엘리베이터 탔어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D007,12,엘리베이터 대신 계단으로 걷기,계단 이용하기,계단은 얼마나 올라가야 성공이야?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D008,12,엘리베이터 대신 계단으로 걷기,계단 이용하기,3층까지 올라가긴 했어 그럼 성공?,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D009,16,줄넘기 50회 하기,줄넘기,나 줄넘기 50개 했어!,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D010,16,줄넘기 50회 하기,줄넘기,오늘 줄넘기 못 했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D011,16,줄넘기 50회 하기,줄넘기,줄넘기 30개만 해도 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D012,16,줄넘기 50회 하기,줄넘기,나 오늘 했음,none,{},0,clarify,ambiguous,,0
+D013,25,계단 오르내리기 10분 하기,계단 이용하기,계단 걷기 10분 했어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D014,25,계단 오르내리기 10분 하기,계단 이용하기,오늘 계단 오르내리는거 못 했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D015,25,계단 오르내리기 10분 하기,계단 이용하기,꼭 10분이나 해야 돼? 우리집 2층인데,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D016,25,계단 오르내리기 10분 하기,계단 이용하기,계단 했다,none,{},0,clarify,ambiguous,,0
+D017,29,버피테스트 25번 하기,버피테스트,버피테스트 25번 끝냈다!,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D018,29,버피테스트 25번 하기,버피테스트,버피테스트 힘들어서 못했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D019,29,버피테스트 25번 하기,버피테스트,버피 너무 힘든데 어떡해?,request_mission_adjustment,"{""adjustment_type"": ""easier""}",1,mission_change,question,,0
+D020,29,버피테스트 25번 하기,버피테스트,버피 힘들어.. 아직 10개다,none,{},0,clarify,ambiguous,,0
+D021,38,전신 스트레칭 12분 하기,스트레칭,스트레칭 미션 성공,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D022,38,전신 스트레칭 12분 하기,스트레칭,오늘 스트레칭 아예 못 했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D023,38,전신 스트레칭 12분 하기,스트레칭,전신 스트레칭이 뭐야?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D024,38,전신 스트레칭 12분 하기,스트레칭,스트레칭 12분 넘겼다,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D025,43,집에서 음악 틀고 춤추기 10분,활동 놀이,춤추기 성공~ 20분이나 했지롱,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D026,43,집에서 음악 틀고 춤추기 10분,활동 놀이,오늘 춤추기 못 했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D027,43,집에서 음악 틀고 춤추기 10분,활동 놀이,무슨 노래 틀고 춤출까,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D028,43,집에서 음악 틀고 춤추기 10분,활동 놀이,춤추기 싫은데 ㅠ 다른거 안 됨?,request_mission_adjustment,"{""adjustment_type"": ""change""}",1,mission_change,ambiguous,,0
+D029,51,아침밥 먹기,아침 식사,나 오늘 아침밥 먹음,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D030,51,아침밥 먹기,아침 식사,아침밥 패스함,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D031,51,아침밥 먹기,아침 식사,아침으로 시리얼도 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D032,51,아침밥 먹기,아침 식사,밥 먹었어,none,{},0,clarify,ambiguous,,0
+D033,62,식사 전후 손 씻기,식사 위생,밥 먹기 전이랑 후에 손 씻었어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D034,62,식사 전후 손 씻기,식사 위생,오늘 손 씻기 까먹었어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D035,62,식사 전후 손 씻기,식사 위생,그냥 손만 씻으면 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D036,62,식사 전후 손 씻기,식사 위생,오늘 손 씻었어!,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D037,67,기상 후 물 한 잔 마시기,물 마시기,일어나고나서 물 마심,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D038,67,기상 후 물 한 잔 마시기,물 마시기,아침에 물 못 마셨어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D039,67,기상 후 물 한 잔 마시기,물 마시기,물 한 잔이나 마셔야 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D040,67,기상 후 물 한 잔 마시기,물 마시기,오늘 아침에 마셨어,none,{},0,clarify,ambiguous,,0
+D041,71,하루 동안 물 1L 이상 마시기,물 마시기,오늘 물 1리터 다 마셨어!,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D042,71,하루 동안 물 1L 이상 마시기,물 마시기,물 1리터는 못 마셨어.. 물병 한 개 정도만? ㅠㅠ,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D043,71,하루 동안 물 1L 이상 마시기,물 마시기,물을 그렇게나 마셔야 돼?,none,{},0,smalltalk,question,,0
+D044,71,하루 동안 물 1L 이상 마시기,물 마시기,물 마시기 했어,none,{},0,clarify,ambiguous,,0
+D045,87,오늘은 과자 먹지 않기,간식 줄이기,오늘 과자 하나도 안 먹었지롱,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,prohibit,,0
+D046,87,오늘은 과자 먹지 않기,간식 줄이기,포카칩 먹어버렸다..,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,prohibit,,0
+D047,87,오늘은 과자 먹지 않기,간식 줄이기,시리얼 먹었는데 이거 과자야?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,question,,0
+D048,87,오늘은 과자 먹지 않기,간식 줄이기,오늘 과자파티 했어 야르~,none,{},0,clarify,ambiguous,,0
+D049,96,오늘 과일 1번 먹기,과일 먹기,오늘 키위 먹었어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D050,96,오늘 과일 1번 먹기,과일 먹기,오늘 과일 먹기 까먹음,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D051,96,오늘 과일 1번 먹기,과일 먹기,과일은 아무거나 먹어도 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D052,96,오늘 과일 1번 먹기,과일 먹기,사과 한 입 먹었어,none,{},0,clarify,ambiguous,,0
+D053,112,잠들기 전 양치하기,양치하기,양치했다! 이제 잘게 오늘 성공,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D054,112,잠들기 전 양치하기,양치하기,오늘 양치 안 할래,none,{},0,clarify,ambiguous,,0
+D055,112,잠들기 전 양치하기,양치하기,양치만 하면 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D056,112,잠들기 전 양치하기,양치하기,양치 귀찮아,none,{},0,clarify,ambiguous,,0
+D057,153,방 정리 10분 하기,정리 정돈,방 정리 10분 완료,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D058,153,방 정리 10분 하기,정리 정돈,오늘 방 청소 못 했어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D059,153,방 정리 10분 하기,정리 정돈,방 청소 바닥만 해도 되나?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D060,153,방 정리 10분 하기,정리 정돈,오늘 청소 했어~,none,{},0,clarify,ambiguous,,0
+D061,159,게임하기 전 숙제 먼저 하기,게임 시간 줄이기,숙제 끝내고 게임 했다~~,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D062,159,게임하기 전 숙제 먼저 하기,게임 시간 줄이기,숙제 안 하고 게임 해버림,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,fail,,0
+D063,159,게임하기 전 숙제 먼저 하기,게임 시간 줄이기,숙제 다 하면 게임해도 돼?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D064,159,게임하기 전 숙제 먼저 하기,게임 시간 줄이기,숙제 끝냈다,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,success,,0
+D065,168,유튜브 30분만 보기,영상 시청 줄이기,유튜브 딱 30분만 봤어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,limit,,0
+D066,168,유튜브 30분만 보기,영상 시청 줄이기,유튜브 31분 봤어..,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,limit,,0
+D067,168,유튜브 30분만 보기,영상 시청 줄이기,유튜브 30분 넘으면 실패야? 31분도?,get_mission_info,"{""query_type"": ""general_rule""}",0,info,question,,0
+D068,168,유튜브 30분만 보기,영상 시청 줄이기,유튜브 쉬는시간에만 봤어 그럼 성공임?,none,{},0,clarify,ambiguous,,0
+D069,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,아침에 티비랑 폰 안 봤어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,prohibit,,0
+D070,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,아침에 유튜브 봤어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,prohibit,,0
+D071,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,아침 시간에 노래만 틀어두는건 돼?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,question,,0
+D072,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,폰 안 봄,none,{},0,clarify,ambiguous,,0
+D073,71,하루 동안 물 1L 이상 마시기,물 마시기,어제 물 마시기 미션 성공,none,{},0,clarify,time,,0
+D074,16,줄넘기 50회 하기,줄넘기,수요일에 줄넘기 50개 성공했어 바꿔줘,none,{},0,clarify,time,,0
+D075,112,잠들기 전 양치하기,양치하기,아까 양치했는데 이것도 오늘 미션 성공으로 해주는 거야?,get_mission_info,"{""query_type"": ""today""}",0,info,time,,0
+D076,87,오늘은 과자 먹지 않기,간식 줄이기,나 어제 과자 안 먹었어! 그럼 성공인가,none,{},0,clarify,time,,0
+D077,168,유튜브 30분만 보기,영상 시청 줄이기,어제 유튜브 10분만 봤음,none,{},0,clarify,time,,0
+D078,71,하루 동안 물 1L 이상 마시기,물 마시기,고마워!,none,{},0,smalltalk,smalltalk,,0
+D079,16,줄넘기 50회 하기,줄넘기,아하 알겠어,none,{},0,smalltalk,smalltalk,,0
+D080,112,잠들기 전 양치하기,양치하기,그렇구나,none,{},0,smalltalk,smalltalk,,0
+D081,71,하루 동안 물 1L 이상 마시기,물 마시기,오늘 미션 성공으로 기록된거야?,get_user_history,"{""query_type"": ""daily_summary""}",0,info,question,,0
+D082,16,줄넘기 50회 하기,줄넘기,이번 주에 내가 미션 얼마나 성공했어?,get_user_history,"{""query_type"": ""weekly_summary""}",0,info,question,,0
+D083,87,오늘은 과자 먹지 않기,간식 줄이기,오늘 과자 안 먹고 참았당,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,prohibit,,0
+D084,87,오늘은 과자 먹지 않기,간식 줄이기,초코쿠키 먹어버림,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,prohibit,,0
+D085,168,유튜브 30분만 보기,영상 시청 줄이기,유튜브 아예 안 봤으,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,limit,,0
+D086,168,유튜브 30분만 보기,영상 시청 줄이기,쇼츠만 봤는데 이거 되나? 20분 봄,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,limit,,0
+D087,168,유튜브 30분만 보기,영상 시청 줄이기,유튜브는 아닌데 나 릴스 한 시간 봤어,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,limit,,0
+D088,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,오늘 준비할 때 핸드폰 안 봤어,submit_mission_result,"{""result_type"": ""success""}",1,submit_success,prohibit,,0
+D089,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,아침에 쇼츠 봄,submit_mission_result,"{""result_type"": ""fail""}",1,submit_fail,prohibit,,0
+D090,192,아침 중 외출 준비 시간에는 화면 보지 않기,화면 없는 시간,아침에 티비 보지는 않고 소리만 들었는데 성공임?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,equivalency,,0
+D091,71,하루 동안 물 1L 이상 마시기,물 마시기,물 대신 보리차 마셨는데 괜찮아?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,equivalency,,0
+D092,16,줄넘기 50회 하기,줄넘기,줄넘기 없어서 제자리 뛰기 했는데 인정?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,equivalency,,0
+D093,112,잠들기 전 양치하기,양치하기,양치 대신 가글 했는데 이것도 성공이야?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,equivalency,,0
+D094,87,오늘은 과자 먹지 않기,간식 줄이기,과자 대신 젤리 먹으면 괜찮나?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,equivalency,,0
+D095,2,점심 먹고 10분 걷기,걷기,밖에 못 나가는데 집에서 걸어도 돼?,check_mission_equivalency,"{""equivalency_type"": ""place""}",0,info,equivalency,,0
+D096,43,집에서 음악 틀고 춤추기 10분,활동 놀이,밖에서 춤춰도 미션으로 돼?,check_mission_equivalency,"{""equivalency_type"": ""place""}",0,info,equivalency,,0
+D097,159,게임하기 전 숙제 먼저 하기,게임 시간 줄이기,숙제 없는데 복습만 해도 돼?,check_mission_equivalency,"{""equivalency_type"": ""behavior""}",0,info,equivalency,,0
+D098,71,하루 동안 물 1L 이상 마시기,물 마시기,물 마시기 빡세다 오늘 미션 바꿔줘,request_mission_adjustment,"{""adjustment_type"": ""change""}",1,mission_change,question,,0
+D099,16,줄넘기 50회 하기,줄넘기,줄넘기 50개 너무 어려워서 더 쉬운 걸로 바꿔줘,request_mission_adjustment,"{""adjustment_type"": ""easier""}",1,mission_change,question,,0
+D100,87,오늘은 과자 먹지 않기,간식 줄이기,방금 미션 바꾸는 거 취소해줘 그냥 해볼게,cancel_mission_action,{},1,mission_change,question,,0

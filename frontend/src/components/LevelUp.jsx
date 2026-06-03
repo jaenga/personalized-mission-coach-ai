@@ -16,27 +16,17 @@ const LEVEL_THEMES = {
   5: { name: "반짝이는 토마", main: "#E35D49", soft: "#FCE0DA" },
 };
 
-// 토마토 PNG마다 캐릭터 발 위치가 달라서 그림자를 레벨별로 미세 조정
-// top: 그림자 세로 위치 / left·width: 가로 위치/너비
-const LEVEL_SHADOWS = {
-  1: { left: 121, top: 372, width: 160 },
-  2: { left: 121, top: 374, width: 160 },
-  3: { left: 121, top: 367, width: 160 },
-  4: { left: 121, top: 374, width: 160 },
-  5: { left: 121, top: 382, width: 160 },
-};
-
 const CONFETTI = [
-  { x: 70,  y: 320, size: 8,  color: "#F2A8A0", shape: "diamond" },
-  { x: 320, y: 310, size: 9,  color: "#F4B6C2", shape: "diamond" },
-  { x: 60,  y: 430, size: 7,  color: "#A7DAA7", shape: "diamond" },
-  { x: 330, y: 440, size: 8,  color: "#A7DAA7", shape: "diamond" },
-  { x: 110, y: 270, size: 12, color: "#FFD56B", shape: "star" },
-  { x: 290, y: 260, size: 10, color: "#F4B6C2", shape: "star" },
-  { x: 50,  y: 360, size: 9,  color: "#FFD56B", shape: "dot" },
-  { x: 350, y: 370, size: 9,  color: "#F2A8A0", shape: "dot" },
-  { x: 130, y: 470, size: 7,  color: "#FFAE6B", shape: "dot" },
-  { x: 280, y: 470, size: 7,  color: "#9DC9E8", shape: "dot" },
+  { x: "18%", y: "22%", size: 8, color: "#F2A8A0", shape: "diamond" },
+  { x: "80%", y: "18%", size: 9, color: "#F4B6C2", shape: "diamond" },
+  { x: "16%", y: "70%", size: 7, color: "#A7DAA7", shape: "diamond" },
+  { x: "82%", y: "72%", size: 8, color: "#A7DAA7", shape: "diamond" },
+  { x: "28%", y: "7%", size: 12, color: "#FFD56B", shape: "star" },
+  { x: "72%", y: "5%", size: 10, color: "#F4B6C2", shape: "star" },
+  { x: "12%", y: "42%", size: 9, color: "#FFD56B", shape: "dot" },
+  { x: "88%", y: "45%", size: 9, color: "#F2A8A0", shape: "dot" },
+  { x: "33%", y: "88%", size: 7, color: "#FFAE6B", shape: "dot" },
+  { x: "70%", y: "88%", size: 7, color: "#9DC9E8", shape: "dot" },
 ];
 
 function ConfettiShape({ shape, color, size }) {
@@ -65,61 +55,57 @@ export default function LevelUp({ level = 2, onContinue }) {
   const lv = Math.min(5, Math.max(1, level));
   const theme = LEVEL_THEMES[lv];
   const tomatoImg = LEVEL_IMAGES[lv];
-  const shadow = LEVEL_SHADOWS[lv];
 
   return (
     <div
-      className="mobile-frame"
-      style={{ background: "#FFF3E7" }}
+      className="mobile-frame flex items-center justify-center"
+      style={{
+        background: "#FFF3E7",
+        padding: "clamp(14px, 4dvh, 42px) 17px calc(16px + env(safe-area-inset-bottom))",
+      }}
     >
       <div
-        className="absolute inset-0 overflow-y-auto"
-        style={{ paddingBottom: "calc(24px + env(safe-area-inset-bottom))" }}
+        className="relative flex flex-col items-center"
+        style={{
+          width: "100%",
+          maxWidth: 363,
+          height: "100%",
+          maxHeight: 790,
+          minHeight: 0,
+          borderRadius: 30,
+          background: "rgba(255, 255, 255, 0.5)",
+          border: `1px solid ${theme.main}55`,
+          padding: "clamp(28px, 5dvh, 48px) 20px clamp(14px, 2.6dvh, 22px)",
+          overflow: "hidden",
+        }}
       >
-        <div className="relative mx-auto" style={{ width: "100%", maxWidth: 402, minHeight: 760 }}>
-          {/* 카드 배경 */}
-          <div
-            className="absolute"
-            style={{
-              left: 17,
-              top: 42,
-              width: 363,
-              height: 610,
-              borderRadius: 30,
-              background: "rgba(255, 255, 255, 0.5)",
-              border: `1px solid ${theme.main}55`,
-            }}
-          />
-
       {/* 잎사귀 데코 (좌우) */}
       <img
         src={leaf}
         alt=""
         draggable="false"
         className="absolute select-none pointer-events-none"
-        style={{ left: 78, top: 98, width: 26, height: 20, transform: "rotate(-30deg)" }}
+        style={{ left: "17%", top: "clamp(30px, 6dvh, 56px)", width: 26, height: 20, transform: "rotate(-30deg)" }}
       />
       <img
         src={leaf}
         alt=""
         draggable="false"
         className="absolute select-none pointer-events-none"
-        style={{ left: 298, top: 98, width: 26, height: 20, transform: "scaleX(-1) rotate(-30deg)" }}
+        style={{ right: "17%", top: "clamp(30px, 6dvh, 56px)", width: 26, height: 20, transform: "scaleX(-1) rotate(-30deg)" }}
       />
 
       {/* 레벨업! */}
       <div
-        className="absolute font-jeju"
+        className="font-jeju"
         style={{
-          left: 0,
-          right: 0,
-          top: 90,
           color: theme.main,
-          fontSize: 44,
+          fontSize: "clamp(34px, 5.1dvh, 44px)",
           fontWeight: 400,
           textAlign: "center",
           letterSpacing: "-0.43px",
-          lineHeight: "50px",
+          lineHeight: 1.12,
+          flexShrink: 0,
         }}
       >
         레벨업!
@@ -127,75 +113,81 @@ export default function LevelUp({ level = 2, onContinue }) {
 
       {/* 부제 */}
       <div
-        className="absolute font-sejong"
+        className="font-sejong"
         style={{
-          left: 0,
-          right: 0,
-          top: 148,
           color: "#000",
-          fontSize: 15,
+          fontSize: "clamp(13px, 1.8dvh, 15px)",
           fontWeight: 400,
           textAlign: "center",
           letterSpacing: "-0.43px",
+          marginTop: "clamp(8px, 1.4dvh, 12px)",
+          flexShrink: 0,
         }}
       >
         축하해요! 새로운 레벨이 되었어요
       </div>
 
-      {/* 컨페티 */}
-      {CONFETTI.map((c, i) => (
-        <svg
-          key={i}
-          className="sparkle absolute pointer-events-none"
-          style={{ left: c.x, top: c.y - 132, width: c.size, height: c.size, animationDelay: `${(i % 5) * 0.2}s` }}
-          viewBox={`0 0 ${c.size} ${c.size}`}
-          aria-hidden="true"
-        >
-          <ConfettiShape shape={c.shape} color={c.color} size={c.size} />
-        </svg>
-      ))}
-
-      {/* 토마토 캐릭터 */}
-      <img
-        src={tomatoImg}
-        alt={`Lv.${lv} ${theme.name}`}
-        draggable="false"
-        className="absolute select-none pointer-events-none"
-        style={{
-          left: 86,
-          top: 164,
-          width: 230,
-          height: 230,
-          objectFit: "contain",
-        }}
-      />
-
-      {/* 토마토 그림자 */}
       <div
-        aria-hidden="true"
-        className="absolute"
+        className="relative flex items-center justify-center"
         style={{
-          left: shadow.left,
-          top: shadow.top,
-          width: shadow.width,
-          height: 13,
-          background:
-            "radial-gradient(ellipse at center, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.10) 40%, rgba(0,0,0,0) 75%)",
-          filter: "blur(5px)",
-          pointerEvents: "none",
+          width: "100%",
+          minHeight: 0,
+          flex: "1 1 230px",
+          marginTop: "clamp(8px, 1.8dvh, 16px)",
         }}
-      />
+      >
+        {/* 컨페티 */}
+        {CONFETTI.map((c, i) => (
+          <svg
+            key={i}
+            className="sparkle absolute pointer-events-none"
+            style={{ left: c.x, top: c.y, width: c.size, height: c.size, animationDelay: `${(i % 5) * 0.2}s` }}
+            viewBox={`0 0 ${c.size} ${c.size}`}
+            aria-hidden="true"
+          >
+            <ConfettiShape shape={c.shape} color={c.color} size={c.size} />
+          </svg>
+        ))}
+
+        {/* 토마토 캐릭터 */}
+        <img
+          src={tomatoImg}
+          alt={`Lv.${lv} ${theme.name}`}
+          draggable="false"
+          className="select-none pointer-events-none"
+          style={{
+            width: "clamp(158px, 28dvh, 230px)",
+            height: "clamp(158px, 28dvh, 230px)",
+            objectFit: "contain",
+            zIndex: 1,
+          }}
+        />
+
+        {/* 토마토 그림자 */}
+        <div
+          aria-hidden="true"
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{
+            bottom: "clamp(6px, 1.2dvh, 14px)",
+            width: "clamp(112px, 20dvh, 160px)",
+            height: 13,
+            background:
+              "radial-gradient(ellipse at center, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.10) 40%, rgba(0,0,0,0) 75%)",
+            filter: "blur(5px)",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
 
       {/* 레벨 배지 (LEVEL + 숫자 + 레벨명) + 빛줄기 */}
       <div
-        className="absolute"
+        className="relative"
         style={{
-          left: 0,
-          right: 0,
-          top: 420,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
+          flexShrink: 0,
+          marginTop: "clamp(4px, 0.8dvh, 8px)",
         }}
       >
         {/* 빛줄기를 LEVEL+숫자+레벨명 전체 뒤에 깔기 위해 relative 래퍼 */}
@@ -233,11 +225,11 @@ export default function LevelUp({ level = 2, onContinue }) {
               zIndex: 1,
               background: theme.main,
               color: "#FFFFFF",
-              fontSize: 14,
+              fontSize: "clamp(12px, 1.6dvh, 14px)",
               fontWeight: 700,
               letterSpacing: "1.8px",
               paddingInline: 18,
-              height: 28,
+              height: "clamp(24px, 3.2dvh, 28px)",
               borderRadius: 999,
               display: "inline-flex",
               alignItems: "center",
@@ -254,9 +246,9 @@ export default function LevelUp({ level = 2, onContinue }) {
               position: "relative",
               zIndex: 1,
               color: theme.main,
-              fontSize: 60,
+              fontSize: "clamp(46px, 7dvh, 60px)",
               fontWeight: 400,
-              lineHeight: "66px",
+              lineHeight: 1.1,
               letterSpacing: "-0.43px",
               marginTop: 4,
             }}
@@ -271,7 +263,7 @@ export default function LevelUp({ level = 2, onContinue }) {
               position: "relative",
               zIndex: 1,
               color: theme.main,
-              fontSize: 16,
+              fontSize: "clamp(14px, 1.9dvh, 16px)",
               fontWeight: 700,
               letterSpacing: "-0.43px",
               marginTop: 2,
@@ -284,16 +276,16 @@ export default function LevelUp({ level = 2, onContinue }) {
 
       {/* 보상 카드 (하트 +1) */}
       <div
-        className="absolute flex items-center justify-center"
+        className="flex items-center justify-center"
         style={{
-          left: 81,
-          top: 570,
-          width: 240,
-          height: 60,
+          width: "min(100%, 240px)",
+          height: "clamp(48px, 6.6dvh, 60px)",
           borderRadius: 20,
           background: `${theme.main}22`,
           border: `1px solid ${theme.main}55`,
           gap: 10,
+          flexShrink: 0,
+          marginTop: "clamp(14px, 2.6dvh, 28px)",
         }}
       >
         <img
@@ -301,13 +293,13 @@ export default function LevelUp({ level = 2, onContinue }) {
           alt=""
           draggable="false"
           className="select-none pointer-events-none"
-          style={{ width: 28, height: 28, objectFit: "contain" }}
+          style={{ width: "clamp(24px, 3.2dvh, 28px)", height: "clamp(24px, 3.2dvh, 28px)", objectFit: "contain" }}
         />
         <span
           className="font-sejong"
           style={{
             color: theme.main,
-            fontSize: 24,
+            fontSize: "clamp(20px, 2.8dvh, 24px)",
             fontWeight: 400,
             letterSpacing: "-0.43px",
             lineHeight: "28px",
@@ -321,25 +313,24 @@ export default function LevelUp({ level = 2, onContinue }) {
       <button
         type="button"
         onClick={onContinue}
-        className="signup-submit absolute font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
+        className="signup-submit font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
         style={{
-          left: 56,
-          top: 674,
-          width: 290,
-          height: 45,
+          width: "min(100%, 290px)",
+          height: "clamp(42px, 5.2dvh, 45px)",
           borderRadius: 50,
           background: theme.main,
-          fontSize: 20,
+          fontSize: "clamp(17px, 2.3dvh, 20px)",
           fontWeight: 400,
           letterSpacing: "-0.43px",
           lineHeight: "22px",
           padding: 0,
           border: "none",
+          flexShrink: 0,
+          marginTop: "clamp(14px, 2.5dvh, 28px)",
         }}
       >
         홈으로 가기
       </button>
-        </div>
       </div>
     </div>
   );

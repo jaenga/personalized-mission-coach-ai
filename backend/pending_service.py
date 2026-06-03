@@ -24,6 +24,12 @@ from executor import (
 )
 from mission_ui_action_service import create_mission_change_method_action, create_mission_dislike_confirm_action
 from ollama_client import generate_json_message
+from submit_validator import (
+    SubmitValidationResult,
+    build_submit_validation_response,
+    is_smalltalk,
+    validate_submit_candidate,
+)
 
 
 DISLIKE_CLASSIFY_TIMEOUT_SEC = float(os.getenv("DISLIKE_CLASSIFY_TIMEOUT_SEC", "15"))
@@ -158,6 +164,8 @@ def _loads_json_object(raw: str) -> dict:
 
 async def classify_pending_reply(user_message: str, action_type: str | None = None) -> str:
     text = _compact(user_message)
+    if is_smalltalk(user_message):
+        return "ambiguous"
     if action_type in {"submit_confirmation", "natural_language_confirmation"}:
         if CONFIRMATION_NEGATIVE_RE.search(user_message or ""):
             return "no"
@@ -256,28 +264,56 @@ def _confirmation_branch(payload: dict, decision: str) -> dict:
         }
     return {
         "fn": "submit_mission_result",
-        "args": {**_submit_args_from_payload(payload), "result_type": "failure"},
+        "args": {**_submit_args_from_payload(payload), "result_type": "fail"},
     }
 
 
 async def _execute_confirmation_branch(
     student_id: int,
     branch: dict,
-) -> ExecResults:
+    payload: dict,
+    user_message: str,
+) -> tuple[ExecResults, SubmitValidationResult | None]:
     exec_results = ExecResults()
+    validation = None
     fn = branch.get("fn")
     args = branch.get("args") if isinstance(branch.get("args"), dict) else {}
     if fn not in CONFIRMATION_ACTION_FNS:
         print(f"[Pending] confirmation skipped unknown fn={fn!r}")
-        return exec_results
+        return exec_results, validation
 
     if fn == "submit_mission_result":
-        exec_results.submit = await run_in_threadpool(execute_submit, student_id, args)
+        original_message = _sync_user_message_from_payload(payload, user_message)
+        mission_id = payload.get("mission_id")
+        try:
+            mission_id = int(mission_id) if mission_id not in (None, "") else None
+        except (TypeError, ValueError):
+            mission_id = None
+        mission_name = str(payload.get("mission_name") or "")
+        validation = validate_submit_candidate(
+            user_message=original_message,
+            mission_name=mission_name,
+            mission_id=mission_id,
+            qwen_args=args,
+        )
+        print(
+            "[Pending.Validator.submit] "
+            f"action={validation.action} "
+            f"result={validation.result_type or '-'} "
+            f"reason={validation.reason or '-'}"
+        )
+        if not validation.should_execute:
+            return exec_results, validation
+        exec_results.submit = await run_in_threadpool(
+            execute_submit,
+            student_id,
+            {**args, "result_type": validation.result_type},
+        )
     elif fn == "cancel_mission_action":
         exec_results.cancel = await run_in_threadpool(execute_cancel, student_id, args)
     elif fn == "request_mission_adjustment":
         exec_results.adjustment = await run_in_threadpool(execute_adjustment, student_id, args)
-    return exec_results
+    return exec_results, validation
 
 
 def _confirmation_hint(branch: dict, decision: str, exec_results: ExecResults) -> str:
@@ -578,7 +614,24 @@ async def handle_pending_action(student_id: int | None, user_message: str, sessi
     if decision == "yes":
         if action_type in {"submit_confirmation", "natural_language_confirmation"}:
             branch = _confirmation_branch(payload, decision)
-            exec_results = await _execute_confirmation_branch(student_id, branch)
+            exec_results, validation = await _execute_confirmation_branch(
+                student_id,
+                branch,
+                payload,
+                user_message,
+            )
+            if validation and not validation.should_execute:
+                updated = await run_in_threadpool(increment_pending_retry, pending_id)
+                retry_after_update = updated.get("retry_count") if updated else retry_count + 1
+                mission_name = str(payload.get("mission_name") or "")
+                return PendingOutcome(
+                    action_type=action_type,
+                    decision="ambiguous",
+                    status=f"validator_blocked_retry_{retry_after_update}",
+                    message_hint=build_submit_validation_response(validation, mission_name),
+                    pending_id=pending_id,
+                    exec_results=exec_results,
+                )
             await run_in_threadpool(resolve_pending, pending_id, "accepted")
             return PendingOutcome(
                 action_type=action_type,
@@ -612,16 +665,36 @@ async def handle_pending_action(student_id: int | None, user_message: str, sessi
         )
 
     if decision == "no":
-        await run_in_threadpool(resolve_pending, pending_id, "rejected")
         if action_type in {"submit_confirmation", "natural_language_confirmation"}:
             branch = _confirmation_branch(payload, decision)
-            exec_results = await _execute_confirmation_branch(student_id, branch)
+            exec_results, validation = await _execute_confirmation_branch(
+                student_id,
+                branch,
+                payload,
+                user_message,
+            )
+            if validation and not validation.should_execute:
+                updated = await run_in_threadpool(increment_pending_retry, pending_id)
+                retry_after_update = updated.get("retry_count") if updated else retry_count + 1
+                mission_name = str(payload.get("mission_name") or "")
+                return PendingOutcome(
+                    action_type=action_type,
+                    decision="ambiguous",
+                    status=f"validator_blocked_retry_{retry_after_update}",
+                    message_hint=build_submit_validation_response(validation, mission_name),
+                    pending_id=pending_id,
+                    exec_results=exec_results,
+                )
             hint = _confirmation_hint(branch, decision, exec_results)
         elif action_type == "mission_dislike_confirm":
+            await run_in_threadpool(resolve_pending, pending_id, "rejected")
             exec_results = await _execute_dislike_fallback_change(student_id)
             hint = _adjustment_hint(exec_results)
         else:
+            await run_in_threadpool(resolve_pending, pending_id, "rejected")
             hint = "아이가 이전 확인 질문에 부정으로 답했어. 짧게 알겠다고 말해줘."
+        if action_type in {"submit_confirmation", "natural_language_confirmation"}:
+            await run_in_threadpool(resolve_pending, pending_id, "rejected")
         return PendingOutcome(
             action_type=action_type,
             decision=decision,

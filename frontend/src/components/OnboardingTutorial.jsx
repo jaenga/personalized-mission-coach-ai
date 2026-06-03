@@ -61,11 +61,11 @@ const STEPS = [
   // 5. 배움 — 교육 소개 (스포트라이트 없음)
   { id: "learn_intro", screen: "learn" },
   // 6. 배움 — 뽑기권 티켓
-  { id: "reward_ticket", screen: "learn", target: "learn-ticket", blur: 5 },
+  { id: "reward_ticket", screen: "learn", target: "learn-ticket", blur: 4 },
   // 7. 배움 — 하트
-  { id: "reward_heart", screen: "learn", target: "learn-heart", blur: 5 },
+  { id: "reward_heart", screen: "learn", target: "learn-heart", blur: 4 },
   // 8. 배움 — 레벨
-  { id: "reward_level", screen: "learn", target: "learn-level", blur: 5 },
+  { id: "reward_level", screen: "learn", target: "learn-level", blur: 4 },
   // 9. 배움 — 마무리 (스포트라이트 없음)
   { id: "rewards_done", screen: "learn" },
 ];
@@ -488,7 +488,7 @@ export default function OnboardingTutorial({ onComplete, onBack, initialStep = 0
       >
         <defs>
           <filter id={`blur-${index}`} x="-35%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation={step.blur ?? 7} />
+            <feGaussianBlur stdDeviation={step.blur ?? 10} />
           </filter>
           <mask id={maskId}>
             <rect width="100%" height="100%" fill="white" />

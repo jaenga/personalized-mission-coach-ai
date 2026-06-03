@@ -1,17 +1,80 @@
 import os
 import re
 import json
+import shutil
+import subprocess
 import time
+from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
+from equivalency_judgment import EquivalencyJudgment, normalize_decision
+from equivalency_normalizer import normalize_equivalency_text
 
 load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+OLLAMA_AUTOSTART = os.getenv("OLLAMA_AUTOSTART", "true").lower() not in {"0", "false", "no"}
+OLLAMA_STARTUP_TIMEOUT = float(os.getenv("OLLAMA_STARTUP_TIMEOUT", "15"))
 
 
 _client: httpx.AsyncClient | None = None
+_ollama_process: subprocess.Popen | None = None
+
+
+def _is_local_ollama_url() -> bool:
+    parsed = urlparse(OLLAMA_BASE_URL)
+    return parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def _ollama_is_ready(timeout: float = 1.0) -> bool:
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags")
+            response.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_ollama_server() -> None:
+    global _ollama_process
+
+    if _ollama_is_ready():
+        print(f"[Ollama] server ready: {OLLAMA_BASE_URL}")
+        return
+
+    if not OLLAMA_AUTOSTART:
+        print("[Ollama] server not reachable and OLLAMA_AUTOSTART=false")
+        return
+
+    if not _is_local_ollama_url():
+        print(f"[Ollama] autostart skipped for non-local URL: {OLLAMA_BASE_URL}")
+        return
+
+    ollama_bin = shutil.which("ollama")
+    if not ollama_bin:
+        print("[Ollama] autostart skipped: ollama command not found")
+        return
+
+    print("[Ollama] server not reachable; starting `ollama serve`")
+    _ollama_process = subprocess.Popen(
+        [ollama_bin, "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    deadline = time.perf_counter() + OLLAMA_STARTUP_TIMEOUT
+    while time.perf_counter() < deadline:
+        if _ollama_is_ready():
+            print(f"[Ollama] server started: {OLLAMA_BASE_URL}")
+            return
+        if _ollama_process.poll() is not None:
+            print(f"[Ollama] `ollama serve` exited early with code {_ollama_process.returncode}")
+            return
+        time.sleep(0.5)
+
+    print(f"[Ollama] startup timed out after {OLLAMA_STARTUP_TIMEOUT:g}s")
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -26,6 +89,22 @@ async def close_ollama_client() -> None:
     if _client and not _client.is_closed:
         await _client.aclose()
     _client = None
+
+
+def stop_autostarted_ollama() -> None:
+    global _ollama_process
+    if not _ollama_process or _ollama_process.poll() is not None:
+        _ollama_process = None
+        return
+
+    print("[Ollama] stopping autostarted server")
+    _ollama_process.terminate()
+    try:
+        _ollama_process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _ollama_process.kill()
+        _ollama_process.wait(timeout=5)
+    _ollama_process = None
 
 
 def strip_markdown(text: str) -> str:
@@ -91,6 +170,67 @@ async def generate_chat_message(system_prompt: str, messages: list[dict]) -> tup
     )
     call1_ms = round((time.perf_counter() - t0) * 1000)
     return ai_message, call1_ms
+
+
+async def judge_mission_equivalency(judge_system_prompt: str, user_message: str) -> EquivalencyJudgment:
+    """대체 수행 판정 전용 호출.
+
+    Expected JSON:
+    {"decision": "approved|denied|clarify", "reason": "...", "reply": "...", "clarify_question": null|"..." }
+    Legacy {"approved": bool, "need_clarification": bool} responses are still accepted as a fallback.
+    """
+    raw = None
+    try:
+        normalized = normalize_equivalency_text(user_message)
+        judge_user_message = user_message
+        if normalized != user_message:
+            judge_user_message = (
+                f"원문: {user_message}\n"
+                f"표준화 참고: {normalized}\n"
+                "표준화 참고는 단위 비교용일 뿐이고, 최종 판단은 시스템 기준으로 해."
+            )
+        raw = await generate_json_message(judge_system_prompt, judge_user_message, timeout=30.0)
+        result = json.loads(raw)
+        decision = normalize_decision(
+            result.get("decision"),
+            approved=result.get("approved"),
+            need_clarification=result.get("need_clarification"),
+        )
+        clarify_question = result.get("clarify_question")
+        if not isinstance(clarify_question, str) or not clarify_question.strip():
+            clarify_question = None
+        if decision == "clarify" and not clarify_question:
+            clarify_question = "무엇을 얼마나 했는지 조금만 더 알려줄래?"
+        reply = str(result.get("reply") or "").strip()
+        if not reply:
+            if decision == "approved":
+                reply = "응, 그 방법은 미션 기준에 맞아."
+            elif decision == "denied":
+                reply = "그 방법은 이번 미션 기준으로는 인정하기 어려워."
+            else:
+                reply = "조금만 더 알려줘야 정확히 볼 수 있어."
+        return EquivalencyJudgment(
+            decision=decision,
+            reason=str(result.get("reason") or "").strip(),
+            reply=reply,
+            clarify_question=clarify_question,
+            raw=result,
+        )
+    except Exception as e:
+        raw_preview = ""
+        if raw is not None:
+            raw_preview = raw[:200].replace("\n", " ")
+        print(
+            f"[Equivalency] judge call failed: type={type(e).__name__} "
+            f"msg={e!r} raw_len={len(raw) if raw is not None else 0} "
+            f"raw_preview={raw_preview!r}"
+        )
+        return EquivalencyJudgment(
+            decision="clarify",
+            reason="json_parse_failed",
+            reply="조금만 더 알려줘야 정확히 볼 수 있어.",
+            clarify_question="무엇을 얼마나 했는지 알려줄래?",
+        )
 
 
 async def generate_json_message(system_prompt: str, user_message: str, timeout: float = 10.0) -> str:

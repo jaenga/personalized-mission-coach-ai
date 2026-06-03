@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from mission_meta import MISSION_META
+from mission_meta import MISSION_META, extract_numeric
 
 NormReason = Literal[
     "",
@@ -36,6 +36,7 @@ _ADJUSTMENT_CANCEL_RE = re.compile(
     r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
+_HARD_TEMPORAL_RE = re.compile(r"어제|그저께|엊그제|지난번|저번|예전|수요일|월요일|화요일|목요일|금요일|토요일|일요일")
 _B_COMMAND_RE = re.compile(
     r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
 )
@@ -50,39 +51,41 @@ _QUESTION_RE = re.compile(
     r"인지|어때요\??|어때\??)"
 )
 _NEGATION_VERB_RE = re.compile(
-    r"안 ?먹었|못 ?먹었|안 ?마셨|못 ?마셨|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안타|못타"
+    r"안 ?먹었|안 ?먹고|안 ?하고|못 ?먹었|안 ?마셨|못 ?마셨|안 ?봤|못 ?봤|안 ?봄|못 ?봄|안 ?탔|못 ?탔|안 ?탔다|못 ?탔다|안먹|못먹|안마|못마|안봤|못봤|안타|못타"
 )
-_EXPLICIT_FAIL_RE = re.compile(r"실패|못했|안했")
-_EMOTIONAL_RE = re.compile(r"하기 싫|못하겠|안해|못해|포기")
+_EXPLICIT_FAIL_RE = re.compile(
+    r"실패"
+    r"|못\s*했"
+    r"|못\s*마셨"
+    r"|안\s*했"
+    r"|못\s*함"
+    r"|안\s*함"
+    r"|못\s*끝"
+    r"|아예\s*못"
+    r"|까먹"
+    r"|해버림"
+    r"|패스\s*함"
+)
+_EMOTIONAL_RE = re.compile(r"하기\s*싫|안해|못해|포기|빡세|싫은데")
 _EXPLICIT_SUCCESS_RE = re.compile(r"성공|완료|해냈|끝냈|다 했|다했|클리어")
 _SUCCESS_RE = re.compile(
-    r"했어(?:요)?|먹었어(?:요)?|마셨어(?:요)?|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
+    r"했어(?:요)?|먹었어(?:요)?|먹음|마셨어(?:요)?|마심|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
 )
 _NUMERIC_REPORT_RE = re.compile(
     r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
     r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
 )
 _PAST_VERB_RE = re.compile(r"[가-힣]{1,8}(?:었|았|했|겼|켰|렸|웠|냈|봤)어(?:요)?")
-_QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에")
+_QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에|한\s*입")
 _CONSUME_PAST_RE = re.compile(
     r"먹었|먹었다|마셨|마셨다|봤어|봤다|시청했|사용했|틀었|켰어|켰다"
 )
 _SUBSTITUTE_SUCCESS_ACTION_RE = re.compile(
     r"걸었|걸어|갔|가봤|이용했|이용|올라갔|올랐|다녔"
 )
+_SUBSTITUTE_AVOID_RE = re.compile(r"안\s*(?:타|탔|이용|씀)|대신")
+_SUBSTITUTE_ACTION_RE = re.compile(r"올라갔|내려갔|걸었|이용했|갔")
 
-_NUMBER_KO = {
-    "한": 1,
-    "두": 2,
-    "세": 3,
-    "네": 4,
-    "다섯": 5,
-    "여섯": 6,
-    "일곱": 7,
-    "여덟": 8,
-    "아홉": 9,
-    "열": 10,
-}
 _OVERLAP_STOPWORDS = frozenset({
     "안", "못", "하기", "오늘", "한", "의", "에", "을", "를", "이", "가", "은", "는", "도", "로", "와", "과", "매일", "하루",
     "대신", "작은", "큰", "개", "잔", "번", "분", "초",
@@ -100,44 +103,18 @@ def _mission_overlap(message: str, mission_name: str) -> bool:
     mission_tokens = {
         token
         for token in _tokenize_koreanish(mission_name)
-        if token not in _OVERLAP_STOPWORDS
+        if token not in _OVERLAP_STOPWORDS and not _is_numeric_unit_token(token)
     }
-    message_tokens = _tokenize_koreanish(message)
+    message_tokens = {
+        token
+        for token in _tokenize_koreanish(message)
+        if not _is_numeric_unit_token(token)
+    }
     return bool(mission_tokens & message_tokens)
 
 
-def _extract_numeric(text: str, goal) -> float | None:
-    unit_map = {
-        "회": "회",
-        "번": "회",
-        "개": "회",
-        "분": "분",
-        "시간": "분",
-        "ml": "ml",
-        "mL": "ml",
-        "L": "ml",
-        "l": "ml",
-        "리터": "ml",
-        "잔": "ml",
-        "컵": "ml",
-    }
-    goal_unit = unit_map.get(goal.unit, goal.unit)
-    pattern = re.compile(
-        r"(\d+(?:\.\d+)?|" + "|".join(_NUMBER_KO.keys()) + r")\s*"
-        r"(분|시간|회|번|개|잔|컵|L|l|ml|mL|리터)"
-    )
-    for match in pattern.finditer(text):
-        raw_num, raw_unit = match.group(1), match.group(2)
-        if unit_map.get(raw_unit, raw_unit) != goal_unit:
-            continue
-
-        val = float(_NUMBER_KO.get(raw_num, raw_num))
-        if raw_unit == "시간":
-            val *= 60
-        elif raw_unit in goal.unit_aliases:
-            val *= goal.unit_aliases[raw_unit]
-        return val
-    return None
+def _is_numeric_unit_token(token: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|세트)?", token or ""))
 
 
 def normalize_b_input(
@@ -159,6 +136,8 @@ def normalize_b_input(
 
     if _CANCEL_NEGATION_RE.search(message):
         return clarify("")
+    if _HARD_TEMPORAL_RE.search(message):
+        return clarify("past_ambiguous")
     if _ADJUSTMENT_CANCEL_RE.search(message):
         return ok("미션 변경 취소해줘")
     if _CANCEL_TARGET_RE.search(message):
@@ -167,6 +146,8 @@ def normalize_b_input(
         return ok("더 쉬운 미션으로 바꿔줘")
     if _TOO_DIFFICULT_RE.search(message):
         return clarify("difficulty")
+    if _EMOTIONAL_RE.search(message) and not _EXPLICIT_FAIL_RE.search(message):
+        return ok()
     if _HARDER_RE.search(message):
         return ok("더 어려운 미션으로 바꿔줘")
     if _CHANGE_RE.search(message):
@@ -202,14 +183,12 @@ def normalize_b_input(
 
     mtype = meta.type if meta else "perform"
     has_target = bool(meta and any(kw in message for kw in meta.target_kw))
+    has_mission_overlap = _mission_overlap(message, mission_name)
+    has_mission_target = has_target or has_mission_overlap
     has_negation = bool(_NEGATION_VERB_RE.search(message))
 
     if mtype == "substitute" and meta:
-        has_success = (
-            any(kw in message for kw in meta.success_kw)
-            and _SUBSTITUTE_SUCCESS_ACTION_RE.search(message)
-        )
-        if has_success:
+        if _is_clear_substitute_success(message, meta):
             return success()
         if has_target and not has_negation:
             return fail()
@@ -221,6 +200,9 @@ def normalize_b_input(
 
     if mtype == "prohibit" and has_target and not has_negation and _CONSUME_PAST_RE.search(message):
         return fail()
+
+    if mtype == "limit" and has_mission_target and has_negation and not _NUMERIC_REPORT_RE.search(message):
+        return success()
 
     if _EMOTIONAL_RE.search(message) and not _EXPLICIT_FAIL_RE.search(message):
         return ok()
@@ -234,14 +216,16 @@ def normalize_b_input(
     if _NUMERIC_REPORT_RE.search(message):
         if meta and meta.numeric:
             if mtype == "limit":
-                if not has_target:
+                if not has_mission_target:
                     return clarify("numeric")
-                reported = _extract_numeric(message, meta.numeric)
+                reported = extract_numeric(message, meta.numeric)
                 if reported is None:
                     return clarify("numeric")
                 return success() if reported <= meta.numeric.threshold else fail()
 
-            reported = _extract_numeric(message, meta.numeric)
+            if not has_mission_target:
+                return clarify("numeric")
+            reported = extract_numeric(message, meta.numeric)
             if reported is None:
                 return clarify("numeric")
             if reported >= meta.numeric.threshold:
@@ -250,6 +234,10 @@ def normalize_b_input(
         return clarify("numeric")
 
     if meta and meta.numeric and _SUCCESS_RE.search(message):
+        if _QUALIFIER_RE.search(message):
+            return clarify("qualifier")
+        if has_mission_target and meta.success_kw and any(kw in message for kw in meta.success_kw):
+            return success()
         return clarify("numeric_no_count")
 
     if _EXPLICIT_SUCCESS_RE.search(message):
@@ -268,3 +256,14 @@ def normalize_b_input(
         return clarify("past_ambiguous")
 
     return ok()
+
+
+def _is_clear_substitute_success(message: str, meta) -> bool:
+    text = message or ""
+    has_avoid_keyword = any(keyword and keyword in text for keyword in meta.target_kw)
+    return bool(
+        has_avoid_keyword
+        and _SUBSTITUTE_AVOID_RE.search(text)
+        and "계단" in text
+        and _SUBSTITUTE_ACTION_RE.search(text)
+    )

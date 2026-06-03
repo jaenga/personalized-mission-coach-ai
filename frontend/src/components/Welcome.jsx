@@ -5,20 +5,20 @@ import leaf from "../assets/tomato/_shared/leaf.png";
 const SPARKLE_COLORS = ["#F2A8A0", "#FFD56B", "#9DC9E8", "#F4B6C2", "#A7DAA7", "#FFAE6B", "#E35D49"];
 
 const SPARKLES = [
-  { x: 60,  y: 140, size: 10, color: 0, delay: 0,    shape: "star" },
-  { x: 170, y: 100, size: 14, color: 1, delay: 0.2,  shape: "star" },
-  { x: 280, y: 130, size: 12, color: 2, delay: 0.4,  shape: "star" },
-  { x: 330, y: 200, size: 9,  color: 3, delay: 0.1,  shape: "dot" },
-  { x: 50,  y: 230, size: 8,  color: 4, delay: 0.7,  shape: "diamond" },
-  { x: 110, y: 280, size: 11, color: 5, delay: 0.5,  shape: "star" },
-  { x: 320, y: 290, size: 10, color: 0, delay: 0.9,  shape: "diamond" },
-  { x: 90,  y: 380, size: 8,  color: 6, delay: 0.3,  shape: "dot" },
-  { x: 350, y: 380, size: 12, color: 1, delay: 1.1,  shape: "star" },
-  { x: 60,  y: 460, size: 10, color: 2, delay: 0.6,  shape: "diamond" },
-  { x: 340, y: 480, size: 11, color: 3, delay: 0.4,  shape: "star" },
-  { x: 200, y: 500, size: 7,  color: 4, delay: 1.0,  shape: "dot" },
-  { x: 250, y: 175, size: 8,  color: 5, delay: 1.3,  shape: "dot" },
-  { x: 130, y: 200, size: 6,  color: 6, delay: 1.5,  shape: "dot" },
+  { x: "15%", y: "11%", size: 10, color: 0, delay: 0, shape: "star" },
+  { x: "43%", y: "5%", size: 14, color: 1, delay: 0.2, shape: "star" },
+  { x: "72%", y: "10%", size: 12, color: 2, delay: 0.4, shape: "star" },
+  { x: "86%", y: "24%", size: 9, color: 3, delay: 0.1, shape: "dot" },
+  { x: "12%", y: "30%", size: 8, color: 4, delay: 0.7, shape: "diamond" },
+  { x: "28%", y: "39%", size: 11, color: 5, delay: 0.5, shape: "star" },
+  { x: "82%", y: "40%", size: 10, color: 0, delay: 0.9, shape: "diamond" },
+  { x: "23%", y: "58%", size: 8, color: 6, delay: 0.3, shape: "dot" },
+  { x: "90%", y: "58%", size: 12, color: 1, delay: 1.1, shape: "star" },
+  { x: "15%", y: "74%", size: 10, color: 2, delay: 0.6, shape: "diamond" },
+  { x: "86%", y: "78%", size: 11, color: 3, delay: 0.4, shape: "star" },
+  { x: "50%", y: "82%", size: 7, color: 4, delay: 1.0, shape: "dot" },
+  { x: "63%", y: "20%", size: 8, color: 5, delay: 1.3, shape: "dot" },
+  { x: "32%", y: "24%", size: 6, color: 6, delay: 1.5, shape: "dot" },
 ];
 
 function SparkleShape({ shape, color, size }) {
@@ -41,207 +41,186 @@ function SparkleShape({ shape, color, size }) {
 export default function Welcome({ onContinue }) {
   return (
     <div
-      className="mobile-frame"
-      style={{ background: "#FFF3E7" }}
+      className="mobile-frame flex items-center justify-center"
+      style={{
+        background: "#FFF3E7",
+        padding: "clamp(14px, 4dvh, 42px) 17px calc(16px + env(safe-area-inset-bottom))",
+      }}
     >
-      {/* 흰색 반투명 카드 */}
       <div
-        className="welcome-card-bg absolute"
+        className="relative flex h-full w-full flex-col items-center overflow-hidden"
         style={{
-          left: 17,
-          top: 54,
-          width: 363,
-          height: 0,
+          maxWidth: 363,
+          maxHeight: 790,
           borderRadius: 30,
           background: "rgba(255, 255, 255, 0.5)",
           border: "1px solid rgba(227, 93, 73, 0.5)",
+          padding: "clamp(46px, 8dvh, 72px) 20px clamp(14px, 2.6dvh, 22px)",
         }}
-      />
+      >
+        {SPARKLES.map((s, i) => (
+          <svg
+            key={i}
+            className="sparkle absolute pointer-events-none"
+            style={{
+              left: s.x,
+              top: s.y,
+              width: s.size,
+              height: s.size,
+              animationDelay: `${s.delay}s`,
+            }}
+            viewBox={`0 0 ${s.size} ${s.size}`}
+            aria-hidden="true"
+          >
+            <SparkleShape shape={s.shape} color={SPARKLE_COLORS[s.color]} size={s.size} />
+          </svg>
+        ))}
 
-      {/* 스파클 (애니메이션 유지) */}
-      {SPARKLES.map((s, i) => (
-        <svg
-          key={i}
-          className="sparkle absolute pointer-events-none"
+        <img
+          src={leaf}
+          alt=""
+          draggable="false"
+          className="absolute select-none pointer-events-none"
+          style={{ right: "23%", top: "clamp(44px, 7dvh, 56px)", width: 31.2, height: 23.65, transform: "rotate(23deg)", transformOrigin: "center" }}
+        />
+
+        <h1
+          className="font-jeju"
           style={{
-            left: s.x,
-            top: s.y,
-            width: s.size,
-            height: s.size,
-            animationDelay: `${s.delay}s`,
+            color: "#E35D49",
+            fontSize: "clamp(38px, 5.8dvh, 50px)",
+            fontWeight: 400,
+            textAlign: "center",
+            letterSpacing: "-0.43px",
+            lineHeight: 1.14,
+            flexShrink: 0,
           }}
-          viewBox={`0 0 ${s.size} ${s.size}`}
-          aria-hidden="true"
         >
-          <SparkleShape shape={s.shape} color={SPARKLE_COLORS[s.color]} size={s.size} />
-        </svg>
-      ))}
+          환영해요!
+        </h1>
 
-      {/* 꼭지 (leaf) */}
-      <img
-        src={leaf}
-        alt=""
-        draggable="false"
-        className="welcome-leaf absolute select-none pointer-events-none"
-        style={{ left: 251, top: 98, width: 31.2, height: 23.65, transform: "rotate(23deg)", transformOrigin: "center" }}
-      />
+        <p
+          className="font-sejong"
+          style={{
+            color: "#000000",
+            fontSize: "clamp(16px, 2.3dvh, 20px)",
+            fontWeight: 400,
+            textAlign: "center",
+            letterSpacing: "-0.43px",
+            lineHeight: 1.1,
+            marginTop: "clamp(8px, 1.4dvh, 12px)",
+            flexShrink: 0,
+          }}
+        >
+          가입이 완료되었습니다
+        </p>
 
-      {/* 환영해요! */}
-      <div
-        className="welcome-title absolute font-jeju"
-        style={{
-          left: 83,
-          top: 110,
-          width: 236,
-          height: 57,
-          color: "#E35D49",
-          fontSize: 50,
-          fontWeight: 400,
-          textAlign: "center",
-          letterSpacing: "-0.43px",
-          lineHeight: "57px",
-        }}
-      >
-        환영해요!
+        <div
+          className="relative flex w-full flex-1 items-center justify-center"
+          style={{ minHeight: 0, marginTop: "clamp(18px, 4dvh, 58px)" }}
+        >
+          <img
+            src={tomatoHi}
+            alt="환영하는 토미"
+            draggable="false"
+            className="select-none pointer-events-none"
+            style={{
+              width: "clamp(160px, 27dvh, 231px)",
+              height: "clamp(160px, 27dvh, 231px)",
+              objectFit: "contain",
+              zIndex: 1,
+            }}
+          />
+
+          <div
+            aria-hidden="true"
+            className="absolute left-1/2 -translate-x-1/2"
+            style={{
+              bottom: "clamp(8px, 1.4dvh, 16px)",
+              width: "clamp(112px, 18dvh, 150px)",
+              height: 22,
+              background:
+                "radial-gradient(ellipse at center, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.12) 40%, rgba(0,0,0,0) 75%)",
+              filter: "blur(4px)",
+              pointerEvents: "none",
+            }}
+          />
+        </div>
+
+        <p
+          className="font-sejong"
+          style={{
+            color: "#4e4949",
+            fontSize: "clamp(13px, 1.8dvh, 15px)",
+            fontWeight: 500,
+            textAlign: "center",
+            letterSpacing: "-0.43px",
+            lineHeight: "22px",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+            marginTop: "clamp(8px, 1.5dvh, 16px)",
+          }}
+        >
+          가입 기념 선물
+        </p>
+
+        <div
+          className="flex flex-col items-center justify-center"
+          style={{
+            width: "min(100%, 288px)",
+            height: "clamp(72px, 9.8dvh, 85px)",
+            borderRadius: 24,
+            background: "rgba(227, 93, 73, 0.2)",
+            border: "1px solid rgba(227, 93, 73, 0.5)",
+            flexShrink: 0,
+            marginTop: "clamp(6px, 1dvh, 10px)",
+          }}
+        >
+          <img
+            src={heart}
+            alt=""
+            draggable="false"
+            className="select-none pointer-events-none"
+            style={{ width: "clamp(26px, 3.6dvh, 32px)", height: "clamp(26px, 3.6dvh, 32px)", objectFit: "contain" }}
+          />
+          <div
+            className="font-sejong"
+            style={{
+              color: "#E35D49",
+              fontSize: "clamp(24px, 3.4dvh, 30px)",
+              fontWeight: 400,
+              textAlign: "center",
+              letterSpacing: "-0.43px",
+              lineHeight: 1,
+              marginTop: 4,
+            }}
+          >
+            +1
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onContinue}
+          className="signup-submit font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
+          style={{
+            width: "min(100%, 290px)",
+            height: "clamp(42px, 5.2dvh, 45px)",
+            borderRadius: 50,
+            background: "#E35D49",
+            fontSize: "clamp(17px, 2.3dvh, 20px)",
+            fontWeight: 400,
+            letterSpacing: "-0.43px",
+            lineHeight: "22px",
+            padding: 0,
+            border: "none",
+            flexShrink: 0,
+            marginTop: "clamp(14px, 2.5dvh, 28px)",
+          }}
+        >
+          홈으로 가기
+        </button>
       </div>
-
-      {/* 가입이 완료되었습니다 */}
-      <div
-        className="welcome-subtitle absolute font-sejong"
-        style={{
-          left: 119,
-          top: 172,
-          width: 163,
-          height: 22,
-          color: "#000000",
-          fontSize: 20,
-          fontWeight: 400,
-          textAlign: "center",
-          letterSpacing: "-0.43px",
-          lineHeight: "22px",
-        }}
-      >
-        가입이 완료되었습니다
-      </div>
-
-      {/* hi.png 히어로 (애니메이션 없음) */}
-      <img
-        src={tomatoHi}
-        alt="환영하는 토미"
-        draggable="false"
-        className="welcome-hero absolute select-none pointer-events-none"
-        style={{
-          left: 83,
-          top: 270,
-          width: 231,
-          height: 231,
-          objectFit: "contain",
-        }}
-      />
-
-      {/* 그림자 (부드러운 타원 그라데이션) */}
-      <div
-        aria-hidden="true"
-        className="welcome-shadow absolute"
-        style={{
-          left: 122,
-          top: 482,
-          width: 150,
-          height: 22,
-          background:
-            "radial-gradient(ellipse at center, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.12) 40%, rgba(0,0,0,0) 75%)",
-          filter: "blur(4px)",
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* 가입 기념 선물 */}
-      <div
-        className="welcome-gift-label absolute font-sejong"
-        style={{
-          left: 106,
-          top: 590,
-          width: 190,
-          height: 22,
-          color: "#4e4949",
-          fontSize: 15,
-          fontWeight: 500,
-          textAlign: "center",
-          letterSpacing: "-0.43px",
-          lineHeight: "22px",
-          whiteSpace: "nowrap",
-        }}
-      >
-        가입 기념 선물
-      </div>
-
-      {/* 선물 카드 */}
-      <div
-        className="welcome-gift-card absolute"
-        style={{
-          left: 57,
-          top: 500,
-          width: 288,
-          height: 85,
-          borderRadius: 24,
-          background: "rgba(227, 93, 73, 0.2)",
-          border: "1px solid rgba(227, 93, 73, 0.5)",
-        }}
-      />
-
-      {/* 하트 */}
-      <img
-        src={heart}
-        alt=""
-        draggable="false"
-        className="welcome-heart absolute select-none pointer-events-none"
-        style={{ left: 181, top: 560, width: 32, height: 32, objectFit: "contain" }}
-      />
-
-      {/* +1 */}
-      <div
-        className="welcome-plus absolute font-sejong"
-        style={{
-          left: 184,
-          top: 597,
-          width: 29,
-          height: 22,
-          color: "#E35D49",
-          fontSize: 30,
-          fontWeight: 400,
-          textAlign: "center",
-          letterSpacing: "-0.43px",
-          lineHeight: "22px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        +1
-      </div>
-
-      {/* 홈으로 가기 버튼 */}
-      <button
-        type="button"
-        onClick={onContinue}
-        className="welcome-home-button signup-submit absolute font-sejong text-white shadow-md transition-all duration-200 flex items-center justify-center"
-        style={{
-          left: 56,
-          top: 660,
-          width: 290,
-          height: 45,
-          borderRadius: 50,
-          background: "#E35D49",
-          fontSize: 20,
-          fontWeight: 400,
-          letterSpacing: "-0.43px",
-          lineHeight: "22px",
-          padding: 0,
-          border: "none",
-        }}
-      >
-        홈으로 가기
-      </button>
     </div>
   );
 }

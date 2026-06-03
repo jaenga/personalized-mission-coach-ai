@@ -18,14 +18,50 @@ const CAUTION_FOOD_OPTIONS = [
   "매운 음식", "튀김", "젤리", "마시멜로", "에너지드링크", "쿠키",
 ];
 
-const ACCENT = {
-  bgSelected: "#FFE5DD",
-  textSelected: "#E35D49",
-  borderSelected: "#F2C5BA",
-  chipText: "#E35D49",
+const COLORS = {
+  appBg: "#FFF3E7",
+  heroCardBg: "#FFFCFA",
+  sectionCardBg: "#FFFDFC",
+  innerActionCardBg: "#FFFFFF",
+  searchInputBg: "#FFF8F4",
+  strongBorder: "#F2C5BA",
+  softBorder: "#F7DDD5",
+  inputCardBorder: "#F1D5CC",
+  divider: "rgba(227, 93, 73, 0.08)",
+  primary: "#E35D49",
+  primaryStrong: "#EA6A55",
+  primaryLightTint: "#FFF1EC",
+  mainTitle: "#2C2623",
+  sectionTitle: "#3A312D",
+  bodyText: "#4F4742",
+  descriptionText: "#7B7068",
+  weakDescription: "#AAA099",
+  placeholder: "#B2A59E",
+  iconGray: "#A89C95",
+  allergyBg: "#FFE7E1",
+  allergyIcon: "#E35D49",
+  reduceFoodBg: "#FFF0E5",
+  reduceFoodIcon: "#F07A4A",
+  defaultChipBg: "#FFF4EE",
+  defaultChipBorder: "#F3D9D0",
+  defaultChipText: "#7B655D",
+  selectedChipBg: "#FFE1D8",
+  selectedChipBorder: "#E35D49",
+  selectedChipText: "#D95A47",
+  buttonText: "#FFFFFF",
+  buttonShadow: "rgba(227, 93, 73, 0.18)",
+  cardShadow: "rgba(240, 190, 170, 0.08)",
+  characterShadow: "rgba(44, 38, 35, 0.18)",
 };
 
-function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#F2C5BA", accentPlusBg = "#FFE5DD", accentStroke = "#E35D49", sectionTitle, subtitle, addLabel, placeholder, options, selected, onToggle, onAddCustom }) {
+const ACCENT = {
+  bgSelected: COLORS.selectedChipBg,
+  textSelected: COLORS.selectedChipText,
+  borderSelected: COLORS.selectedChipBorder,
+  chipText: COLORS.selectedChipText,
+};
+
+function PickerCard({ icon, iconSize = 20, iconBg = COLORS.allergyBg, accentBorder = COLORS.inputCardBorder, accentPlusBg = COLORS.primaryLightTint, accentStroke = COLORS.primary, sectionTitle, subtitle, addLabel, placeholder, options, selected, onToggle, onAddCustom }) {
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [customMode, setCustomMode] = useState(false);
@@ -51,11 +87,11 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
   return (
     <div
       style={{
-        background: "#FFFFFF",
-        borderRadius: 20,
+        background: COLORS.sectionCardBg,
+        borderRadius: 24,
         padding: "14px 16px 16px",
-        border: "1px solid rgba(227, 93, 73, 0.10)",
-        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)",
+        border: `1px solid ${COLORS.softBorder}`,
+        boxShadow: `0 8px 18px ${COLORS.cardShadow}`,
       }}
     >
       <div className="flex items-start gap-3" style={{ marginBottom: 10 }}>
@@ -76,7 +112,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
               fontSize: 16,
               fontWeight: 500,
               letterSpacing: "-0.43px",
-              color: "#1a1a1a",
+              color: COLORS.sectionTitle,
             }}
           >
             {sectionTitle}
@@ -89,7 +125,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                 fontWeight: 400,
                 letterSpacing: "-0.3px",
                 lineHeight: "17px",
-                color: "#6b6864",
+                color: COLORS.descriptionText,
                 marginTop: 1,
               }}
             >
@@ -103,10 +139,11 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="w-full flex items-center justify-between bg-white transition active:scale-[0.995]"
+          className="w-full flex items-center justify-between transition active:scale-[0.995]"
           style={{
+            background: COLORS.innerActionCardBg,
             padding: "14px 16px",
-            borderRadius: 16,
+            borderRadius: 18,
             border: `1.5px solid ${accentBorder}`,
           }}
         >
@@ -119,7 +156,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                 <path d="M6 2 L6 10 M2 6 L10 6" />
               </svg>
             </span>
-            <span className="font-sejong text-gray-700" style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.43px" }}>
+            <span className="font-sejong" style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.43px", color: COLORS.bodyText }}>
               {addLabel}
             </span>
           </span>
@@ -139,47 +176,42 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                 {selected.length}
               </span>
             )}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#9a9a9a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={COLORS.iconGray} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 3 L9 7 L5 11" />
             </svg>
           </span>
         </button>
       ) : (
         <div
-          className="bg-white"
+          className="w-full"
           style={{
-            padding: "12px 14px 14px",
-            borderRadius: 20,
-            border: "1.5px solid #F2C5BA",
+            background: COLORS.innerActionCardBg,
+            padding: "14px 16px",
+            borderRadius: 18,
+            border: `1.5px solid ${accentBorder}`,
             minHeight: 200,
           }}
         >
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2.5">
+            <span className="flex items-center gap-2">
               <span
-                className="inline-flex items-center justify-center flex-shrink-0"
-                style={{ width: 30, height: 30, borderRadius: "50%", background: iconBg }}
+                className="inline-flex items-center justify-center rounded-full"
+                style={{ width: 24, height: 24, background: accentPlusBg }}
               >
-                {typeof icon === "string" ? (
-                  <img
-                    src={icon}
-                    alt=""
-                    className="object-contain"
-                    style={{ width: Math.round(iconSize * 0.7), height: Math.round(iconSize * 0.7) }}
-                  />
-                ) : (
-                  icon
-                )}
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke={accentStroke} strokeWidth="2" strokeLinecap="round">
+                  <path d="M6 2 L6 10 M2 6 L10 6" />
+                </svg>
               </span>
-              <span className="font-sejong" style={{ fontSize: 15, fontWeight: 500, color: "#1a1a1a", letterSpacing: "-0.43px" }}>
-                {sectionTitle}
+              <span className="font-sejong" style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.43px", color: COLORS.bodyText }}>
+                {addLabel}
               </span>
-            </div>
+            </span>
             <button
               type="button"
               onClick={() => setExpanded(false)}
-              className="text-gray-400 hover:text-gray-600 transition"
+              className="transition"
               aria-label="닫기"
+              style={{ color: COLORS.iconGray }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M4 6 L8 10 L12 6" />
@@ -188,7 +220,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
           </div>
 
           <div className="relative mb-2">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.iconGray }} aria-hidden="true">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" />
                 <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -199,23 +231,23 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={placeholder}
-              className="w-full font-sejong outline-none"
+              className="health-note-input w-full font-sejong outline-none"
               style={{
                 height: 36,
                 borderRadius: 999,
                 paddingLeft: 32,
                 paddingRight: 14,
-                background: "#FFF8F4",
-                border: "1.5px solid #F2C5BA",
+                background: COLORS.searchInputBg,
+                border: `1.5px solid ${COLORS.inputCardBorder}`,
                 fontSize: 13,
                 letterSpacing: "-0.43px",
-                color: "#3a3a3a",
+                color: COLORS.bodyText,
               }}
             />
           </div>
 
           <div className="flex items-center justify-end gap-2 mb-3">
-            <span className="font-sejong text-gray-500" style={{ fontSize: 11 }}>
+            <span className="font-sejong" style={{ fontSize: 11, color: COLORS.descriptionText }}>
               찾는 항목이 없나요?
             </span>
             {!customMode ? (
@@ -228,8 +260,8 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                   fontWeight: 600,
                   padding: "4px 12px",
                   borderRadius: 999,
-                  border: "1.5px solid #E35D49",
-                  color: "#E35D49",
+                  border: `1.5px solid ${COLORS.primary}`,
+                  color: COLORS.primary,
                   background: "transparent",
                 }}
               >
@@ -252,13 +284,14 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                     }
                   }}
                   placeholder="직접 입력"
-                  className="font-sejong outline-none"
+                  className="health-note-input font-sejong outline-none"
                   style={{
                     fontSize: 11,
                     padding: "4px 10px",
                     borderRadius: 999,
-                    border: "1.5px solid #E35D49",
+                    border: `1.5px solid ${COLORS.primary}`,
                     width: 100,
+                    color: COLORS.bodyText,
                   }}
                 />
                 <button
@@ -270,8 +303,8 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                     fontWeight: 600,
                     padding: "4px 10px",
                     borderRadius: 999,
-                    background: "#E35D49",
-                    color: "#FFFFFF",
+                    background: COLORS.primary,
+                    color: COLORS.buttonText,
                   }}
                 >
                   추가
@@ -280,7 +313,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
             )}
           </div>
 
-          <p className="font-sejong text-gray-700 mb-2" style={{ fontSize: 12, fontWeight: 500 }}>
+          <p className="font-sejong mb-2" style={{ fontSize: 12, fontWeight: 500, color: COLORS.sectionTitle }}>
             추천 {sectionTitle.includes("알레르기") ? "알레르기" : "음식"}
           </p>
           <div className="flex flex-wrap gap-1.5 mb-3">
@@ -296,9 +329,9 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                     fontSize: 12,
                     padding: "5px 12px",
                     borderRadius: 999,
-                    background: isSelected ? ACCENT.bgSelected : "#FFF1EB",
-                    color: isSelected ? ACCENT.textSelected : "#7a6a64",
-                    border: `1px solid ${isSelected ? ACCENT.borderSelected : "transparent"}`,
+                    background: isSelected ? ACCENT.bgSelected : COLORS.defaultChipBg,
+                    color: isSelected ? ACCENT.textSelected : COLORS.defaultChipText,
+                    border: `1px solid ${isSelected ? ACCENT.borderSelected : COLORS.defaultChipBorder}`,
                     fontWeight: isSelected ? 600 : 400,
                   }}
                 >
@@ -307,7 +340,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
               );
             })}
             {filtered.length === 0 && (
-              <span className="font-sejong text-gray-400" style={{ fontSize: 12 }}>
+              <span className="font-sejong" style={{ fontSize: 12, color: COLORS.weakDescription }}>
                 검색 결과 없음
               </span>
             )}
@@ -315,7 +348,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
 
           {selected.length > 0 && (
             <>
-              <p className="font-sejong text-gray-700 mb-2" style={{ fontSize: 12, fontWeight: 500 }}>
+              <p className="font-sejong mb-2" style={{ fontSize: 12, fontWeight: 500, color: COLORS.sectionTitle }}>
                 선택한 {sectionTitle.includes("알레르기") ? "알레르기" : "음식"}
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -329,7 +362,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                       fontSize: 12,
                       padding: "5px 8px 5px 12px",
                       borderRadius: 999,
-                      background: "#FFE5DD",
+                      background: COLORS.selectedChipBg,
                       color: ACCENT.chipText,
                       border: `1px solid ${ACCENT.borderSelected}`,
                       fontWeight: 600,
@@ -357,7 +390,7 @@ function PickerCard({ icon, iconSize = 20, iconBg = "#FCE4E1", accentBorder = "#
                 fontSize: 11,
                 padding: "3px 10px",
                 borderRadius: 999,
-                background: "#FFE5DD",
+                background: COLORS.selectedChipBg,
                 color: ACCENT.chipText,
                 border: `1px solid ${ACCENT.borderSelected}`,
                 fontWeight: 500,
@@ -396,15 +429,23 @@ export default function HealthNote({
   }
 
   return (
-    <div className="mobile-frame flex flex-col" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame flex flex-col" style={{ background: COLORS.appBg }}>
+      <style>
+        {`
+          .health-note-input::placeholder {
+            color: ${COLORS.placeholder};
+            opacity: 1;
+          }
+        `}
+      </style>
       <header
         className="flex items-center justify-between flex-shrink-0"
         style={{
           height: 56,
           paddingInline: 16,
-          background: "rgba(255, 248, 240, 0.92)",
+          background: COLORS.heroCardBg,
           backdropFilter: "blur(8px)",
-          borderBottom: "1px solid rgba(227, 93, 73, 0.12)",
+          borderBottom: `1px solid ${COLORS.divider}`,
         }}
       >
         <button
@@ -417,13 +458,13 @@ export default function HealthNote({
             background: "transparent", cursor: "pointer",
           }}
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={COLORS.mainTitle} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 6l-6 6 6 6" />
           </svg>
         </button>
         <span
           className="font-sejong"
-          style={{ fontSize: 16, fontWeight: 700, color: "#000", letterSpacing: "-0.43px" }}
+          style={{ fontSize: 16, fontWeight: 700, color: COLORS.mainTitle, letterSpacing: "-0.43px" }}
         >
           건강 노트
         </span>
@@ -431,35 +472,38 @@ export default function HealthNote({
 
       <div className="flex-1 overflow-y-auto pb-24 pt-5 space-y-4" style={{ paddingLeft: 19, paddingRight: 19 }}>
         <section
-          className="bg-white relative"
+          className="relative"
           style={{
+            background: COLORS.heroCardBg,
             height: 137,
-            borderRadius: 30,
+            borderRadius: 32,
             padding: "18px 20px",
-            border: "1.5px solid #F2C5BA",
+            border: `1.5px solid ${COLORS.strongBorder}`,
+            boxShadow: `0 8px 18px ${COLORS.cardShadow}`,
           }}
         >
           <div className="flex items-center justify-between h-full gap-3">
             <div className="flex-1 min-w-0 self-center">
               <h2
-                className="font-sejong text-gray-900"
+                className="font-sejong"
                 style={{
-                  fontSize: 16,
-                  fontWeight: 500,
+                  fontSize: 18,
+                  fontWeight: 700,
+                  color: COLORS.mainTitle,
                   letterSpacing: "-0.43px",
                   lineHeight: "21px",
                   marginBottom: 7,
                   wordBreak: "keep-all",
                 }}
               >
-                알레르기와 줄이고 싶은 음식을 관리해요
+                알레르기와 줄이고 싶은 <br />음식을 알려줘!
               </h2>
               <p
-                className="font-sejong text-gray-500"
-                style={{ fontSize: 11, fontWeight: 400, lineHeight: "16px", letterSpacing: "-0.43px" }}
+                className="font-sejong"
+                style={{ fontSize: 11, fontWeight: 400, lineHeight: "16px", letterSpacing: "-0.43px", color: COLORS.descriptionText }}
               >
                 더 건강하고 안전하게<br />
-                미션을 할 수 있도록 골라주세요
+                미션을 할 수 있도록 도와줄게
               </p>
             </div>
             <div className="relative flex-shrink-0" style={{ width: 98, height: 104, marginBottom: -4 }}>
@@ -479,8 +523,8 @@ export default function HealthNote({
               />
               <div
                 aria-hidden="true"
-                className="absolute left-1/2 -translate-x-1/2 rounded-full bg-black/25 blur-[3px]"
-                style={{ bottom: 6, width: 60, height: 6, zIndex: 1 }}
+                className="absolute left-1/2 -translate-x-1/2 rounded-full blur-[3px]"
+                style={{ bottom: 6, width: 60, height: 6, zIndex: 1, background: COLORS.characterShadow }}
               />
             </div>
           </div>
@@ -489,9 +533,11 @@ export default function HealthNote({
         <PickerCard
           icon={iconHealth}
           iconSize={36}
-          iconBg="#FCE4E1"
+          iconBg={COLORS.allergyBg}
+          accentPlusBg={COLORS.allergyBg}
+          accentStroke={COLORS.allergyIcon}
           sectionTitle="알레르기 설정"
-          subtitle="먹으면 몸이 불편해지는 음식이 있다면 알려주세요"
+          subtitle="먹으면 몸이 불편해지는 음식이 있다면 알려줘"
           addLabel="알레르기 항목 추가"
           placeholder="알레르기 검색"
           options={ALLERGEN_OPTIONS}
@@ -503,9 +549,11 @@ export default function HealthNote({
         <PickerCard
           icon={spoon}
           iconSize={36}
-          iconBg="#FCE4E1"
+          iconBg={COLORS.reduceFoodBg}
+          accentPlusBg={COLORS.reduceFoodBg}
+          accentStroke={COLORS.reduceFoodIcon}
           sectionTitle="줄이고 싶은 음식"
-          subtitle="건강한 습관을 위해 줄이고 싶은 음식을 골라주세요"
+          subtitle="건강한 습관을 위해 줄이고 싶은 음식을 골라줘"
           addLabel="줄이고 싶은 음식 추가"
           placeholder="줄이고 싶은 음식 검색"
           options={CAUTION_FOOD_OPTIONS}
@@ -517,8 +565,8 @@ export default function HealthNote({
         <button
           type="button"
           onClick={onSkip}
-          className="block mx-auto font-sejong text-gray-500 hover:text-gray-700 transition pt-1"
-          style={{ fontSize: 12, fontWeight: 300, letterSpacing: "-0.43px" }}
+          className="block mx-auto font-sejong transition pt-1"
+          style={{ fontSize: 12, fontWeight: 300, letterSpacing: "-0.43px", color: COLORS.descriptionText }}
         >
           건너뛰고 나중에 설정할래요
         </button>
@@ -529,21 +577,23 @@ export default function HealthNote({
         style={{
           bottom: 0,
           paddingBottom: "calc(16px + env(safe-area-inset-bottom))",
-          background: "linear-gradient(to top, #FFF8F0 60%, rgba(255,248,240,0))",
+          background: COLORS.appBg,
         }}
       >
         <button
           type="button"
           onClick={handleSave}
           disabled={loading}
-          className={`signup-submit w-full text-white font-sejong shadow-md flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${loading ? "is-loading" : ""}`}
+          className="w-full font-sejong flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
           style={{
             height: 48,
             borderRadius: 999,
             fontSize: 18,
             fontWeight: 400,
             letterSpacing: "-0.43px",
-            background: "#E35D49",
+            background: `linear-gradient(180deg, ${COLORS.primaryStrong} 0%, ${COLORS.primary} 100%)`,
+            boxShadow: `0 8px 18px ${COLORS.buttonShadow}`,
+            color: COLORS.buttonText,
           }}
         >
           {loading && (

@@ -532,7 +532,7 @@ export default function DrawScreen({
 
             <div
               className="flex flex-shrink-0 items-center justify-center"
-              style={{ height: "clamp(190px, 30dvh, 260px)", marginTop: 0 }}
+              style={{ height: "clamp(168px, 28dvh, 260px)", marginTop: "clamp(4px, 1dvh, 10px)" }}
             >
               <RewardBurst compact>
                 <img
@@ -546,7 +546,7 @@ export default function DrawScreen({
             </div>
 
             {reward && (
-              <div className="w-full flex-shrink-0" style={{ marginTop: 48 }}>
+              <div className="w-full flex-shrink-0" style={{ marginTop: "clamp(12px, 5dvh, 48px)" }}>
                 <RewardCard
                   reward={reward}
                   ticketCount={ticketCount}
