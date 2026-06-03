@@ -8,6 +8,7 @@ __pycache__/
 .env.*.local
 node_modules/
 dist/
+frontend/vite-dev*.log
 .DS_Store
 backend/google_credentials.json
 backend/*.db

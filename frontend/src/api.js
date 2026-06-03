@@ -122,6 +122,29 @@ export async function fetchStudentStats(studentId) {
   return res.json();
 }
 
+export async function fetchWeeklySharePrompt(studentId) {
+  const res = await fetch(`/weekly-share/${studentId}`);
+  if (!res.ok) throw new Error("주간 공유 팝업을 불러오지 못했어요.");
+  return res.json();
+}
+
+export async function markWeeklySharePrompt({ studentId, weekStart, action }) {
+  const res = await fetch("/weekly-share/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      week_start: weekStart,
+      action,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "주간 공유 상태를 저장하지 못했어요.");
+  }
+  return res.json();
+}
+
 export async function fetchAppState(studentId) {
   const res = await fetch(`/app-state/${studentId}`);
   if (!res.ok) throw new Error("상태 불러오기 실패");

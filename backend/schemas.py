@@ -79,6 +79,12 @@ class UserFeedbackRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
 
 
+class WeeklySharePromptActionRequest(BaseModel):
+    student_id: int
+    week_start: str = Field(..., min_length=10, max_length=10)
+    action: str = Field(..., pattern=r"^(dismissed|shared)$")
+
+
 class OnboardingPreferencesRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     preferred_activity_keys: list[str] = Field(default_factory=list)

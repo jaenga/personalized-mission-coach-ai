@@ -31,7 +31,9 @@ from database import (
     get_mission_records,
     get_student_by_credentials,
     get_student_mission_db,
+    get_weekly_share_prompt,
     init_db,
+    mark_weekly_share_prompt,
     record_game_run,
     save_mission_review as save_mission_review_db,
     save_profile,
@@ -63,6 +65,7 @@ from schemas import (
     ProfileRequest,
     UserFeedbackRequest,
     VerifyRequest,
+    WeeklySharePromptActionRequest,
 )
 
 
@@ -195,6 +198,21 @@ def submit_user_feedback(body: UserFeedbackRequest):
     if not feedback:
         raise HTTPException(status_code=404, detail="학생 정보를 찾을 수 없어요.")
     return {"ok": True, "feedback": feedback}
+
+
+def get_student_weekly_share_prompt(student_id: int):
+    try:
+        return get_weekly_share_prompt(student_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def update_student_weekly_share_prompt(body: WeeklySharePromptActionRequest):
+    try:
+        prompt = mark_weekly_share_prompt(body.student_id, body.week_start, body.action)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "prompt": prompt}
 
 
 def get_student_app_state(student_id: int):

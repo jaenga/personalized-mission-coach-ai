@@ -18,6 +18,7 @@ from app_services import (
     get_student_mission_records,
     get_mission_preferences,
     get_student_stats,
+    get_student_weekly_share_prompt,
     get_today_mission,
     get_user_profile,
     get_xp_ranking_for,
@@ -32,6 +33,7 @@ from app_services import (
     submit_mission_correction_request,
     submit_user_feedback,
     startup_tasks,
+    update_student_weekly_share_prompt,
     update_student_lesson_progress,
     verify_student,
     delete_student_health_note,
@@ -55,6 +57,7 @@ from schemas import (
     ProfileRequest,
     UserFeedbackRequest,
     VerifyRequest,
+    WeeklySharePromptActionRequest,
 )
 
 
@@ -128,6 +131,16 @@ def post_mission_correction_request(body: MissionCorrectionRequest):
 @app.post("/user-feedback")
 def post_user_feedback(body: UserFeedbackRequest):
     return submit_user_feedback(body)
+
+
+@app.get("/weekly-share/{student_id}")
+def get_weekly_share(student_id: int):
+    return get_student_weekly_share_prompt(student_id)
+
+
+@app.post("/weekly-share/action")
+def post_weekly_share_action(body: WeeklySharePromptActionRequest):
+    return update_student_weekly_share_prompt(body)
 
 
 @app.get("/app-state/{student_id}")
