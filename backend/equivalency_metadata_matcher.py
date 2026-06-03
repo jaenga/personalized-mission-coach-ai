@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
 from typing import Any
 
 from equivalency_numeric import compare_numeric_target
@@ -47,6 +48,30 @@ _ALIASES = {
     "쇼츠": "쇼츠",
     "유튜브": "유튜브",
     "유튭": "유튜브",
+    "음악": "음악",
+    "노래": "음악",
+    "팝송": "음악",
+    "클래식": "음악",
+    "케이팝": "음악",
+    "kpop": "음악",
+    "아이돌": "음악",
+    "아이돌노래": "음악",
+    "아이돌음악": "음악",
+    "듣기": "듣기",
+    "듣": "듣기",
+    "듣고": "듣기",
+    "들어": "듣기",
+    "들었": "듣기",
+    "들었어": "듣기",
+    "들었어요": "듣기",
+    "틀": "듣기",
+    "틀어": "듣기",
+    "틀고": "듣기",
+    "틀었": "듣기",
+    "틀었어": "듣기",
+    "틀었어요": "듣기",
+    "준비": "준비",
+    "준비하": "준비",
     "요거트": "요거트",
     "요구르트": "요거트",
     "빵": "빵",
@@ -68,6 +93,22 @@ _NEGATION_OR_CONDITION_RE = re.compile(
     r"안\s*[가-힣]|"
     r"못\s*[가-힣])"
 )
+_STAIR_RE = re.compile(r"계단")
+_ELEVATOR_OR_ESCALATOR_USED_RE = re.compile(
+    r"(엘리베이터|엘레베이터|엘베|승강기|에스컬레이터|에스컬).{0,8}"
+    r"(탔|탔다|탔어|탐|타버|타고\s*말|타고말|이용|사용|써버)"
+)
+_ELEVATOR_OR_ESCALATOR_AVOID_RE = re.compile(
+    r"(엘리베이터|엘레베이터|엘베|승강기|에스컬레이터|에스컬).{0,8}(안\s*탔|안탔|안\s*타고|안타고|안\s*이용|안이용|대신|말고)"
+)
+_SCREEN_AVOID_NEGATION_RE = re.compile(
+    r"(?:영상|휴대폰\s*영상|화면|TV|티비|유튜브|쇼츠).{0,8}(?:안\s*봤|안봤|안\s*보|안보)"
+)
+_MUSIC_ONLY_RE = re.compile(r"(?:음악|노래|팝송|클래식|케이팝|kpop|아이돌).{0,12}(?:듣|들었|들으|틀)")
+
+_MUSIC_TOKENS = {"음악", "노래", "팝송", "클래식", "케이팝", "kpop", "아이돌", "아이돌노래", "아이돌음악"}
+_LISTEN_PREFIXES = ("듣", "들었", "들어", "틀", "틀어", "틀었")
+_PREPARE_PREFIXES = ("준비",)
 
 
 def _has_negation_or_condition(user_message: str) -> bool:
@@ -78,6 +119,33 @@ def _has_negation_or_condition(user_message: str) -> bool:
 # 미션 설명 부분("점심 먹고 10분 걷기")이 매처에 노이즈로 들어가는 걸 막기 위해
 # 키워드 뒤 phrase만 추출해 매처에 전달한다.
 _REPLACEMENT_SPLIT_RE = re.compile(r"(?:대신에?|말고|대체로?)\s*")
+_REPORT_QUESTION_TAIL_RE = re.compile(
+    r"(?:미션\s*)?(?:성공|실패|인정|괜찮|돼|되나요|맞아|맞나요|맞나)(?:인가요?|이야|임)?\??$"
+)
+
+
+class TimeWindow(str, Enum):
+    BEFORE_EXIT = "before_exit"
+
+
+TIME_CONDITION_TO_WINDOW: dict[str, TimeWindow] = {
+    "외출 전까지": TimeWindow.BEFORE_EXIT,
+}
+
+POST_EXIT_CONTEXT_KEYWORDS = (
+    "버스",
+    "지하철",
+    "택시",
+    "전철",
+    "등교길",
+    "학교 가는 길",
+    "가는 길",
+    "길에서",
+    "밖에서",
+    "밖에 나와",
+    "이미 나와",
+    "외출 후",
+)
 
 
 def _extract_replacement_phrase(user_message: str) -> str:
@@ -90,29 +158,60 @@ def _extract_replacement_phrase(user_message: str) -> str:
         return ""
     matches = list(_REPLACEMENT_SPLIT_RE.finditer(user_message))
     if not matches:
-        return user_message
+        return _REPORT_QUESTION_TAIL_RE.sub("", user_message).strip() or user_message
     tail = user_message[matches[-1].end():].strip()
+    tail = _REPORT_QUESTION_TAIL_RE.sub("", tail).strip()
     return tail or user_message
+
+
+def _parse_time_window(mission: dict | None) -> TimeWindow | None:
+    if not mission:
+        return None
+    time_condition = str(mission.get("time_condition") or "").strip()
+    for marker, window in TIME_CONDITION_TO_WINDOW.items():
+        if marker in time_condition:
+            return window
+    return None
+
+
+def _contains_post_exit_context(user_message: str) -> bool:
+    compact = normalize_equivalency_text(user_message or "")
+    return any(keyword in compact for keyword in POST_EXIT_CONTEXT_KEYWORDS)
 
 
 def _norm_text(text: str) -> str:
     normalized = normalize_equivalency_text(text or "").lower()
+    normalized = re.sub(r"\([^)]*\)", "", normalized)
     normalized = re.sub(r"\s+", "", normalized)
     for src, dst in _ALIASES.items():
         normalized = normalized.replace(src.lower(), dst.lower())
     return normalized
 
 
+def _map_token(token: str) -> str:
+    token = token.strip().lower()
+    if not token:
+        return ""
+    if token in _MUSIC_TOKENS:
+        return "음악"
+    if token.startswith(_LISTEN_PREFIXES):
+        return "듣기"
+    if token.startswith(_PREPARE_PREFIXES):
+        return "준비"
+    return _ALIASES.get(token, token)
+
+
 def _tokens(text: str) -> set[str]:
     raw = normalize_equivalency_text(text or "").lower()
+    raw = re.sub(r"\([^)]*\)", "", raw)
     tokens = set()
     for token in _TOKEN_RE.findall(raw):
         token = re.sub(
-            r"(먹어도|마셔도|들어도|봐도|해도|하고|듣고|먹기|마시기|보기|하기|했어|했니|하면|하는|으로|이랑|랑|와|과|로|만|를|을|은|는|이|가|도)$",
+            r"(먹어도|마셔도|들어도|봐도|해도|하고|먹기|마시기|보기|하기|했어요|했어|했니|하면서|하면|하는|으로|이랑|랑|와|과|로|만|를|을|은|는|이|가|도)$",
             "",
             token,
         )
-        mapped = _ALIASES.get(token, token)
+        mapped = _map_token(token)
         if len(mapped) <= 1 or mapped in _STOPWORDS:
             continue
         tokens.add(mapped)
@@ -174,6 +273,19 @@ def _find_match(
     return None
 
 
+def _find_screen_free_audio_allowed_match(user_message: str, metadata_text: Any) -> str | None:
+    if not (_SCREEN_AVOID_NEGATION_RE.search(user_message or "") and _MUSIC_ONLY_RE.search(user_message or "")):
+        return None
+    metadata_raw = normalize_equivalency_text(str(metadata_text or "")).lower()
+    if not any(word in metadata_raw for word in ("음악 듣기", "노래 듣기", "팝송 듣기", "케이팝", "클래식 듣기", "아이돌 음악")):
+        return None
+    for item in _items(metadata_text):
+        item_text = normalize_equivalency_text(item or "").lower()
+        if any(word in item_text for word in ("음악", "노래", "팝송", "케이팝", "kpop", "클래식", "아이돌")):
+            return item
+    return None
+
+
 def _with_override(judgment: dict, decision: str, reason: str, matched: str, source: str) -> dict:
     updated = dict(judgment or {})
     previous = updated.get("decision")
@@ -192,6 +304,27 @@ def _with_override(judgment: dict, decision: str, reason: str, matched: str, sou
     return updated
 
 
+def _outside_time_window_override(
+    judgment: dict,
+    user_message: str,
+    mission: dict | None,
+) -> dict | None:
+    time_window = _parse_time_window(mission)
+    if time_window is not TimeWindow.BEFORE_EXIT:
+        return None
+    if not _contains_post_exit_context(user_message):
+        return None
+    updated = _with_override(
+        judgment,
+        "approved",
+        "reported behavior happened after the mission time window ended",
+        "outside_time_window_after_exit",
+        "time_condition",
+    )
+    updated["reply"] = "이미 외출한 뒤라면, 이번 미션 시간에는 안 들어가 🙂"
+    return updated
+
+
 def apply_metadata_decision_override(
     judgment: dict,
     user_message: str,
@@ -199,6 +332,10 @@ def apply_metadata_decision_override(
 ) -> dict:
     if not mission:
         return judgment
+
+    time_override = _outside_time_window_override(judgment, user_message, mission)
+    if time_override is not None:
+        return time_override
 
     if str(mission.get("target_metric") or "").strip().lower() == "order":
         return judgment
@@ -227,6 +364,18 @@ def apply_metadata_decision_override(
         allow_numeric_fuzzy=True,
         require_all_tokens=True,
     )
+    if not allowed_match and str(mission.get("target_metric") or "").strip().lower() == "avoid":
+        allowed_match = _find_screen_free_audio_allowed_match(
+            effective_message,
+            mission.get("allowed_substitutes"),
+        )
+    if not allowed_match and str(mission.get("target_metric") or "").strip().lower() == "avoid":
+        allowed_match = _find_match(
+            effective_message,
+            mission.get("allowed_substitutes"),
+            allow_numeric_fuzzy=True,
+            require_all_tokens=False,
+        )
     if not allowed_match:
         return judgment
 

@@ -28,6 +28,7 @@ from app_services import (
     save_mission_review,
     save_mission_preferences,
     save_onboarding_preferences,
+    save_student_optional_info,
     save_user_profile,
     save_student_health_note,
     submit_mission_correction_request,
@@ -55,6 +56,7 @@ from schemas import (
     MissionUiActionResolveRequest,
     OnboardingPreferencesRequest,
     ProfileRequest,
+    StudentInfoRequest,
     UserFeedbackRequest,
     VerifyRequest,
     WeeklySharePromptActionRequest,
@@ -97,6 +99,11 @@ def post_demo_register_student(body: VerifyRequest):
 @app.post("/profile")
 def post_profile(body: ProfileRequest):
     return save_user_profile(body)
+
+
+@app.post("/student-info")
+def post_student_info(body: StudentInfoRequest):
+    return save_student_optional_info(body)
 
 
 @app.get("/profile/{session_id}")

@@ -8,16 +8,18 @@ from starlette.concurrency import run_in_threadpool
 from database import (
     fetch_profile,
     get_pending_mission_ui_action,
+    insert_generated_mission,
     resolve_mission_ui_action,
     save_message,
+    save_generated_mission_assignment,
     save_mission_change_log,
     save_mission_ui_action,
+    save_pending_mission_suggestion,
     upsert_user_memory,
 )
 from executor import ExecResults, execute_adjustment
 from mission_generator import generate_realtime_personalized_mission
 from mission_personalization import (
-    assign_generated_mission_to_today,
     calculate_personalization_profile,
     replace_with_personalized_mission,
 )
@@ -141,6 +143,7 @@ async def create_mission_change_reason_action(
     session_id: str,
     payload: dict,
 ) -> dict:
+    payload = {**payload, "change_state": "collecting_change_reason"}
     row = await run_in_threadpool(
         save_mission_ui_action,
         student_id,
@@ -157,6 +160,7 @@ async def create_mission_dislike_confirm_action(
     session_id: str,
     payload: dict,
 ) -> dict:
+    payload = {**payload, "change_state": "collecting_change_reason"}
     row = await run_in_threadpool(
         save_mission_ui_action,
         student_id,
@@ -173,6 +177,7 @@ async def create_mission_change_method_action(
     session_id: str,
     payload: dict,
 ) -> dict:
+    payload = {**payload, "change_state": "collecting_replacement_condition"}
     row = await run_in_threadpool(
         save_mission_ui_action,
         student_id,
@@ -189,7 +194,11 @@ async def create_replacement_mission_input_action(
     session_id: str,
     payload: dict,
 ) -> dict:
-    payload = {**payload, "retry_count": int(payload.get("retry_count") or 0)}
+    payload = {
+        **payload,
+        "retry_count": int(payload.get("retry_count") or 0),
+        "change_state": "collecting_replacement_condition",
+    }
     row = await run_in_threadpool(
         save_mission_ui_action,
         student_id,
@@ -334,46 +343,64 @@ async def _resolve_personalized_change(student_id: int, payload: dict) -> tuple[
 
 
 async def _resolve_generate_new(student_id: int, payload: dict) -> tuple[str, dict]:
+    return await create_generated_mission_suggestion(student_id, payload)
+
+
+async def create_generated_mission_suggestion(student_id: int, payload: dict) -> tuple[str, dict]:
     waiting = "새 미션을 만들어보고 있어. 잠깐만 기다려줘!"
-    current_mission_id = _current_mission_id(payload)
-    debug: dict = {"generation_status": "started"}
+    debug: dict = {
+        "generation_status": "started",
+        "change_state": "suggestion_pending",
+    }
 
     try:
         profile = await run_in_threadpool(calculate_personalization_profile, student_id)
         generated = await generate_realtime_personalized_mission(profile, max_attempts=2, timeout=80.0)
-        if generated:
-            assigned = await run_in_threadpool(
-                assign_generated_mission_to_today,
-                student_id,
-                generated,
-                current_mission_id,
-                payload.get("source_reason") or "generate_new",
-            )
-            debug = {"generation_status": "validated", "assigned": assigned}
-            if assigned.get("mission_changed") and assigned.get("new_mission"):
-                mission_name = assigned["new_mission"].get("mission_name") or generated.get("mission_name")
-                return f'{waiting}\n\n새 미션을 만들어봤어! 오늘 미션은 "{mission_name}"야.', debug
-            debug["generation_status"] = "assign_failed"
-        else:
+        if not generated:
             debug["generation_status"] = "validation_failed"
-    except Exception as exc:
-        print(f"[UiAction] generate_new failed: {type(exc).__name__}: {exc}")
-        debug = {"generation_status": "exception", "error_type": type(exc).__name__}
+            return f"{waiting}\n\n새 미션 만들기가 잘 안 됐어. 원하는 조건을 조금 더 말해줘!", debug
 
-    fallback_result = await run_in_threadpool(
-        replace_with_personalized_mission,
-        student_id,
-        current_mission_id,
-        {"source_reason": "generate_new_fallback"},
-    )
-    debug["fallback"] = fallback_result
-    if fallback_result.get("mission_changed") and fallback_result.get("new_mission"):
-        mission_name = fallback_result["new_mission"].get("mission_name") or "추천 미션"
-        return (
-            f'{waiting}\n\n새로 만들기는 조금 어려워서, 대신 너한테 잘 맞는 추천 미션으로 바꿨어! '
-            f'오늘 미션은 "{mission_name}"야.'
-        ), debug
-    return f"{waiting}\n\n새 미션 만들기가 잘 안 됐고, 지금 조건에 맞는 추천 미션도 찾지 못했어. 오늘은 현재 미션으로 진행해보자.", debug
+        inserted = await run_in_threadpool(insert_generated_mission, generated)
+        if not inserted:
+            debug["generation_status"] = "insert_failed"
+            return f"{waiting}\n\n새 미션은 떠올렸는데 저장이 잘 안 됐어. 다른 조건으로 한 번만 더 말해줘!", debug
+
+        source_reason = payload.get("source_reason") or "generate_new_suggestion"
+        source_text = payload.get("source_text") or payload.get("requested_text") or source_reason
+        await run_in_threadpool(
+            save_generated_mission_assignment,
+            student_id,
+            generated,
+            inserted["mission_id"],
+            source_reason,
+            "generated_success",
+        )
+        await run_in_threadpool(
+            save_pending_mission_suggestion,
+            student_id,
+            inserted["mission_id"],
+            source_text,
+        )
+
+        mission_name = inserted.get("mission_name") or generated.get("mission_name") or "새 미션"
+        debug.update(
+            {
+                "generation_status": "suggestion_created",
+                "suggested_mission": {
+                    "mission_id": inserted.get("mission_id"),
+                    "mission_name": mission_name,
+                },
+            }
+        )
+        return f'{waiting}\n\n새 미션으로 "{mission_name}"를 만들어봤어! 이 미션으로 바꿀까? 바꾸려면 "응"이라고 말해줘.', debug
+    except Exception as exc:
+        print(f"[UiAction] generate_new suggestion failed: {type(exc).__name__}: {exc}")
+        debug = {
+            "generation_status": "exception",
+            "change_state": "suggestion_pending",
+            "error_type": type(exc).__name__,
+        }
+        return f"{waiting}\n\n새 미션 만들기가 잠깐 막혔어. 원하는 조건을 조금 더 구체적으로 말해줘!", debug
 
 
 async def resolve_mission_ui_action_request(action_id: str, session_id: str, value: str) -> dict:

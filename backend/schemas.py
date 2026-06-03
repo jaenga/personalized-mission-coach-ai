@@ -6,6 +6,8 @@ from typing import Literal
 class VerifyRequest(BaseModel):
     student_name: str = Field(..., min_length=1)
     phone_last4: str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
+    birth_date: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    gender: str | None = None
 
 
 class ProfileRequest(BaseModel):
@@ -16,6 +18,12 @@ class ProfileRequest(BaseModel):
 
 class HeartAdjustRequest(BaseModel):
     delta: int = Field(..., ge=-5, le=5)
+
+
+class StudentInfoRequest(BaseModel):
+    student_id: int
+    birth_date: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    gender: str | None = None
 
 
 class ChatRequest(BaseModel):

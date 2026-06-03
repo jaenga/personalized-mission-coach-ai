@@ -32,13 +32,17 @@ _CANCEL_TARGET_RE = re.compile(
     r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
 )
 _ADJUSTMENT_CANCEL_RE = re.compile(
-    r"(?:미션\s*)?(?:변경|바꾼\s*거|바꾼거|바꾼\s*미션|원래\s*미션)"
+    r"(?:미션\s*)?(?:변경|변경\s*취소|바꾸는\s*거|바꾸려던\s*거|바꾼\s*거|바꾼거|바꾼\s*미션|원래\s*미션)"
     r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
 _HARD_TEMPORAL_RE = re.compile(r"어제|그저께|엊그제|지난번|저번|예전|수요일|월요일|화요일|목요일|금요일|토요일|일요일")
+_HISTORY_LOOKUP_RE = re.compile(
+    r"(?:이번|지난|저번)\s*(?:주|달)[\s\S]{0,24}미션[\s\S]{0,24}(?:얼마나|몇\s*번|몇\s*개|몇\s*회|기록|보여|알려)"
+    r"|미션[\s\S]{0,24}(?:얼마나|몇\s*번|몇\s*개|몇\s*회)[\s\S]{0,16}(?:했는지|했어|했어요|보여|알려)"
+)
 _B_COMMAND_RE = re.compile(
-    r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
+    r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|룰|마감|기록 봐|기록 보"
 )
 _EASIER_RE = re.compile(r"쉬운 걸로|쉽게\s*(?:바꿔|해줘|변경)|쉬운\s*미션")
 _TOO_DIFFICULT_RE = re.compile(r"너무 어려워|어려워서|어려워|어려움|어렵|힘들어|못하겠")
@@ -72,8 +76,8 @@ _SUCCESS_RE = re.compile(
     r"했어(?:요)?|먹었어(?:요)?|먹음|마셨어(?:요)?|마심|운동했어(?:요)?|달렸어(?:요)?|잘했어(?:요)?"
 )
 _NUMERIC_REPORT_RE = re.compile(
-    r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
-    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
+    r"(?:\d+(?:\.\d+)?|반|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
+    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|봉지|병|입|쪽|장|줄|ml|mL|밀리|미리|L|l|리터)"
 )
 _PAST_VERB_RE = re.compile(r"[가-힣]{1,8}(?:었|았|했|겼|켰|렸|웠|냈|봤)어(?:요)?")
 _QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에|한\s*입")
@@ -114,7 +118,7 @@ def _mission_overlap(message: str, mission_name: str) -> bool:
 
 
 def _is_numeric_unit_token(token: str) -> bool:
-    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|세트)?", token or ""))
+    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|바퀴|세트|봉지|병|입|ml|mL|밀리|미리|L|l|리터)?", token or ""))
 
 
 def normalize_b_input(
@@ -136,6 +140,8 @@ def normalize_b_input(
 
     if _CANCEL_NEGATION_RE.search(message):
         return clarify("")
+    if _HISTORY_LOOKUP_RE.search(message):
+        return ok()
     if _HARD_TEMPORAL_RE.search(message):
         return clarify("past_ambiguous")
     if _ADJUSTMENT_CANCEL_RE.search(message):
@@ -204,6 +210,9 @@ def normalize_b_input(
     if mtype == "limit" and has_mission_target and has_negation and not _NUMERIC_REPORT_RE.search(message):
         return success()
 
+    if mtype == "perform" and has_mission_target and has_negation:
+        return fail()
+
     if _EMOTIONAL_RE.search(message) and not _EXPLICIT_FAIL_RE.search(message):
         return ok()
 
@@ -233,11 +242,16 @@ def normalize_b_input(
             return clarify("numeric_ambiguous")
         return clarify("numeric")
 
+    if mtype == "perform" and has_mission_target and meta.success_kw and any(kw in message for kw in meta.success_kw):
+        if meta.numeric:
+            return clarify("numeric_no_count")
+        return success()
+
     if meta and meta.numeric and _SUCCESS_RE.search(message):
         if _QUALIFIER_RE.search(message):
             return clarify("qualifier")
         if has_mission_target and meta.success_kw and any(kw in message for kw in meta.success_kw):
-            return success()
+            return clarify("numeric_no_count")
         return clarify("numeric_no_count")
 
     if _EXPLICIT_SUCCESS_RE.search(message):

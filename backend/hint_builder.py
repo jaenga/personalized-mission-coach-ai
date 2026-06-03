@@ -4,7 +4,7 @@ Hint Builder — 실행 결과를 LLM 시스템 프롬프트용 텍스트로 변
 """
 from __future__ import annotations
 
-from database import _kst_today, get_student_mission_db, get_user_history_db, resolve_mission_query_date
+from database import _kst_today, fetch_messages, get_student_mission_db, get_user_history_db, resolve_mission_query_date
 from category_prompts import get_category_equivalency_prompt
 from equivalency_extractor import extract_user_facts, format_user_facts_hint
 from equivalency_numeric import compare_numeric_target, format_numeric_comparison_hint
@@ -24,15 +24,30 @@ DEADLINE_TEXT = "밤 11시 (23:00)"
 GENERAL_RULE_TEXT = """
 [앱 전체 미션 규칙]
 
+배정·마감
+- 미션은 하루에 1개만 배정돼.
 - 미션은 당일 밤 11시까지 제출해야 해.
-- 사진이나 영상 인증 없이, 채팅으로 완료 여부를 말하면 돼.
-- "성공", "완료", "다 했어요", "했어요", "끝냈어요"는 완료 제출로 볼 수 있어.
-- "못 했어요", "실패했어요", "안 했어요", "까먹었어요"는 미수행/실패 보고로 볼 수 있어.
-- "조금 했어요", "반만 했어요", "거의 했어요"처럼 일부만 한 경우는 성공으로 처리하지 않아.
+- 매일 새 미션이 배정돼.
+
+인증 방법
+- 사진이나 영상 인증은 필요 없어. 채팅으로 결과만 말해주면 인증 끝이야.
+- "성공", "완료", "다 했어요", "했어요", "끝냈어요"라고 말하면 완료 제출로 처리돼.
+- "못 했어요", "실패했어요", "안 했어요", "까먹었어요"라고 말하면 미수행/실패 보고로 처리돼.
+
+판정 기준
+- "조금 했어요", "반만 했어요", "거의 했어요"처럼 부분만 한 경우는 성공으로 인정되지 않아. 끝까지 다 해야 성공이야.
+- 같은 미션을 여러 번 해도 성공은 한 번만 인정돼. 보상이 두 배가 되지는 않아.
+
+실패·재시도 (이 두 규칙을 절대 섞지 마)
+- 페널티/불이익은 없어.
+- 당일 밤 11시 전이면, 실패하거나 인정 안 된 뒤에도 같은 미션을 다시 시도해서 성공으로 제출할 수 있어. 즉 "다시 할 수 있냐"는 질문의 답은 "당일 11시 전이면 가능"이야.
+- 다음 날 새 미션 이야기는 **마감 이후에 어떻게 되냐**는 질문에만 해. "다시 할 수 있냐"는 질문에는 "다음 날 새 미션 받게 돼"라고 답하지 마.
+
+기타
 - 미션이 너무 어렵거나 안전상 하기 힘들면, 다른 미션이나 쉬운 미션으로 바꿔 달라고 요청할 수 있어.
 - 아프거나 다쳤거나 위험한 상황이면 미션보다 안전이 먼저야.
 
-아이에게 답할 때는 위 내용을 전부 나열하지 말고, 질문과 관련된 규칙만 2~3문장으로 쉽게 설명해.
+아이에게 답할 때는 위 내용을 전부 나열하지 말고, 질문과 관련된 규칙만 2~3문장으로 쉽게 설명해. 위 [자주 묻는 질문 → 정답]에 해당하면 그 정답대로만 답해.
 """.strip()
 
 _FN_LABELS = {
@@ -226,7 +241,24 @@ def build_equivalency_hint(student_id: int, fn_args: dict) -> str:
     return "\n".join(lines)
 
 
-def build_equivalency_judge_prompt(student_id: int, fn_args: dict, user_message: str = "") -> str | None:
+def _get_recent_user_texts(session_id: str, exclude_message: str, limit: int = 6) -> list[str]:
+    """최근 세션 메시지에서 유저 발화만 추출 (현재 메시지 제외, 오래된 순)."""
+    try:
+        messages = fetch_messages(session_id, limit=limit)
+    except Exception:
+        return []
+    return [
+        m["content"] for m in messages
+        if m["role"] == "user" and m["content"] != exclude_message
+    ]
+
+
+def build_equivalency_judge_prompt(
+    student_id: int,
+    fn_args: dict,
+    user_message: str = "",
+    session_id: str | None = None,
+) -> str | None:
     """판정용 LLM 시스템 프롬프트 구성. 미션 없으면 None 반환."""
     today = _kst_today()
     mission = get_student_mission_db(student_id, today)
@@ -250,11 +282,33 @@ def build_equivalency_judge_prompt(student_id: int, fn_args: dict, user_message:
     if metadata_block:
         lines.append("")
         lines.append(metadata_block)
+
+    # 현재 메시지에서 facts/numeric 추출. 없으면 세션 직전 발화를 맥락으로 활용.
+    context_text = user_message
     facts_block = format_user_facts_hint(extract_user_facts(user_message))
+    numeric_block = format_numeric_comparison_hint(compare_numeric_target(user_message, mission))
+
+    if not facts_block and not numeric_block and session_id:
+        recent_texts = _get_recent_user_texts(session_id, exclude_message=user_message)
+        if recent_texts:
+            context_text = " ".join(recent_texts[-3:])
+            facts_block = format_user_facts_hint(extract_user_facts(context_text))
+            numeric_block = format_numeric_comparison_hint(compare_numeric_target(context_text, mission))
+            lines.append("")
+            lines.append("[이전 대화 맥락]")
+            lines.append(
+                "학생이 이 질문 직전 발화에서 언급한 내용: "
+                + " / ".join(recent_texts[-3:])
+            )
+            lines.append(
+                "위 내용을 참고해 수행 여부를 판단해라. "
+                "현재 메시지가 '성공이야?', '인정돼?' 같은 후속 확인 질문이면 "
+                "이전 발화의 활동 정보를 기준으로 판정해라."
+            )
+
     if facts_block:
         lines.append("")
         lines.append(facts_block)
-    numeric_block = format_numeric_comparison_hint(compare_numeric_target(user_message, mission))
     if numeric_block:
         lines.append("")
         lines.append(numeric_block)
@@ -286,6 +340,8 @@ def build_equivalency_result_hint(judgment: dict) -> str:
         "",
         "위 판정 결과를 바꾸지 말고, 아이에게 보여줄 최종 답변만 자연스럽게 써줘.",
         "토미 말투처럼 친구에게 말하듯 부드럽고 따뜻하게 말해 반말로, 1~2문장으로 짧게 답해.",
+        "답변을 매번 '응,'으로 시작하지 마. '좋아', '그건 괜찮아', '그렇게 해도 돼', '이번엔 어려워'처럼 상황에 맞게 자연스럽게 바꿔 말해.",
+        "같은 구조의 문장만 반복하지 말고, 사용자가 말한 핵심 행동이나 장소·시간을 짧게 반영해.",
         "DB 저장/기록/제출이 완료됐다고 말하지 마.",
         "판정과 반대로 말하지 마. approved가 아니면 인정됐다고 말하지 마.",
         "judge_reply가 있으면 그 의미를 최우선으로 유지하고, 없는 사실을 덧붙이지 마.",
@@ -303,7 +359,10 @@ def build_equivalency_result_hint(judgment: dict) -> str:
     ])
 
     if decision == "approved":
-        lines.append("대체 수행이 인정 가능한 경우야. 따뜻하게 괜찮다고 한 마디만 하고 끝내. 추가 확인 질문은 절대 하지 마.")
+        lines.extend([
+            "대체 수행이 인정 가능한 경우야. 따뜻하게 괜찮다고 한 마디만 하고 끝내. 추가 확인 질문은 절대 하지 마.",
+            "승인 답변 예시 톤: '좋아, 운동장에서 걸어도 미션으로 볼 수 있어~', '그렇게 해도 괜찮아. 핵심은 점심 뒤에 걷는 거야.', '학교 계단으로 해도 돼~ 올라가는 걸로만 해보자.'",
+        ])
     elif decision == "clarify":
         lines.append("정보가 부족한 경우야. clarify_question이 있으면 그 질문 하나만 부드럽게 물어봐.")
     else:
@@ -329,27 +388,13 @@ def build_mission_info_hint(student_id: int, fn_args: dict) -> str:
     if query_type == "deadline":
         return f"아이가 제출 마감 시간을 물어봤어. 마감은 {DEADLINE_TEXT}이야. 친절하게 안내해줘."
     if query_type == "general_rule":
-        mission = get_student_mission_db(student_id, _kst_today()) if student_id is not None else None
-        if mission:
-            lines = [
-                "아이가 오늘 미션의 성공 기준이나 수행 조건을 물어봤어.",
-                "앱 전체 규칙보다 아래 오늘 미션 정보를 우선해서 답해.",
-                "질문과 관련된 조건만 1~2문장으로 짧게 말해.",
-                "사진이나 영상 인증 이야기는 사용자가 묻지 않았으면 하지 마.",
-                "",
-                f"미션명: {mission.get('mission_name', '')}",
-            ]
-            if mission.get("mission_rule"):
-                lines.append(f"수행 규칙: {mission['mission_rule']}")
-            metadata_block = _format_mission_metadata(mission)
-            if metadata_block:
-                lines.append("")
-                lines.append(metadata_block)
-            lines.append("")
-            lines.append("예: 목표가 50회인데 아이가 30회를 물으면 30회로는 부족하고 50회를 해야 한다고 말한다.")
-            lines.append("예: 계단 미션의 기준을 물으면 몇 층/몇 분/어떤 행동인지 오늘 미션 규칙에 있는 기준만 말한다.")
-            return "\n".join(lines)
-        return f"아이가 앱 규칙을 물어봤어. 아래 규칙을 친절하게 안내해줘.\n\n{GENERAL_RULE_TEXT}"
+        return "\n".join([
+            "아이가 앱 전반 규칙(인증·제출·판정·평가·재시도 등)을 물어봤어.",
+            "오늘 미션 내용으로 새지 말고 [앱 전체 규칙]만 보고 답해.",
+            "질문과 관련된 내용만 2~3문장으로 짧게 답하고, 관련 없는 규칙은 나열하지 마.",
+            "",
+            GENERAL_RULE_TEXT,
+        ])
 
     target_date = fn_args.get("target_date", "today")
     mission_date = resolve_mission_query_date(target_date)

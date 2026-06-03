@@ -15,14 +15,14 @@ UPDATE demo_mission SET
 WHERE order_no = 1;
 
 UPDATE demo_mission SET
-    success_criteria    = '엘리베이터 대신 계단으로 최소 3층 이상 올라가기',
-    strict_requirements = '계단 이용, 최소 3층 이상, 올라가는 동작 중심',
-    target_metric       = 'count',
-    target_value        = '3',
-    target_unit         = '층',
+    success_criteria    = '엘리베이터나 에스컬레이터 대신 계단 이용하기',
+    strict_requirements = '계단 이용',
+    target_metric       = NULL,
+    target_value        = NULL,
+    target_unit         = NULL,
     time_condition      = '제한 없음',
-    allowed_substitutes = '학교 계단 3층 이상 오르기, 집 계단을 반복해서 총 3층 이상 오르기, 건물 계단 3층 이상 오르기, 낮은 건물 계단을 여러 번 올라 총 3층 이상 채우기, 엘리베이터 대신 계단으로 한 층씩 여러 번 올라가기',
-    denied_substitutes  = '엘리베이터 이용, 에스컬레이터 이용, 내려가기만 하기, 3층 미만'
+    allowed_substitutes = '계단으로 걷기, 계단 이용하기, 계단으로 올라가기, 엘리베이터 대신 계단 이용하기, 에스컬레이터 대신 계단 이용하기',
+    denied_substitutes  = '엘리베이터 이용, 에스컬레이터 이용'
 WHERE order_no = 2;
 
 UPDATE demo_mission SET
@@ -76,7 +76,7 @@ UPDATE demo_mission SET
     target_value        = '10',
     target_unit         = '분',
     time_condition      = '제한 없음',
-    allowed_substitutes = '좋아하는 노래에 맞춰 춤 10분, 실내 에어로빅 10분, 음악 틀고 율동 10분',
+    allowed_substitutes = '좋아하는 노래에 맞춰 춤 10분, 발레 10분, 댄스 10분, 무용 10분, 실내 에어로빅 10분, 음악 틀고 율동 10분',
     denied_substitutes  = '노래만 듣기, 영상만 보기, 앉아서 리듬만 타기, 10분 미만'
 WHERE order_no = 7;
 
