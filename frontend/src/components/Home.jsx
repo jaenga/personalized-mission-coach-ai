@@ -12,6 +12,7 @@ import heart from "../assets/tomato/_shared/heart.png";
 import ticket from "../assets/tomato/_shared/ticket.png";
 import check from "../assets/tomato/home/check.png";
 import flag from "../assets/tomato/home/flag.png";
+import { fetchMissionRecords, submitMissionCorrectionRequest } from "../api.js";
 
 const TOMI_HOME_LINES = [
   "오늘도 한 걸음만 같이 가보자!",
@@ -163,6 +164,23 @@ function ymd(date) {
   return `${y}-${m}-${d}`;
 }
 
+function monthRange(year, month) {
+  return {
+    from: ymd(new Date(year, month, 1)),
+    to: ymd(new Date(year, month + 1, 1)),
+  };
+}
+
+function formatDateKor(dateText) {
+  const [, m, d] = String(dateText || "").split("-");
+  return m && d ? `${Number(m)}월 ${Number(d)}일` : dateText;
+}
+
+function resultLabel(result) {
+  if (result === "unsubmitted") return "미제출";
+  return result === "success" || result === "completed" ? "성공" : "실패";
+}
+
 function buildMonthMatrix(year, month /* 0-indexed */) {
   const first = new Date(year, month, 1);
   // 월요일 시작: 일요일=0 → 6, 월=1 → 0, 화=2 → 1 ...
@@ -189,7 +207,7 @@ function buildWeek(today) {
 
 const WEEK_LABELS_MON = ["월", "화", "수", "목", "금", "토", "일"];
 
-function MonthCalendar({ year, month, successSet, today, onPrev, onNext }) {
+function MonthCalendar({ year, month, successSet, today, onPrev, onNext, onDateClick }) {
   const cells = useMemo(() => buildMonthMatrix(year, month), [year, month]);
   const todayKey = ymd(today);
   return (
@@ -233,10 +251,19 @@ function MonthCalendar({ year, month, successSet, today, onPrev, onNext }) {
           const isToday = key === todayKey;
           const success = successSet.has(key);
           return (
-            <div
+            <button
+              type="button"
               key={key}
               className="flex flex-col items-center justify-center"
-              style={{ height: 36 }}
+              onClick={() => onDateClick?.(key)}
+              aria-label={`${date.getDate()}일 미션 기록 보기`}
+              style={{
+                height: 36,
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                cursor: "pointer",
+              }}
             >
               <div
                 className="flex items-center justify-center"
@@ -262,7 +289,7 @@ function MonthCalendar({ year, month, successSet, today, onPrev, onNext }) {
                   <span>{date.getDate()}</span>
                 )}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -326,8 +353,220 @@ function WeekStrip({ today, successSet }) {
   );
 }
 
+function MissionCorrectionModal({
+  record,
+  selectedDate,
+  recordsLoadError,
+  selectedResult,
+  message,
+  loading,
+  error,
+  submitted,
+  onSelectResult,
+  onMessageChange,
+  onClose,
+  onSubmit,
+}) {
+  if (!record && !selectedDate) return null;
+  const hasMission = !!record;
+  const hasRecordsLoadError = !hasMission && !!recordsLoadError;
+  const normalizedCurrent = record?.result === "completed" ? "success" : record?.result === "failure" ? "fail" : record?.result;
+  const normalizedSelected = selectedResult === "failure" ? "fail" : selectedResult;
+  const sameResultSelected =
+    hasMission &&
+    normalizedSelected !== "other" &&
+    normalizedCurrent !== "unsubmitted" &&
+    normalizedCurrent === normalizedSelected;
+  const sameResultMessage =
+    normalizedCurrent === "success"
+      ? "이미 성공으로 기록되어 있어요!"
+      : "이미 실패로 기록되어 있어요!";
+  const canSubmit =
+    !loading &&
+    selectedResult &&
+    !sameResultSelected &&
+    (selectedResult !== "other" || message.trim().length > 0);
+
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center"
+      style={{ zIndex: 60, padding: 24, background: "rgba(42, 30, 24, 0.28)" }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="font-sejong"
+        style={{
+          width: "100%",
+          maxWidth: 318,
+          borderRadius: 24,
+          background: "#FFF8F0",
+          border: "1px solid rgba(227, 93, 73, 0.32)",
+          boxShadow: "0 16px 36px rgba(80, 60, 40, 0.18)",
+          padding: "20px 18px 16px",
+          letterSpacing: "-0.43px",
+        }}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p style={{ fontSize: 13, color: "#E35D49", fontWeight: 700 }}>
+              {formatDateKor(record?.target_date ?? selectedDate)} 기록
+            </p>
+            <h2
+              className="mt-1"
+              style={{ fontSize: 18, fontWeight: 700, color: "#1f1f1f", lineHeight: "25px", wordBreak: "keep-all" }}
+            >
+              {hasMission ? record.mission_name : hasRecordsLoadError ? "기록을 불러오지 못했어요" : "미션이 없어요"}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="닫기"
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: 999,
+              border: "none",
+              background: "rgba(227, 93, 73, 0.1)",
+              color: "#A05F50",
+              fontSize: 20,
+              lineHeight: "30px",
+              padding: 0,
+              flexShrink: 0,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {!hasMission ? (
+          <div className="mt-5 text-center">
+            <p style={{ fontSize: 16, fontWeight: 700, color: "#1f1f1f" }}>
+              {hasRecordsLoadError ? "잠시 후 다시 확인해주세요" : "이 날은 배정된 미션이 없어요"}
+            </p>
+            <p className="mt-2" style={{ fontSize: 13, lineHeight: "20px", color: "#6f6862", wordBreak: "keep-all" }}>
+              {hasRecordsLoadError
+                ? recordsLoadError
+                : "기록을 바꿀 미션이 없어서 수정 요청을 보낼 수 없어요."}
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 w-full font-sejong"
+              style={{ height: 42, borderRadius: 999, border: "none", background: "#E35D49", color: "#FFFFFF", fontSize: 14, fontWeight: 700 }}
+            >
+              확인
+            </button>
+          </div>
+        ) : submitted ? (
+          <div className="mt-5 text-center">
+            <p style={{ fontSize: 16, fontWeight: 700, color: "#1f1f1f" }}>요청을 보냈어요</p>
+            <p className="mt-2" style={{ fontSize: 13, lineHeight: "20px", color: "#6f6862", wordBreak: "keep-all" }}>
+              관리자가 확인한 뒤 기록을 살펴볼게요.
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 w-full font-sejong"
+              style={{ height: 42, borderRadius: 999, border: "none", background: "#E35D49", color: "#FFFFFF", fontSize: 14, fontWeight: 700 }}
+            >
+              확인
+            </button>
+          </div>
+        ) : (
+          <>
+            <div
+              className="mt-4"
+              style={{
+                padding: "12px 14px",
+                borderRadius: 18,
+                background: "rgba(255,255,255,0.72)",
+                border: "1px solid rgba(227, 93, 73, 0.18)",
+              }}
+            >
+              <span style={{ fontSize: 12, color: "#75726e" }}>현재 기록</span>
+              <p className="mt-1" style={{ fontSize: 16, fontWeight: 700, color: "#1f1f1f" }}>
+                {resultLabel(record.result)}
+              </p>
+            </div>
+
+            <p className="mt-4" style={{ fontSize: 15, fontWeight: 700, color: "#1f1f1f" }}>
+              어떻게 바꿀까요?
+            </p>
+            <div className="mt-3 flex flex-col gap-2">
+              {[
+                ["success", "성공으로 바꿔주세요"],
+                ["fail", "실패로 바꿔주세요"],
+                ["other", "기타 / 직접 작성"],
+              ].map(([value, label]) => {
+                const selected = selectedResult === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => onSelectResult(value)}
+                    className="font-sejong text-left"
+                    style={{
+                      minHeight: 42,
+                      borderRadius: 16,
+                      border: selected ? "1.5px solid #E35D49" : "1px solid rgba(227, 93, 73, 0.24)",
+                      background: selected ? "rgba(227, 93, 73, 0.1)" : "#FFFFFF",
+                      color: selected ? "#E35D49" : "#1f1f1f",
+                      padding: "0 14px",
+                      fontSize: 14,
+                      fontWeight: selected ? 700 : 400,
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <textarea
+              value={message}
+              onChange={(e) => onMessageChange(e.target.value)}
+              placeholder="필요하면 내용을 적어주세요"
+              className="mt-3 w-full font-sejong outline-none"
+              style={{
+                height: 78,
+                resize: "none",
+                borderRadius: 16,
+                border: "1px solid rgba(227, 93, 73, 0.24)",
+                background: "#FFFFFF",
+                padding: "12px 14px",
+                fontSize: 13,
+                lineHeight: "19px",
+                color: "#1f1f1f",
+              }}
+            />
+
+            {sameResultSelected && (
+              <p className="mt-2" style={{ fontSize: 12, color: "#E35D49" }}>
+                {sameResultMessage}
+              </p>
+            )}
+            {error && <p className="mt-2" style={{ fontSize: 12, color: "#E35D49" }}>{error}</p>}
+
+            <button
+              type="button"
+              onClick={onSubmit}
+              disabled={!canSubmit}
+              className="mt-4 w-full font-sejong disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ height: 42, borderRadius: 999, border: "none", background: "#E35D49", color: "#FFFFFF", fontSize: 14, fontWeight: 700 }}
+            >
+              {loading ? "보내는 중..." : "요청 보내기"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────
-   BottomNav — 5개 메뉴 (홈, 코치, 배움, 랭킹, 설정)
+   BottomNav — 5개 메뉴 (홈, 토미, 배움, 랭킹, 설정)
    ───────────────────────────────────────────────────────── */
 function HomeIcon({ active }) {
   const stroke = active ? "#E35D49" : "#A6A29D";
@@ -383,7 +622,7 @@ function GearIcon({ active }) {
 
 const NAV_ITEMS = [
   { key: "home",     label: "홈",   Icon: HomeIcon },
-  { key: "coach",    label: "코치", Icon: ChatIcon },
+  { key: "coach",    label: "토미", Icon: ChatIcon },
   { key: "learn",    label: "배움", Icon: BookIcon },
   { key: "rank",     label: "랭킹", Icon: TrophyIcon },
   { key: "settings", label: "설정", Icon: GearIcon },
@@ -442,6 +681,7 @@ export function BottomNav({ active = "home", onChange }) {
    Home — 메인 페이지
    ───────────────────────────────────────────────────────── */
 export default function Home({
+  studentId,
   studentName = "민준",
   level = 3,
   currentXp = 12,
@@ -462,6 +702,14 @@ export default function Home({
   const [tomiFacePressed, setTomiFacePressed] = useState(false);
   const [tomiSpeechVisible, setTomiSpeechVisible] = useState(false);
   const [tomiSpeechText, setTomiSpeechText] = useState("");
+  const [missionRecords, setMissionRecords] = useState([]);
+  const [missionRecordsError, setMissionRecordsError] = useState("");
+  const [selectedRecordDate, setSelectedRecordDate] = useState(null);
+  const [correctionResult, setCorrectionResult] = useState("");
+  const [correctionMessage, setCorrectionMessage] = useState("");
+  const [correctionLoading, setCorrectionLoading] = useState(false);
+  const [correctionError, setCorrectionError] = useState("");
+  const [correctionSubmitted, setCorrectionSubmitted] = useState(false);
   const tomiFacePressTimerRef = useRef(null);
   const tomiFaceTalkTimerRef = useRef(null);
   const tomiSpeechTypeTimerRef = useRef(null);
@@ -485,6 +733,14 @@ export default function Home({
     return `${mon.getMonth() + 1}월 ${mon.getDate()}일~${sun.getMonth() + 1}월 ${sun.getDate()}일`;
   }, [today]);
   const successSet = useMemo(() => new Set(successDates), [successDates]);
+  const recordMap = useMemo(() => {
+    const map = new Map();
+    missionRecords.forEach((record) => {
+      if (record?.target_date) map.set(record.target_date, record);
+    });
+    return map;
+  }, [missionRecords]);
+  const selectedRecord = selectedRecordDate ? recordMap.get(selectedRecordDate) : null;
 
   const missionFailed = todayMission.resultType === "fail" || todayMission.resultType === "failure";
   const missionPct = todayMission.done || missionFailed ? 1 : 0;
@@ -500,6 +756,33 @@ export default function Home({
   useEffect(() => {
     setMissionFlipped(false);
   }, [todayMission.title, todayMission.description]);
+
+  useEffect(() => {
+    if (!studentId) {
+      setMissionRecords([]);
+      setMissionRecordsError("");
+      return;
+    }
+    const { from, to } = monthRange(viewYM.year, viewYM.month);
+    let cancelled = false;
+    setMissionRecordsError("");
+    fetchMissionRecords(studentId, from, to)
+      .then((records) => {
+        if (!cancelled) {
+          setMissionRecords(Array.isArray(records) ? records : []);
+          setMissionRecordsError("");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setMissionRecords([]);
+          setMissionRecordsError(err.message || "미션 기록을 불러오지 못했어요. 네트워크 상태를 확인한 뒤 다시 열어주세요.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, viewYM.year, viewYM.month]);
 
   useEffect(() => {
     return () => {
@@ -556,6 +839,48 @@ export default function Home({
         }, 2300);
       }
     }, 55);
+  }
+
+  function openCorrection(recordDate) {
+    setSelectedRecordDate(recordDate);
+    setCorrectionResult("");
+    setCorrectionMessage("");
+    setCorrectionError("");
+    setCorrectionSubmitted(false);
+  }
+
+  function closeCorrection() {
+    setSelectedRecordDate(null);
+    setCorrectionResult("");
+    setCorrectionMessage("");
+    setCorrectionError("");
+    setCorrectionSubmitted(false);
+  }
+
+  async function handleCorrectionSubmit() {
+    if (!studentId || !selectedRecord || !correctionResult) return;
+    if (correctionResult === "other" && correctionMessage.trim().length === 0) {
+      setCorrectionError("내용을 적어주세요.");
+      return;
+    }
+    setCorrectionLoading(true);
+    setCorrectionError("");
+    try {
+      await submitMissionCorrectionRequest({
+        studentId,
+        checkinId: selectedRecord.checkin_id,
+        missionId: selectedRecord.mission_id,
+        targetDate: selectedRecord.target_date,
+        currentResult: selectedRecord.result,
+        requestedResult: correctionResult,
+        message: correctionMessage,
+      });
+      setCorrectionSubmitted(true);
+    } catch (err) {
+      setCorrectionError(err.message);
+    } finally {
+      setCorrectionLoading(false);
+    }
   }
 
   return (
@@ -1094,6 +1419,7 @@ export default function Home({
               month={viewYM.month}
               successSet={successSet}
               today={today}
+              onDateClick={openCorrection}
               onPrev={() =>
                 setViewYM(({ year, month }) =>
                   month === 0 ? { year: year - 1, month: 11 } : { year, month: month - 1 }
@@ -1282,6 +1608,20 @@ export default function Home({
       </div>
 
       <BottomNav active={activeTab} onChange={handleNav} />
+      <MissionCorrectionModal
+        record={selectedRecord}
+        selectedDate={selectedRecordDate}
+        recordsLoadError={missionRecordsError}
+        selectedResult={correctionResult}
+        message={correctionMessage}
+        loading={correctionLoading}
+        error={correctionError}
+        submitted={correctionSubmitted}
+        onSelectResult={setCorrectionResult}
+        onMessageChange={setCorrectionMessage}
+        onClose={closeCorrection}
+        onSubmit={handleCorrectionSubmit}
+      />
     </div>
   );
 }

@@ -483,7 +483,98 @@ function stripMarkdown(text) {
 
 const DEBUG_MODE = import.meta.env.VITE_PIPELINE_DEBUG === "true";
 
-function AssistantMessage({ text, streaming = false, selected = false, onSelect }) {
+function TomiProfileModal({ onClose }) {
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center"
+      style={{ zIndex: 70, padding: 24, background: "rgba(42, 30, 24, 0.28)" }}
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="font-sejong text-center"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 318,
+          borderRadius: 24,
+          background: "#FFF8F0",
+          border: "1px solid rgba(227, 93, 73, 0.28)",
+          boxShadow: "0 16px 36px rgba(80, 60, 40, 0.18)",
+          padding: "22px 20px 18px",
+          letterSpacing: "-0.43px",
+        }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="닫기"
+          className="absolute"
+          style={{
+            top: 14,
+            right: 14,
+            width: 30,
+            height: 30,
+            borderRadius: 999,
+            border: "none",
+            background: "rgba(227, 93, 73, 0.1)",
+            color: "#A05F50",
+            fontSize: 20,
+            lineHeight: "30px",
+            padding: 0,
+          }}
+        >
+          ×
+        </button>
+
+        <div
+          className="mx-auto flex items-center justify-center"
+          style={{
+            width: 92,
+            height: 92,
+            borderRadius: "50%",
+            background: "#FFFFFF",
+            border: "1px solid rgba(227, 93, 73, 0.18)",
+            boxShadow: "0 8px 18px rgba(80, 60, 40, 0.08)",
+          }}
+        >
+          <img src={tomatoChat} alt="토미 프로필 사진" draggable="false" style={{ width: 72, height: 72, objectFit: "contain" }} />
+        </div>
+
+        <h2 className="mt-4" style={{ fontSize: 21, fontWeight: 800, color: "#1f1f1f", lineHeight: "27px" }}>
+          토미
+        </h2>
+        <p className="mt-1" style={{ fontSize: 13, fontWeight: 700, color: "#E35D49" }}>
+          건강 습관 코치
+        </p>
+        <p className="mt-4" style={{ fontSize: 14, lineHeight: "21px", color: "#5f5751", wordBreak: "keep-all" }}>
+          작은 미션을 같이 해내고, 기록을 확인해주고, 어려운 날에는 다시 시작할 수 있게 도와주는 친구예요.
+        </p>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          {["# 미션 기록", "# 습관 응원", "# 규칙 확인", "# 기록 조회"].map((item) => (
+            <span
+              key={item} 
+              style={{
+                borderRadius: 999,
+                background: "#FFFFFF",
+                border: "1px solid rgba(227, 93, 73, 0.18)",
+                padding: "8px 10px",
+                fontSize: 12,
+                color: "#6f6862",
+              }}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssistantMessage({ text, streaming = false, selected = false, onSelect, onAvatarClick }) {
   const showTyping = streaming && !String(text || "").trim();
   const displayText = stripMarkdown(text);
   const clickable = DEBUG_MODE && !streaming && !!onSelect;
@@ -493,13 +584,24 @@ function AssistantMessage({ text, streaming = false, selected = false, onSelect 
       style={{ maxWidth: "82%", cursor: clickable ? "pointer" : "default" }}
       onClick={clickable ? onSelect : undefined}
     >
-      <img
-        src={tomatoChat}
-        alt=""
-        draggable="false"
-        className="select-none pointer-events-none"
-        style={{ width: 36, height: 36, objectFit: "contain", flexShrink: 0 }}
-      />
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAvatarClick?.();
+        }}
+        aria-label="토미 프로필 보기"
+        className="select-none transition-transform active:scale-95"
+        style={{ width: 36, height: 36, padding: 0, border: "none", background: "transparent", cursor: "pointer", flexShrink: 0 }}
+      >
+        <img
+          src={tomatoChat}
+          alt=""
+          draggable="false"
+          className="pointer-events-none"
+          style={{ width: 36, height: 36, objectFit: "contain" }}
+        />
+      </button>
       <div
         className="font-sejong"
         style={{
@@ -671,6 +773,7 @@ export default function ChatScreen({
   const [localMessages, setLocalMessages] = useState(initialMessages);
   const [input, setInput] = useState("");
   const [faqOpen, setFaqOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [missionOpen, setMissionOpen] = useState(readMissionHeaderOpen);
   const scrollRef = useRef(null);
   const messages = backendMessages
@@ -820,6 +923,7 @@ export default function ChatScreen({
                 streaming={m.streaming}
                 selected={DEBUG_MODE && selectedDebugId === m.id}
                 onSelect={DEBUG_MODE ? () => onSelectDebug?.(m.id, m.debug) : undefined}
+                onAvatarClick={() => setProfileOpen(true)}
               />
               {m.ui_action?.buttons?.length > 0 && (
                 <div className="flex flex-wrap" style={{ gap: 6, paddingLeft: 44 }}>
@@ -854,9 +958,11 @@ export default function ChatScreen({
           )
         )}
         {loading && messages[messages.length - 1]?.role !== "assistant" && (
-          <AssistantMessage text="" streaming />
+          <AssistantMessage text="" streaming onAvatarClick={() => setProfileOpen(true)} />
         )}
       </div>
+
+      {profileOpen && <TomiProfileModal onClose={() => setProfileOpen(false)} />}
 
       {/* 하단 입력바 */}
       <div className="absolute left-0 right-0" style={{ bottom: 0 }}>

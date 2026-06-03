@@ -23,4 +23,7 @@ backend/data/raw/*
 !backend/data/raw/.gitkeep
 backend/data/processed/*
 !backend/data/processed/.gitkeep
+
+# Regression test outputs
+backend/data/regression/results/
 .claude/

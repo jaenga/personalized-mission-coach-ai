@@ -1,4 +1,6 @@
 from pydantic import BaseModel, Field
+from datetime import date
+from typing import Literal
 
 
 class VerifyRequest(BaseModel):
@@ -61,6 +63,22 @@ class MissionReviewRequest(BaseModel):
     comment: str | None = None
 
 
+class MissionCorrectionRequest(BaseModel):
+    student_id: int
+    checkin_id: int | None = None
+    mission_id: int
+    target_date: date
+    current_result: Literal["success", "failure", "completed", "fail", "unsubmitted"]
+    requested_result: Literal["success", "failure", "fail", "other"]
+    message: str | None = Field(None, max_length=1000)
+
+
+class UserFeedbackRequest(BaseModel):
+    student_id: int
+    feedback_type: Literal["app_feedback", "bug_report", "inquiry", "other"]
+    message: str = Field(..., min_length=1, max_length=2000)
+
+
 class WeeklySharePromptActionRequest(BaseModel):
     student_id: int
     week_start: str = Field(..., min_length=10, max_length=10)
@@ -72,6 +90,12 @@ class OnboardingPreferencesRequest(BaseModel):
     preferred_activity_keys: list[str] = Field(default_factory=list)
     disliked_activity_keys: list[str] = Field(default_factory=list)
     restrictions: list[str] = Field(default_factory=list)
+
+
+class MissionPreferencesRequest(BaseModel):
+    student_id: int
+    preferred_activity_keys: list[str] = Field(default_factory=list)
+    disliked_activity_keys: list[str] = Field(default_factory=list)
 
 
 class UiActionButton(BaseModel):

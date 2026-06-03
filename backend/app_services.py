@@ -1,4 +1,5 @@
 from fastapi import BackgroundTasks, HTTPException
+from datetime import datetime
 
 from activity_keys import normalize_activity_key
 from database import (
@@ -11,7 +12,9 @@ from database import (
     claim_draw_reward,
     complete_lesson_quiz,
     create_chat_session,
+    create_mission_correction_request,
     create_demo_student,
+    create_user_feedback,
     delete_messages,
     delete_student_completely,
     fetch_messages,
@@ -22,8 +25,10 @@ from database import (
     fetch_profile,
     delete_health_note,
     get_health_note,
+    get_activity_preferences,
     get_latest_chat_session,
     get_success_summary,
+    get_mission_records,
     get_student_by_credentials,
     get_student_mission_db,
     get_weekly_share_prompt,
@@ -32,6 +37,7 @@ from database import (
     record_game_run,
     save_mission_review as save_mission_review_db,
     save_profile,
+    replace_activity_preferences,
     upsert_user_memory,
     upsert_health_note,
     upsert_lesson_progress,
@@ -41,6 +47,7 @@ from memory_service import extract_and_save_memory
 from mission_personalization import replace_current_mission_after_onboarding
 from mission_ui_action_service import get_active_ui_action, rebuild_ui_action_payload, resolve_mission_ui_action_request
 from starlette.concurrency import run_in_threadpool
+from ollama_client import ensure_ollama_server
 from rag import preload_model
 from qwen_client import preload_qwen
 from sheets import generate_daily_status
@@ -50,10 +57,13 @@ from schemas import (
     HealthNoteRequest,
     LessonProgressRequest,
     LessonQuizCompleteRequest,
+    MissionCorrectionRequest,
     MissionReviewRequest,
+    MissionPreferencesRequest,
     MissionUiActionResolveRequest,
     OnboardingPreferencesRequest,
     ProfileRequest,
+    UserFeedbackRequest,
     VerifyRequest,
     WeeklySharePromptActionRequest,
 )
@@ -61,6 +71,7 @@ from schemas import (
 
 def startup_tasks() -> None:
     init_db()
+    ensure_ollama_server()
     preload_model()
     preload_qwen()
     if DEMO_MODE:
@@ -146,6 +157,47 @@ def get_today_mission(student_id: int | None = None):
 
 def get_student_stats(student_id: int):
     return get_success_summary(student_id)
+
+
+def get_student_mission_records(student_id: int, from_date: str, to_date: str):
+    try:
+        start = datetime.strptime(from_date, "%Y-%m-%d").date()
+        end = datetime.strptime(to_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="from/to는 YYYY-MM-DD 형식이어야 해요.")
+
+    if start >= end:
+        raise HTTPException(status_code=400, detail="to는 from보다 뒤 날짜여야 해요.")
+    if (end - start).days > 62:
+        raise HTTPException(status_code=400, detail="한 번에 최대 62일까지만 조회할 수 있어요.")
+
+    return get_mission_records(student_id, start.isoformat(), end.isoformat())
+
+
+def submit_mission_correction_request(body: MissionCorrectionRequest):
+    request = create_mission_correction_request(
+        student_id=body.student_id,
+        checkin_id=body.checkin_id,
+        mission_id=body.mission_id,
+        target_date=body.target_date,
+        current_result=body.current_result,
+        requested_result=body.requested_result,
+        message=body.message,
+    )
+    if not request:
+        raise HTTPException(status_code=404, detail="수정 요청할 미션 제출 기록을 찾을 수 없어요.")
+    return {"ok": True, "request": request}
+
+
+def submit_user_feedback(body: UserFeedbackRequest):
+    feedback = create_user_feedback(
+        student_id=body.student_id,
+        feedback_type=body.feedback_type,
+        message=body.message,
+    )
+    if not feedback:
+        raise HTTPException(status_code=404, detail="학생 정보를 찾을 수 없어요.")
+    return {"ok": True, "feedback": feedback}
 
 
 def get_student_weekly_share_prompt(student_id: int):
@@ -348,6 +400,42 @@ def save_onboarding_preferences(body: OnboardingPreferencesRequest):
             "current_activity_key": replacement.get("current_activity_key"),
             "warning": replacement.get("warning"),
         },
+    }
+
+
+def get_mission_preferences(student_id: int):
+    return get_activity_preferences(student_id)
+
+
+def save_mission_preferences(body: MissionPreferencesRequest):
+    try:
+        saved = replace_activity_preferences(
+            body.student_id,
+            body.preferred_activity_keys,
+            body.disliked_activity_keys,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    replacement = {
+        "mission_changed": False,
+        "replace_reason": None,
+        "new_mission": None,
+    }
+    try:
+        replacement = replace_current_mission_after_onboarding(
+            body.student_id,
+            saved["disliked_activity_keys"],
+        )
+    except Exception as e:
+        print(f"[MissionPreferences] auto replacement failed: {type(e).__name__}: {e}")
+
+    return {
+        "ok": True,
+        **saved,
+        "mission_changed": bool(replacement.get("mission_changed")),
+        "replace_reason": replacement.get("replace_reason"),
+        "new_mission": replacement.get("new_mission"),
     }
 
 

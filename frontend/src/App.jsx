@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchWeeklySharePrompt, markWeeklySharePrompt, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchWeeklySharePrompt, markWeeklySharePrompt, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, fetchMissionPreferences, saveMissionPreferencesDb, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import HealthNote from "./components/HealthNote.jsx";
@@ -18,6 +18,7 @@ import PipelineDebugPanel from "./components/PipelineDebugPanel.jsx";
 
 const PIPELINE_DEBUG = import.meta.env.VITE_PIPELINE_DEBUG === "true";
 import OnboardingFlow from "./components/OnboardingFlow.jsx";
+import OnboardingPreferences from "./components/OnboardingPreferences.jsx";
 
 // ── 화면 상수 ──────────────────────────────────────────────────────────────
 const SCREENS = {
@@ -34,6 +35,7 @@ const SCREENS = {
   DRAW: "draw",
   SETTINGS: "settings",
   SETTINGS_HEALTH_EDIT: "settings_health_edit",
+  SETTINGS_MISSION_PREFERENCES: "settings_mission_preferences",
   RANKING: "ranking",
   LEARN: "learn",
   GAME: "game",
@@ -80,6 +82,7 @@ function getStoredProfile() {
 // 프론트에선 maxXp(progress 바 표시) 계산용으로만 사용 — XP/level 자체는 백엔드 응답을 그대로 반영.
 const LEVEL_THRESHOLDS = { 2: 5, 3: 17, 4: 37, 5: 70, 6: 150 };
 const HEALTH_NOTE_KEY = "health_note";
+const MISSION_PREFERENCES_KEY = "mission_preferences";
 const FORCE_ONBOARDING = import.meta.env.VITE_FORCE_ONBOARDING === "true";
 
 function getOnboardingDoneKey(studentId) {
@@ -102,6 +105,35 @@ function getStoredHealthNote() {
 function saveHealthNote(note) {
   if (note == null) localStorage.removeItem(HEALTH_NOTE_KEY);
   else localStorage.setItem(HEALTH_NOTE_KEY, JSON.stringify(note));
+}
+
+function getStoredMissionPreferences() {
+  try {
+    return JSON.parse(localStorage.getItem(MISSION_PREFERENCES_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function saveMissionPreferencesLocal(preferences) {
+  if (preferences == null) localStorage.removeItem(MISSION_PREFERENCES_KEY);
+  else localStorage.setItem(MISSION_PREFERENCES_KEY, JSON.stringify(preferences));
+}
+
+function normalizeMissionPreferences(preferences) {
+  if (!preferences) return { preferredActivityKeys: [], dislikedActivityKeys: [] };
+  return {
+    preferredActivityKeys: Array.isArray(preferences.preferredActivityKeys)
+      ? preferences.preferredActivityKeys
+      : Array.isArray(preferences.preferred_activity_keys)
+        ? preferences.preferred_activity_keys
+        : [],
+    dislikedActivityKeys: Array.isArray(preferences.dislikedActivityKeys)
+      ? preferences.dislikedActivityKeys
+      : Array.isArray(preferences.disliked_activity_keys)
+        ? preferences.disliked_activity_keys
+        : [],
+  };
 }
 
 function normalizeHealthNote(note) {
@@ -190,6 +222,9 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [extraInfo, setExtraInfo] = useState(null);
   const [healthNote, setHealthNote] = useState(() => getStoredHealthNote());
+  const [missionPreferences, setMissionPreferences] = useState(() => normalizeMissionPreferences(getStoredMissionPreferences()));
+  const [missionPreferencesLoading, setMissionPreferencesLoading] = useState(false);
+  const [missionPreferencesError, setMissionPreferencesError] = useState("");
   const [onboardingCompletedThisSession, setOnboardingCompletedThisSession] = useState(false);
 
   // 레벨/리워드
@@ -291,6 +326,13 @@ export default function App() {
         const normalized = normalizeHealthNote(note);
         setHealthNote(normalized);
         saveHealthNote(normalized);
+      })
+      .catch(() => {});
+    fetchMissionPreferences(profile.student_id)
+      .then((preferences) => {
+        const normalized = normalizeMissionPreferences(preferences);
+        setMissionPreferences(normalized);
+        saveMissionPreferencesLocal(normalized);
       })
       .catch(() => {});
     // 출석 체크 — 응답으로 받는 app_state가 (오늘 첫 진입이면 ticket+1 반영된) 최신값.
@@ -525,6 +567,7 @@ export default function App() {
     localStorage.removeItem("tommy_lesson_progress");
     localStorage.removeItem("tommy_run_records");
     localStorage.removeItem(HEALTH_NOTE_KEY);
+    localStorage.removeItem(MISSION_PREFERENCES_KEY);
     setSessionId(createSessionId());
     setProfile(null);
     setMission(null);
@@ -537,6 +580,8 @@ export default function App() {
     setSignupFarewell(false);
     setExtraInfo(null);
     setHealthNote(null);
+    setMissionPreferences({ preferredActivityKeys: [], dislikedActivityKeys: [] });
+    setMissionPreferencesError("");
     setLevel(FRESH_STATS.level);
     setCurrentXp(FRESH_STATS.currentXp);
     setMaxXp(LEVEL_THRESHOLDS[FRESH_STATS.level + 1]);
@@ -583,6 +628,12 @@ export default function App() {
           .then(setMission)
           .catch(() => {});
       }
+      const normalized = normalizeMissionPreferences({
+        preferred_activity_keys: values.preferred_activity_keys,
+        disliked_activity_keys: values.disliked_activity_keys,
+      });
+      setMissionPreferences(normalized);
+      saveMissionPreferencesLocal(normalized);
       localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
       return true;
     } catch (err) {
@@ -598,6 +649,32 @@ export default function App() {
       localStorage.setItem(`onboarding_preferences_done:${profile.student_id}`, "true");
     }
     setOnboardingError("");
+  }
+
+  async function handleSaveSettingsMissionPreferences(values) {
+    if (!profile?.student_id) return;
+    setMissionPreferencesLoading(true);
+    setMissionPreferencesError("");
+    try {
+      const result = await saveMissionPreferencesDb({
+        studentId: profile.student_id,
+        preferredActivityKeys: values.preferred_activity_keys,
+        dislikedActivityKeys: values.disliked_activity_keys,
+      });
+      const normalized = normalizeMissionPreferences(result);
+      setMissionPreferences(normalized);
+      saveMissionPreferencesLocal(normalized);
+      if (result?.mission_changed === true) {
+        fetchMissionByStudent(profile.student_id)
+          .then(setMission)
+          .catch(() => {});
+      }
+      goBack(SCREENS.SETTINGS);
+    } catch (err) {
+      setMissionPreferencesError(err.message);
+    } finally {
+      setMissionPreferencesLoading(false);
+    }
   }
 
   async function handleSaveMissionReview({ rating, comment }) {
@@ -1033,6 +1110,7 @@ export default function App() {
       return (
         <div style={{ position: "relative" }}>
           <Home
+            studentId={profile?.student_id}
             studentName={profile?.student_name || "민준"}
             level={level}
             currentXp={currentXp}
@@ -1127,12 +1205,14 @@ export default function App() {
     case SCREENS.SETTINGS:
       return (
         <Settings
+          studentId={profile?.student_id}
           studentName={profile?.student_name || "민준"}
           level={level}
           heartCount={heartCount}
           streakDays={stats.streak_days || 0}
           onBack={() => goBack(SCREENS.HOME)}
           onOpenHealthNote={() => goTo(SCREENS.SETTINGS_HEALTH_EDIT)}
+          onOpenMissionPreferences={() => goTo(SCREENS.SETTINGS_MISSION_PREFERENCES)}
           onLogout={handleLogout}
           onWithdraw={handleWithdraw}
           onNavigate={navHandler(SCREENS.SETTINGS)}
@@ -1156,6 +1236,22 @@ export default function App() {
           onSkip={() => goBack(SCREENS.SETTINGS)}
           onBack={() => goBack(SCREENS.SETTINGS)}
           loading={false}
+        />
+      );
+
+    case SCREENS.SETTINGS_MISSION_PREFERENCES:
+      return (
+        <OnboardingPreferences
+          initialPreferred={missionPreferences.preferredActivityKeys}
+          initialDisliked={missionPreferences.dislikedActivityKeys}
+          onSubmit={handleSaveSettingsMissionPreferences}
+          onSkip={() => goBack(SCREENS.SETTINGS)}
+          onBack={() => goBack(SCREENS.SETTINGS)}
+          loading={missionPreferencesLoading}
+          error={missionPreferencesError}
+          skipLabel="변경하지 않고 돌아갈래요"
+          submitLabel="저장하기"
+          embedded
         />
       );
 

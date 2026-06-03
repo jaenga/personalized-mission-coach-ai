@@ -1,5 +1,28 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import tomatoHi from "../assets/tomato/_shared/hi.png";
+
+function useFrameScale(width, height) {
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    function updateScale() {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const nextScale = Math.min(1, (viewportHeight - 24) / height, window.innerWidth / width);
+      setScale(Number.isFinite(nextScale) ? Math.max(0.1, nextScale) : 1);
+    }
+
+    updateScale();
+    window.addEventListener("resize", updateScale);
+    window.visualViewport?.addEventListener("resize", updateScale);
+
+    return () => {
+      window.removeEventListener("resize", updateScale);
+      window.visualViewport?.removeEventListener("resize", updateScale);
+    };
+  }, [width, height]);
+
+  return scale;
+}
 
 function formatBirth(iso) {
   if (!iso) return "";
@@ -14,6 +37,7 @@ export default function InfoInput({ onSubmit, onBack, loading, error, defaultBir
   const birthInputRef = useRef(null);
 
   const canSubmit = !loading && (isPrivate || (birth.length > 0 && gender.length > 0));
+  const frameScale = useFrameScale(402, 700);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -28,7 +52,17 @@ export default function InfoInput({ onSubmit, onBack, loading, error, defaultBir
   const today = new Date().toISOString().split("T")[0];
 
   return (
-    <div className="mobile-frame" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame flex justify-center" style={{ background: "#FFF3E7" }}>
+      <div
+        className="relative"
+        style={{
+          width: 402,
+          height: 700,
+          flexShrink: 0,
+          transform: `scale(${frameScale})`,
+          transformOrigin: "top center",
+        }}
+      >
       <button
         type="button"
         onClick={onBack}
@@ -296,6 +330,7 @@ export default function InfoInput({ onSubmit, onBack, loading, error, defaultBir
           {error}
         </p>
       )}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app_services import (
@@ -15,6 +15,8 @@ from app_services import (
     get_student_health_note,
     get_student_app_state,
     get_student_lesson_progress,
+    get_student_mission_records,
+    get_mission_preferences,
     get_student_stats,
     get_student_weekly_share_prompt,
     get_today_mission,
@@ -24,9 +26,12 @@ from app_services import (
     register_demo_student,
     resolve_mission_ui_action,
     save_mission_review,
+    save_mission_preferences,
     save_onboarding_preferences,
     save_user_profile,
     save_student_health_note,
+    submit_mission_correction_request,
+    submit_user_feedback,
     startup_tasks,
     update_student_weekly_share_prompt,
     update_student_lesson_progress,
@@ -35,7 +40,7 @@ from app_services import (
 )
 from chat_service import process_chat, process_chat_stream
 from intent_router import close_intent_router_client
-from ollama_client import close_ollama_client
+from ollama_client import close_ollama_client, stop_autostarted_ollama
 from qwen_client import close_qwen_client
 from schemas import (
     ChatRequest,
@@ -44,10 +49,13 @@ from schemas import (
     HealthNoteRequest,
     LessonProgressRequest,
     LessonQuizCompleteRequest,
+    MissionCorrectionRequest,
     MissionReviewRequest,
+    MissionPreferencesRequest,
     MissionUiActionResolveRequest,
     OnboardingPreferencesRequest,
     ProfileRequest,
+    UserFeedbackRequest,
     VerifyRequest,
     WeeklySharePromptActionRequest,
 )
@@ -73,6 +81,7 @@ async def shutdown():
     await close_ollama_client()
     await close_intent_router_client()
     await close_qwen_client()
+    stop_autostarted_ollama()
 
 
 @app.post("/verify-student")
@@ -103,6 +112,25 @@ def get_mission(student_id: int | None = None):
 @app.get("/stats/{student_id}")
 def get_stats(student_id: int):
     return get_student_stats(student_id)
+
+
+@app.get("/mission-records/{student_id}")
+def get_mission_records_route(
+    student_id: int,
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+):
+    return get_student_mission_records(student_id, from_date, to_date)
+
+
+@app.post("/mission-correction-requests")
+def post_mission_correction_request(body: MissionCorrectionRequest):
+    return submit_mission_correction_request(body)
+
+
+@app.post("/user-feedback")
+def post_user_feedback(body: UserFeedbackRequest):
+    return submit_user_feedback(body)
 
 
 @app.get("/weekly-share/{student_id}")
@@ -188,6 +216,16 @@ def post_mission_review(body: MissionReviewRequest, background_tasks: Background
 @app.post("/onboarding-preferences")
 def post_onboarding_preferences(body: OnboardingPreferencesRequest):
     return save_onboarding_preferences(body)
+
+
+@app.get("/mission-preferences/{student_id}")
+def get_mission_preferences_route(student_id: int):
+    return get_mission_preferences(student_id)
+
+
+@app.post("/mission-preferences")
+def post_mission_preferences(body: MissionPreferencesRequest):
+    return save_mission_preferences(body)
 
 
 @app.post("/chat")

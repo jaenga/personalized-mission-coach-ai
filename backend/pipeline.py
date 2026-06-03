@@ -19,8 +19,10 @@ from executor import (
 )
 from hint_builder import (
     build_one_hint, build_conflict_prompt, build_fn_hint, build_cancel_hint,
+    build_equivalency_result_hint,
     EQUIVALENCY_SUBMIT_TAG_INSTRUCTION,
 )
+from submit_validator import SubmitValidationResult, validate_submit_candidate
 
 
 # ── 멀티펑션 조합 상수 + 헬퍼 (main.py에서 이동) ────────────────────────────
@@ -205,6 +207,11 @@ _ADJUSTMENT_CANCEL_RE = re.compile(
     r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
+_CANCEL_REQUEST_RE = re.compile(r"취소|되돌|되돌려|철회|원래대로|없던\s*걸로|없던걸로")
+_ADJUSTMENT_REQUEST_RE = re.compile(
+    r"바꿔|변경|교체|다른\s*(?:미션|거|걸)"
+    r"|쉬운\s*(?:걸로|미션)|쉽게\s*(?:바꿔|해줘|변경)"
+)
 # 행동+부정: 금지형 미션("과자 안 먹기")에서 성공일 수 있어 별도 처리
 # 주의: 못했/안했(일반 실패)은 여기 포함 안 함 → _FAIL_RE에서 처리
 _NEGATION_VERB_RE = re.compile(
@@ -233,7 +240,7 @@ _QUERY_HINT_RE = re.compile(r"보여|알려|뭐야|뭔데|언제|기록|조회|�
 
 # 위로/격려 상황 감지
 _COMFORT_RE = re.compile(
-    r"힘들|슬퍼|슬프|짜증|우울|싫어|못하겠|포기|지쳐|피곤|하기 싫"
+    r"힘들|슬퍼|슬프|짜증|우울|싫어|못하겠|포기|지쳐|피곤|하기 싫|빡세"
 )
 
 _OVERLAP_STOPWORDS = frozenset({
@@ -406,9 +413,12 @@ def step_execute(
     student_id: int,
     fn_calls: list[tuple[str, dict]],
     combo: str,
-) -> tuple[ExecResults, list[tuple[str, dict]], dict | None, str]:
+    user_message: str = "",
+    mission_title: str = "",
+    mission_id: int | None = None,
+) -> tuple[ExecResults, list[tuple[str, dict]], dict | None, str, SubmitValidationResult | None]:
     """
-    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args, effective_combo) 반환.
+    DB 실행. (exec_results, 남은 fn_calls, pending_submit_args, effective_combo, submit_validation) 반환.
     cancel은 실행 후 fn_calls에서 제거.
     reorder는 cancel 제거 후 적용.
     """
@@ -416,10 +426,11 @@ def step_execute(
     print(f"[DB] start student={student_id} combo={combo or '-'} calls={_fn_list(fn_calls)}")
     results = ExecResults()
     pending_submit_args: dict | None = None
+    submit_validation: SubmitValidationResult | None = None
 
     if combo == "conflict":
         print("[DB] skipped: conflict")
-        return results, fn_calls, None, combo
+        return results, fn_calls, None, combo, None
 
     # db_branch는 cancel 실행 전에 "원래 직전 액션"을 검증해야 한다.
     if combo == "db_branch":
@@ -429,13 +440,20 @@ def step_execute(
         print(f"[DB] branch expected={expected} last={last_action}")
         if last_action != expected:
             print("[DB] branch mismatch -> conflict")
-            return results, fn_calls, None, "conflict"
+            return results, fn_calls, None, "conflict", None
 
     # 1. cancel 분리 + 실행 + fn_calls에서 제거
     if any(fn == "cancel_mission_action" for fn, _ in fn_calls):
-        cancel_args = next((args for fn, args in fn_calls if fn == "cancel_mission_action"), {})
-        results.cancel = execute_cancel(student_id, cancel_args)
+        if _has_explicit_cancel_request(user_message):
+            cancel_args = next((args for fn, args in fn_calls if fn == "cancel_mission_action"), {})
+            results.cancel = execute_cancel(student_id, cancel_args)
+        else:
+            print(f"[DB] dropped cancel without explicit cancel request: {_short(user_message)!r}")
         fn_calls = [(fn, args) for fn, args in fn_calls if fn != "cancel_mission_action"]
+
+    if any(fn == "request_mission_adjustment" for fn, _ in fn_calls) and not _has_explicit_adjustment_request(user_message):
+        print(f"[DB] dropped adjustment without explicit adjustment request: {_short(user_message)!r}")
+        fn_calls = [(fn, args) for fn, args in fn_calls if fn != "request_mission_adjustment"]
 
     # 3. 남은 fn_calls를 콤보에 따라 처리 (sequential이면 reorder 적용)
     ordered = _reorder_sequential(fn_calls) if combo == "sequential" else fn_calls
@@ -447,13 +465,43 @@ def step_execute(
                 pending_submit_args = args  # LLM 판단 후 실행
                 print(f"[DB] submit deferred for equivalency")
             else:
-                results.submit = execute_submit(student_id, args)
+                submit_validation = validate_submit_candidate(
+                    user_message=user_message,
+                    mission_name=mission_title,
+                    mission_id=mission_id,
+                    qwen_args=args,
+                )
+                print(
+                    "[Validator.submit] "
+                    f"action={submit_validation.action} "
+                    f"result={submit_validation.result_type or '-'} "
+                    f"reason={submit_validation.reason or '-'}"
+                )
+                if submit_validation.should_execute:
+                    results.submit = execute_submit(
+                        student_id,
+                        {**args, "result_type": submit_validation.result_type},
+                    )
         elif fn == "request_mission_adjustment":
             results.adjustment = execute_adjustment(student_id, args)
         # equivalency, mission_info, history → DB write 없음
 
     print(f"[DB] done combo={combo or '-'} {_exec_label(results)}")
-    return results, fn_calls, pending_submit_args, combo
+    return results, fn_calls, pending_submit_args, combo, submit_validation
+
+
+def _has_explicit_cancel_request(message: str) -> bool:
+    if _CANCEL_NEGATION_RE.search(message or ""):
+        return False
+    return bool(
+        _ADJUSTMENT_CANCEL_RE.search(message or "")
+        or _CANCEL_TARGET_RE.search(message or "")
+        or _CANCEL_REQUEST_RE.search(message or "")
+    )
+
+
+def _has_explicit_adjustment_request(message: str) -> bool:
+    return bool(_ADJUSTMENT_REQUEST_RE.search((message or "").replace(" ", "")) or _ADJUSTMENT_REQUEST_RE.search(message or ""))
 
 
 def _build_function_hint(
@@ -461,6 +509,7 @@ def _build_function_hint(
     fn_calls: list[tuple[str, dict]],
     exec_results: ExecResults,
     combo: str | None,
+    eq_judgment: dict | None = None,
 ) -> str:
     """B 인텐트 전용 힌트 문자열 생성. DB write 없음."""
     has_exec_hint = exec_results.cancel is not None
@@ -473,8 +522,6 @@ def _build_function_hint(
     hints: list[str] = []
 
     if combo == "db_branch":
-        # db_branch에서 직전 액션 불일치면 step_execute에서 충돌 전환됨.
-        # 여기까지 왔으면 정상 순차 → cancel hint + 나머지 hint.
         if student_id is not None:
             if exec_results.cancel:
                 hints.append(build_cancel_hint(exec_results.cancel))
@@ -493,10 +540,15 @@ def _build_function_hint(
             hints.append(build_cancel_hint(exec_results.cancel))
         for fn, args in ordered:
             if fn == "submit_mission_result" and eq_submit:
-                continue  # submit 힌트 스킵 (LLM이 태그로 판정)
+                continue  # submit 힌트 스킵 (판정 결과 또는 태그로 처리)
+            if fn == "check_mission_equivalency" and eq_judgment is not None:
+                hints.append(build_equivalency_result_hint(eq_judgment))
+                continue
             hints.append(build_one_hint(student_id, fn, args, exec_results))
         if eq_submit:
-            hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
+            if eq_judgment is None:
+                # fallback: 태그 방식 유지
+                hints.append(EQUIVALENCY_SUBMIT_TAG_INSTRUCTION)
     else:
         for fn, args in fn_calls:
             hints.append(build_fn_hint(fn, args))
@@ -516,12 +568,13 @@ def step_build_hints(
     clarify_hint_override: str = "",
     student_name: str = "",
     user_message: str = "",
+    eq_judgment: dict | None = None,
 ) -> str:
     """시스템 프롬프트 조립. DB write 없음."""
     function_hint = ""
     if intent == "B":
-        function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo)
-        print(f"[Prompt] function_hint={'Y' if function_hint else 'N'} combo={combo or '-'} len={len(function_hint)}")
+        function_hint = _build_function_hint(student_id, fn_calls, exec_results, combo, eq_judgment)
+        print(f"[Prompt] function_hint={'Y' if function_hint else 'N'} combo={combo or '-'} eq_judged={'Y' if eq_judgment is not None else 'N'} len={len(function_hint)}")
 
     clarify_hint = ""
     if intent == "D":

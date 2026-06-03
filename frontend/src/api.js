@@ -392,6 +392,62 @@ export async function saveMissionReview({ session_id, mission_id, rating, commen
   return res.json();
 }
 
+export async function fetchMissionRecords(studentId, fromDate, toDate) {
+  const params = new URLSearchParams({ from: fromDate, to: toDate });
+  const res = await fetch(`/mission-records/${studentId}?${params.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "미션 기록을 불러오지 못했어요");
+  }
+  return res.json();
+}
+
+export async function submitMissionCorrectionRequest({
+  studentId,
+  checkinId,
+  missionId,
+  targetDate,
+  currentResult,
+  requestedResult,
+  message,
+}) {
+  const res = await fetch("/mission-correction-requests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      checkin_id: checkinId,
+      mission_id: missionId,
+      target_date: targetDate,
+      current_result: currentResult,
+      requested_result: requestedResult,
+      message,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "수정 요청을 보내지 못했어요");
+  }
+  return res.json();
+}
+
+export async function submitUserFeedback({ studentId, feedbackType, message }) {
+  const res = await fetch("/user-feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      feedback_type: feedbackType,
+      message,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "의견을 보내지 못했어요");
+  }
+  return res.json();
+}
+
 export async function saveOnboardingPreferences({
   session_id,
   preferred_activity_keys,
@@ -411,6 +467,36 @@ export async function saveOnboardingPreferences({
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail ?? "선호 정보 저장에 실패했어요");
+  }
+  return res.json();
+}
+
+export async function fetchMissionPreferences(studentId) {
+  const res = await fetch(`/mission-preferences/${studentId}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "미션 취향 불러오기 실패");
+  }
+  return res.json();
+}
+
+export async function saveMissionPreferencesDb({
+  studentId,
+  preferredActivityKeys = [],
+  dislikedActivityKeys = [],
+}) {
+  const res = await fetch("/mission-preferences", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      preferred_activity_keys: preferredActivityKeys,
+      disliked_activity_keys: dislikedActivityKeys,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.detail ?? "미션 취향 저장 실패");
   }
   return res.json();
 }

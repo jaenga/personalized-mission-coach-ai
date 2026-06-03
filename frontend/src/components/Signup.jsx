@@ -1,5 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import tomatoHi from "../assets/tomato/_shared/hi.png";
+
+function useFrameScale(width, height) {
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    function updateScale() {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const nextScale = Math.min(1, (viewportHeight - 24) / height, window.innerWidth / width);
+      setScale(Number.isFinite(nextScale) ? Math.max(0.1, nextScale) : 1);
+    }
+
+    updateScale();
+    window.addEventListener("resize", updateScale);
+    window.visualViewport?.addEventListener("resize", updateScale);
+
+    return () => {
+      window.removeEventListener("resize", updateScale);
+      window.visualViewport?.removeEventListener("resize", updateScale);
+    };
+  }, [width, height]);
+
+  return scale;
+}
 
 export default function Signup({
   onSubmit,
@@ -15,6 +38,7 @@ export default function Signup({
   const [phone4, setPhone4] = useState("");
 
   const canSubmit = name.trim().length > 0 && phone4.length === 4 && !loading;
+  const frameScale = useFrameScale(402, 700);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -23,7 +47,17 @@ export default function Signup({
   }
 
   return (
-    <div className="mobile-frame" style={{ background: "#FFF3E7" }}>
+    <div className="mobile-frame flex justify-center" style={{ background: "#FFF3E7" }}>
+      <div
+        className="relative"
+        style={{
+          width: 402,
+          height: 700,
+          flexShrink: 0,
+          transform: `scale(${frameScale})`,
+          transformOrigin: "top center",
+        }}
+      >
       <button
         type="button"
         onClick={onBack}
@@ -320,6 +354,7 @@ export default function Signup({
           {error}
         </p>
       )}
+      </div>
     </div>
   );
 }
