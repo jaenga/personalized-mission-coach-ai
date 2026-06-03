@@ -53,8 +53,8 @@ def normalize_equivalency_text(text: str) -> str:
     """Normalize quantity/unit expressions only. This never decides success."""
     normalized = text or ""
 
-    normalized = re.sub(r"500\s*(?:ml|밀리)\s*(?:두|2)\s*병", "1L", normalized, flags=re.IGNORECASE)
-    normalized = re.sub(r"1000\s*(?:ml|밀리)", "1L", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"500\s*(?:ml|밀리|미리)\s*(?:두|2)\s*병", "1L", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"1000\s*(?:ml|밀리|미리)", "1L", normalized, flags=re.IGNORECASE)
     normalized = re.sub(
         r"(\d+(?:\.\d+)?)\s*ml\b",
         lambda m: f"{float(m.group(1)) / 1000:g}L",
@@ -65,8 +65,8 @@ def normalize_equivalency_text(text: str) -> str:
     normalized = re.sub(r"종이컵\s*(?:약\s*)?(?:6|여섯)\s*(?:잔|컵)", "약 1L", normalized)
     normalized = re.sub(r"일반\s*컵\s*(?:약\s*)?(?:5|다섯)\s*(?:잔|컵)", "약 1L", normalized)
 
-    for unit in ("분", "회", "번", "잔", "컵", "층"):
-        words = "|".join(map(re.escape, sorted(KOREAN_NUMBER_WORDS, key=len, reverse=True)))
+    words = "|".join(map(re.escape, sorted(KOREAN_NUMBER_WORDS, key=len, reverse=True)))
+    for unit in ("분", "회", "번", "개", "잔", "컵", "층", "바퀴", "보", "걸음", "세트", "봉지", "병", "입"):
         pattern = re.compile(rf"({words})\s*{unit}")
         normalized = pattern.sub(lambda m: f"{_word_to_number(m.group(1)) or m.group(1)}{unit}", normalized)
 

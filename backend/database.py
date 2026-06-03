@@ -3,7 +3,10 @@ import os
 import random
 import psycopg2
 import psycopg2.extras
+from psycopg2 import pool
 from psycopg2.extras import Json
+import threading
+import time
 import uuid
 from datetime import date, datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -13,6 +16,10 @@ from activity_keys import VALID_ACTIVITY_KEYS, normalize_activity_key
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+CHAT_SAVE_POOL_MINCONN = int(os.getenv("CHAT_SAVE_POOL_MINCONN", "1"))
+CHAT_SAVE_POOL_MAXCONN = int(os.getenv("CHAT_SAVE_POOL_MAXCONN", "5"))
+_chat_save_pool: pool.SimpleConnectionPool | None = None
+_chat_save_pool_lock = threading.Lock()
 
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
@@ -37,36 +44,78 @@ def get_conn():
     return conn
 
 
+def _get_chat_save_pool() -> pool.SimpleConnectionPool:
+    global _chat_save_pool
+    if _chat_save_pool is None:
+        with _chat_save_pool_lock:
+            if _chat_save_pool is None:
+                _chat_save_pool = pool.SimpleConnectionPool(
+                    CHAT_SAVE_POOL_MINCONN,
+                    CHAT_SAVE_POOL_MAXCONN,
+                    DATABASE_URL,
+                )
+                print(
+                    "[DBTrace chat_save_pool] initialized "
+                    f"min={CHAT_SAVE_POOL_MINCONN} max={CHAT_SAVE_POOL_MAXCONN}"
+                )
+    return _chat_save_pool
+
+
+def _dbtrace(request_id: str | None, event: str, **fields) -> None:
+    rid = request_id or "-"
+    detail = " ".join(
+        f"{key}={value}"
+        for key, value in fields.items()
+        if value is not None
+    )
+    suffix = f" {detail}" if detail else ""
+    print(f"[DBTrace {rid}] {event}{suffix}")
+
+
 def init_db():
+    required_tables = (
+        "session_profiles",
+        "demo_mission",
+        "pending_mission_suggestions",
+        "student_app_state",
+        "xp_history",
+        "draw_runs",
+        "attendance_log",
+        "game_runs",
+        "lesson_progress",
+        "student_health_notes",
+        "user_memories",
+        "pending_actions",
+        "mission_change_logs",
+        "mission_reviews",
+        "generated_missions",
+        "mission_ui_actions",
+        "weekly_share_prompts",
+        "mission_correction_requests",
+        "user_feedback",
+    )
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS session_profiles (
-                    session_id    TEXT PRIMARY KEY,
-                    student_id    INTEGER,
-                    student_name  TEXT,
-                    db_session_id INTEGER,
-                    created_at    TIMESTAMPTZ DEFAULT NOW()
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = ANY(%s)
+                """,
+                (list(required_tables),),
+            )
+            existing_tables = {row[0] for row in cur.fetchall()}
+            missing_tables = sorted(set(required_tables) - existing_tables)
+            if missing_tables:
+                missing = ", ".join(missing_tables)
+                raise RuntimeError(
+                    "Database schema is missing runtime tables. "
+                    "Run `psql \"$DATABASE_URL\" -f backend/migrations/003_runtime_schema.sql` "
+                    f"before starting the server. Missing: {missing}"
                 )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS demo_mission (
-                    order_no INTEGER PRIMARY KEY,
-                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                ALTER TABLE missions
-                ADD COLUMN IF NOT EXISTS activity_key TEXT
-            """)
-            # demo_mission 시트 메타데이터 컬럼 (값은 DB에서 직접 관리)
-            for col in _DEMO_MISSION_METADATA_COLUMNS:
-                cur.execute(
-                    f"ALTER TABLE demo_mission ADD COLUMN IF NOT EXISTS {col} TEXT"
-                )
-            # mission_id/is_active만 동기화. 메타데이터 컬럼은 보존(DB에서 직접 관리).
+
+            # mission_id/is_active�??�기?? 구조 변경�? migrations/*.sql?�서 관리한??
             for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
                 cur.execute(
                     """
@@ -78,575 +127,10 @@ def init_db():
                     """,
                     (idx, mission_id),
                 )
-            cur.execute("SELECT to_regclass('public.student_daily_missions')")
-            if cur.fetchone()[0]:
-                cur.execute("""
-                    ALTER TABLE student_daily_missions
-                    ADD COLUMN IF NOT EXISTS assigned_by TEXT DEFAULT 'system'
-                """)
-            cur.execute("SELECT to_regclass('public.checkin_log')")
-            if cur.fetchone()[0]:
-                cur.execute("""
-                    DELETE FROM checkin_log
-                    WHERE checkin_id IN (
-                        SELECT checkin_id
-                        FROM (
-                            SELECT
-                                checkin_id,
-                                ROW_NUMBER() OVER (
-                                    PARTITION BY student_id, checkin_date
-                                    ORDER BY created_at DESC NULLS LAST, checkin_id DESC
-                                ) AS rn
-                            FROM checkin_log
-                            WHERE function_called = 'submit_mission_result'
-                        ) ranked
-                        WHERE rn > 1
-                      )
-                """)
-                cur.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS uq_checkin_submit_once_per_day
-                    ON checkin_log (student_id, checkin_date)
-                    WHERE function_called = 'submit_mission_result'
-                """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS pending_mission_suggestions (
-                    suggestion_id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    suggested_mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
-                    source_text TEXT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    resolved_at TIMESTAMPTZ
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS student_app_state (
-                    student_id INTEGER PRIMARY KEY REFERENCES students(student_id),
-                    level INTEGER NOT NULL DEFAULT 1,
-                    current_xp INTEGER NOT NULL DEFAULT 0,
-                    ticket_count INTEGER NOT NULL DEFAULT 0,
-                    heart_count INTEGER NOT NULL DEFAULT 1,
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS xp_history (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    xp_amount INTEGER NOT NULL,
-                    source_type TEXT NOT NULL,
-                    mission_id INTEGER,
-                    draw_id INTEGER,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                ALTER TABLE xp_history
-                    ADD COLUMN IF NOT EXISTS source_type TEXT,
-                    ADD COLUMN IF NOT EXISTS mission_id INTEGER,
-                    ADD COLUMN IF NOT EXISTS draw_id INTEGER
-            """)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1
-                          FROM information_schema.columns
-                         WHERE table_schema = 'public'
-                           AND table_name = 'xp_history'
-                           AND column_name = 'reason'
-                    ) THEN
-                        EXECUTE 'UPDATE xp_history SET source_type = reason WHERE source_type IS NULL';
-                    END IF;
-
-                    IF EXISTS (
-                        SELECT 1
-                          FROM information_schema.columns
-                         WHERE table_schema = 'public'
-                           AND table_name = 'xp_history'
-                           AND column_name = 'source_id'
-                    ) THEN
-                        EXECUTE $SQL$
-                            UPDATE xp_history
-                               SET mission_id = source_id
-                             WHERE mission_id IS NULL
-                               AND source_type = 'mission_success'
-                        $SQL$;
-                        EXECUTE $SQL$
-                            UPDATE xp_history
-                               SET draw_id = source_id
-                             WHERE draw_id IS NULL
-                               AND source_type = 'draw_reward'
-                        $SQL$;
-                    END IF;
-                END $$;
-            """)
-            cur.execute("""
-                UPDATE xp_history
-                   SET source_type = 'mission_success'
-                 WHERE source_type IS NULL
-            """)
-            cur.execute("""
-                ALTER TABLE xp_history
-                    ALTER COLUMN source_type SET NOT NULL,
-                    DROP COLUMN IF EXISTS reason,
-                    DROP COLUMN IF EXISTS source_id
-            """)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                          FROM pg_constraint
-                         WHERE conname = 'xp_history_source_check'
-                    ) THEN
-                        ALTER TABLE xp_history
-                            ADD CONSTRAINT xp_history_source_check CHECK (
-                                (
-                                    source_type = 'mission_success'
-                                    AND mission_id IS NOT NULL
-                                    AND draw_id IS NULL
-                                )
-                                OR
-                                (
-                                    source_type = 'draw_reward'
-                                    AND draw_id IS NOT NULL
-                                    AND mission_id IS NULL
-                                )
-                            ) NOT VALID;
-                    END IF;
-                END $$;
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_xp_history_student_created
-                    ON xp_history (student_id, created_at DESC)
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS draw_runs (
-                    draw_id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    reward_type TEXT NOT NULL,
-                    heart_gain INTEGER NOT NULL DEFAULT 0,
-                    xp_gain INTEGER NOT NULL DEFAULT 0,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_draw_runs_student_created
-                    ON draw_runs (student_id, created_at DESC)
-            """)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                          FROM pg_constraint
-                         WHERE conname = 'xp_history_mission_id_fkey'
-                    ) THEN
-                        ALTER TABLE xp_history
-                            ADD CONSTRAINT xp_history_mission_id_fkey
-                            FOREIGN KEY (mission_id) REFERENCES missions(mission_id) NOT VALID;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1
-                          FROM pg_constraint
-                         WHERE conname = 'xp_history_draw_id_fkey'
-                    ) THEN
-                        ALTER TABLE xp_history
-                            ADD CONSTRAINT xp_history_draw_id_fkey
-                            FOREIGN KEY (draw_id) REFERENCES draw_runs(draw_id) NOT VALID;
-                    END IF;
-                END $$;
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS attendance_log (
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    attendance_date DATE NOT NULL,
-                    ticket_awarded INTEGER NOT NULL DEFAULT 1,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (student_id, attendance_date)
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS game_runs (
-                    run_id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    game_type TEXT NOT NULL,
-                    score INTEGER NOT NULL,
-                    duration_sec INTEGER NOT NULL DEFAULT 0,
-                    played_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_game_runs_student_played
-                    ON game_runs (student_id, played_at DESC)
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_game_runs_played
-                    ON game_runs (played_at DESC)
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS lesson_progress (
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    lesson_id TEXT NOT NULL,
-                    current_step INTEGER NOT NULL DEFAULT 0,
-                    edu_done BOOLEAN NOT NULL DEFAULT FALSE,
-                    quiz_done BOOLEAN NOT NULL DEFAULT FALSE,
-                    quiz_score INTEGER,
-                    completed_at TIMESTAMPTZ,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (student_id, lesson_id)
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS student_health_notes (
-                    student_id INTEGER PRIMARY KEY REFERENCES students(student_id) ON DELETE CASCADE,
-                    allergens JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    caution_foods JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS user_memories (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    subject TEXT NOT NULL,
-                    type TEXT NOT NULL CHECK (type IN ('preference', 'difficulty', 'restriction')),
-                    score INTEGER DEFAULT 0 CHECK (score BETWEEN -3 AND 3),
-                    count INTEGER DEFAULT 0,
-                    updated_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE (student_id, subject, type)
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS pending_actions (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    action_type TEXT NOT NULL CHECK (
-                        action_type IN (
-                            'submit_confirmation',
-                            'natural_language_confirmation',
-                            'mission_change_reason',
-                            'mission_dislike_confirm'
-                        )
-                    ),
-                    payload JSONB NOT NULL,
-                    retry_count INTEGER DEFAULT 0,
-                    status TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled')),
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    resolved_at TIMESTAMPTZ
-                )
-            """)
-            cur.execute("""
-                DO $$
-                DECLARE
-                    action_type_constraint_name TEXT;
-                BEGIN
-                    SELECT conname
-                      INTO action_type_constraint_name
-                      FROM pg_constraint
-                     WHERE conrelid = 'pending_actions'::regclass
-                       AND contype = 'c'
-                       AND pg_get_constraintdef(oid) LIKE '%action_type%'
-                     LIMIT 1;
-
-                    IF action_type_constraint_name IS NOT NULL THEN
-                        EXECUTE format(
-                            'ALTER TABLE pending_actions DROP CONSTRAINT %I',
-                            action_type_constraint_name
-                        );
-                    END IF;
-
-                    ALTER TABLE pending_actions
-                    ADD CONSTRAINT pending_actions_action_type_check
-                    CHECK (
-                        action_type IN (
-                            'submit_confirmation',
-                            'natural_language_confirmation',
-                            'mission_change_reason',
-                            'mission_dislike_confirm'
-                        )
-                    );
-                END $$;
-            """)
-            cur.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_actions_one_pending_per_student
-                ON pending_actions (student_id)
-                WHERE status = 'pending'
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS mission_change_logs (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
-                    activity_key TEXT,
-                    reason_type TEXT NOT NULL CHECK (
-                        reason_type IN (
-                            'too_easy',
-                            'too_hard',
-                            'dislike',
-                            'cant_do',
-                            'just_change',
-                            'onboarding_auto_replace',
-                            'personalized_change',
-                            'generated_change'
-                        )
-                    ),
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                DO $$
-                DECLARE
-                    constraint_name TEXT;
-                BEGIN
-                    SELECT conname
-                      INTO constraint_name
-                      FROM pg_constraint
-                     WHERE conrelid = 'mission_change_logs'::regclass
-                       AND contype = 'c'
-                       AND pg_get_constraintdef(oid) LIKE '%reason_type%'
-                     LIMIT 1;
-
-                    IF constraint_name IS NOT NULL THEN
-                        EXECUTE format(
-                            'ALTER TABLE mission_change_logs DROP CONSTRAINT %I',
-                            constraint_name
-                        );
-                    END IF;
-
-                    ALTER TABLE mission_change_logs
-                    ADD CONSTRAINT mission_change_logs_reason_type_check
-                    CHECK (
-                        reason_type IN (
-                            'too_easy',
-                            'too_hard',
-                            'dislike',
-                            'cant_do',
-                            'just_change',
-                            'onboarding_auto_replace',
-                            'personalized_change',
-                            'generated_change'
-                        )
-                    );
-                END $$;
-            """)
-            cur.execute("""
-                ALTER TABLE mission_change_logs
-                ADD COLUMN IF NOT EXISTS activity_key TEXT
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS mission_reviews (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
-                    review_date DATE NOT NULL,
-                    activity_key TEXT,
-                    rating INTEGER CHECK (rating BETWEEN 1 AND 5),
-                    comment TEXT,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE (student_id, review_date)
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS weekly_share_prompts (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    week_start DATE NOT NULL,
-                    week_end DATE NOT NULL,
-                    prompt_shown_at TIMESTAMPTZ DEFAULT NOW(),
-                    dismissed_at TIMESTAMPTZ,
-                    shared_at TIMESTAMPTZ,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE (student_id, week_start)
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS generated_missions (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER REFERENCES students(student_id),
-                    mission_name TEXT NOT NULL,
-                    mission_rule TEXT,
-                    activity_keys TEXT[],
-                    difficulty TEXT,
-                    source_reason TEXT,
-                    status TEXT DEFAULT 'draft',
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS mission_ui_actions (
-                    action_id TEXT PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    session_id TEXT NOT NULL,
-                    action_type TEXT NOT NULL CHECK (
-                        action_type IN (
-                            'mission_change_reason',
-                            'mission_dislike_confirm',
-                            'mission_change_method',
-                            'awaiting_replacement_mission'
-                        )
-                    ),
-                    payload JSONB NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'pending_input', 'resolved', 'cancelled', 'expired')),
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    resolved_at TIMESTAMPTZ,
-                    expires_at TIMESTAMPTZ
-                )
-            """)
-            cur.execute("""
-                DO $$
-                DECLARE
-                    constraint_name TEXT;
-                BEGIN
-                    SELECT conname
-                      INTO constraint_name
-                      FROM pg_constraint
-                     WHERE conrelid = 'mission_ui_actions'::regclass
-                       AND contype = 'c'
-                       AND pg_get_constraintdef(oid) LIKE '%action_type%'
-                     LIMIT 1;
-
-                    IF constraint_name IS NOT NULL THEN
-                        EXECUTE format(
-                            'ALTER TABLE mission_ui_actions DROP CONSTRAINT %I',
-                            constraint_name
-                        );
-                    END IF;
-
-                    ALTER TABLE mission_ui_actions
-                    ADD CONSTRAINT mission_ui_actions_action_type_check
-                    CHECK (
-                        action_type IN (
-                            'mission_change_reason',
-                            'mission_dislike_confirm',
-                            'mission_change_method',
-                            'awaiting_replacement_mission'
-                        )
-                    );
-                END $$;
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_mission_ui_actions_active
-                ON mission_ui_actions (student_id, session_id, status, created_at DESC)
-                WHERE status IN ('pending', 'pending_input')
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS mission_correction_requests (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    checkin_id INTEGER REFERENCES checkin_log(checkin_id),
-                    mission_id INTEGER NOT NULL REFERENCES missions(mission_id),
-                    target_date DATE NOT NULL,
-                    current_result TEXT NOT NULL CHECK (
-                        current_result IN ('success', 'failure', 'completed', 'fail', 'unsubmitted')
-                    ),
-                    requested_result TEXT NOT NULL CHECK (
-                        requested_result IN ('success', 'failure', 'fail', 'other')
-                    ),
-                    message TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending' CHECK (
-                        status IN ('pending', 'in_review', 'resolved', 'rejected')
-                    ),
-                    admin_note TEXT,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    resolved_at TIMESTAMPTZ
-                )
-            """)
-            cur.execute("""
-                ALTER TABLE mission_correction_requests
-                ALTER COLUMN checkin_id DROP NOT NULL
-            """)
-            cur.execute("""
-                DO $$
-                DECLARE
-                    constraint_name TEXT;
-                BEGIN
-                    SELECT conname
-                      INTO constraint_name
-                      FROM pg_constraint
-                     WHERE conrelid = 'mission_correction_requests'::regclass
-                       AND contype = 'c'
-                       AND pg_get_constraintdef(oid) LIKE '%current_result%'
-                     LIMIT 1;
-
-                    IF constraint_name IS NOT NULL THEN
-                        EXECUTE format(
-                            'ALTER TABLE mission_correction_requests DROP CONSTRAINT %I',
-                            constraint_name
-                        );
-                    END IF;
-
-                    ALTER TABLE mission_correction_requests
-                    ADD CONSTRAINT mission_correction_requests_current_result_check
-                    CHECK (current_result IN ('success', 'failure', 'completed', 'fail', 'unsubmitted'));
-                END $$;
-            """)
-            cur.execute("""
-                DO $$
-                DECLARE
-                    constraint_name TEXT;
-                BEGIN
-                    SELECT conname
-                      INTO constraint_name
-                      FROM pg_constraint
-                     WHERE conrelid = 'mission_correction_requests'::regclass
-                       AND contype = 'c'
-                       AND pg_get_constraintdef(oid) LIKE '%requested_result%'
-                     LIMIT 1;
-
-                    IF constraint_name IS NOT NULL THEN
-                        EXECUTE format(
-                            'ALTER TABLE mission_correction_requests DROP CONSTRAINT %I',
-                            constraint_name
-                        );
-                    END IF;
-
-                    ALTER TABLE mission_correction_requests
-                    ADD CONSTRAINT mission_correction_requests_requested_result_check
-                    CHECK (requested_result IN ('success', 'failure', 'fail', 'other'));
-                END $$;
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_mission_correction_requests_student_created
-                    ON mission_correction_requests (student_id, created_at DESC)
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_mission_correction_requests_status_created
-                    ON mission_correction_requests (status, created_at DESC)
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS user_feedback (
-                    id SERIAL PRIMARY KEY,
-                    student_id INTEGER NOT NULL REFERENCES students(student_id),
-                    feedback_type TEXT NOT NULL CHECK (
-                        feedback_type IN ('app_feedback', 'bug_report', 'inquiry', 'other')
-                    ),
-                    message TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending' CHECK (
-                        status IN ('pending', 'in_review', 'resolved', 'rejected')
-                    ),
-                    admin_note TEXT,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    resolved_at TIMESTAMPTZ
-                )
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_user_feedback_student_created
-                    ON user_feedback (student_id, created_at DESC)
-            """)
-            cur.execute("""
-                CREATE INDEX IF NOT EXISTS idx_user_feedback_status_created
-                    ON user_feedback (status, created_at DESC)
-            """)
         conn.commit()
 
 
-# ── 학생 본인 확인 (students 테이블) ───────────────────────────────────────────
+# ?�?� ?�생 본인 ?�인 (students ?�이�? ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def get_student_by_credentials(student_name: str, phone_last4: str) -> dict | None:
     with get_conn() as conn:
@@ -672,9 +156,9 @@ def _ensure_student_app_state(cur, student_id: int) -> None:
 
 
 def delete_student_completely(student_id: int) -> bool:
-    """탈퇴 처리: 학생과 학생을 참조하는 모든 데이터를 한 트랜잭션에서 삭제.
+    """?�퇴 처리: ?�생�??�생??참조?�는 모든 ?�이?��? ???�랜??��?�서 ??��.
 
-    FK 의존성 순서로 삭제하며, students 행이 존재하지 않으면 False 반환.
+    FK ?�존???�서�???��?�며, students ?�이 존재?��? ?�으�?False 반환.
     """
     if not student_id:
         return False
@@ -685,7 +169,7 @@ def delete_student_completely(student_id: int) -> bool:
             if cur.fetchone() is None:
                 return False
 
-            # chat_messages는 chat_sessions.session_id를 참조하므로 먼저 삭제.
+            # chat_messages??chat_sessions.session_id�?참조?��?�?먼�? ??��.
             cur.execute(
                 """
                 DELETE FROM chat_messages
@@ -698,7 +182,7 @@ def delete_student_completely(student_id: int) -> bool:
             cur.execute("DELETE FROM chat_sessions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM session_profiles WHERE student_id = %s", (student_id,))
 
-            # xp_history는 draw_runs(draw_id)를 참조하므로 draw_runs보다 먼저.
+            # xp_history??draw_runs(draw_id)�?참조?��?�?draw_runs보다 먼�?.
             cur.execute("DELETE FROM xp_history WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM draw_runs WHERE student_id = %s", (student_id,))
 
@@ -716,6 +200,17 @@ def delete_student_completely(student_id: int) -> bool:
             cur.execute("DELETE FROM mission_ui_actions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM generated_missions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM mission_changes WHERE student_id = %s", (student_id,))
+            cur.execute("SELECT to_regclass('public.mission_correction_requests')")
+            if cur.fetchone()[0]:
+                cur.execute(
+                    """
+                    DELETE FROM mission_correction_requests
+                    WHERE checkin_id IN (
+                        SELECT checkin_id FROM checkin_log WHERE student_id = %s
+                    )
+                    """,
+                    (student_id,),
+                )
             cur.execute("DELETE FROM checkin_log WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM student_daily_missions WHERE student_id = %s", (student_id,))
             cur.execute("DELETE FROM student_app_state WHERE student_id = %s", (student_id,))
@@ -727,15 +222,47 @@ def delete_student_completely(student_id: int) -> bool:
     return True
 
 
-# ── 채팅 세션 (chat_sessions 테이블) ──────────────────────────────────────────
+# ?�?� 채팅 ?�션 (chat_sessions ?�이�? ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
-def create_demo_student(student_name: str, phone_last4: str) -> dict:
+def _age_from_birth_date(birth_date: str | None) -> int | None:
+    if not birth_date:
+        return None
+    try:
+        born = datetime.strptime(birth_date, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+
+def _normalize_gender(gender: str | None) -> str:
+    value = (gender or "").strip().lower()
+    if value in {"male", "m", "\ub0a8", "\ub0a8\uc790"}:
+        return "\ub0a8"
+    if value in {"female", "f", "\uc5ec", "\uc5ec\uc790"}:
+        return "\uc5ec"
+    return ""
+
+
+def _ensure_student_optional_columns(cur) -> None:
+    cur.execute("""
+        ALTER TABLE students
+        ADD COLUMN IF NOT EXISTS birth_date DATE,
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+    """)
+    cur.execute("UPDATE students SET created_at = NOW() WHERE created_at IS NULL")
+    cur.execute("UPDATE students SET updated_at = NOW() WHERE updated_at IS NULL")
+
+
+def create_demo_student(student_name: str, phone_last4: str, birth_date: str | None = None, gender: str | None = None) -> dict:
     """
     Create a demo signup student in the existing students table.
-    New demo signups are marked with student_note = '신규 가입'.
+    New demo signups are marked with student_note = '?�규 가??.
     """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            _ensure_student_optional_columns(cur)
             cur.execute(
                 """
                 SELECT *
@@ -750,29 +277,77 @@ def create_demo_student(student_name: str, phone_last4: str) -> dict:
             for row in rows:
                 phone = str(row.get("phone_number", "")).replace("-", "")
                 if phone[-4:] == phone_last4:
+                    clean_gender = _normalize_gender(gender)
+                    age = _age_from_birth_date(birth_date)
+                    if birth_date or clean_gender:
+                        cur.execute(
+                            """
+                            UPDATE students
+                               SET birth_date = COALESCE(%s::date, birth_date),
+                                   age = COALESCE(%s, age),
+                                   gender = COALESCE(NULLIF(%s, ''), gender),
+                                   updated_at = NOW()
+                             WHERE student_id = %s
+                             RETURNING *
+                            """,
+                            (birth_date or None, age, clean_gender, row["student_id"]),
+                        )
+                        row = cur.fetchone()
                     _ensure_student_app_state(cur, row["student_id"])
                     conn.commit()
                     return dict(row)
 
+            clean_gender = _normalize_gender(gender)
+            age = _age_from_birth_date(birth_date)
             cur.execute("""
                 INSERT INTO students (
                     student_name,
                     phone_number,
                     age,
                     gender,
+                    birth_date,
                     location,
                     is_active,
                     student_note
                 )
-                VALUES (%s, %s, NULL, '', '', TRUE, '신규 가입')
+                VALUES (%s, %s, %s, %s, %s::date, '', TRUE, '?�규 가??)
                 RETURNING *
-            """, (student_name, phone_last4))
+            """, (student_name, phone_last4, age, clean_gender, birth_date or None))
             student = cur.fetchone()
             _ensure_student_app_state(cur, student["student_id"])
 
         conn.commit()
 
     return dict(student)
+
+
+def update_student_optional_info(student_id: int, birth_date: str | None = None, gender: str | None = None) -> dict | None:
+    clean_gender = _normalize_gender(gender)
+    age = _age_from_birth_date(birth_date)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            _ensure_student_optional_columns(cur)
+            updates = ["updated_at = NOW()"]
+            params: list = []
+            if birth_date:
+                updates.extend(["birth_date = %s::date", "age = %s"])
+                params.extend([birth_date, age])
+            if clean_gender:
+                updates.append("gender = %s")
+                params.append(clean_gender)
+            params.append(student_id)
+            cur.execute(
+                f"""
+                UPDATE students
+                   SET {", ".join(updates)}
+                 WHERE student_id = %s
+                 RETURNING *
+                """,
+                params,
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else None
 
 
 def create_chat_session(student_id: int) -> int:
@@ -834,7 +409,7 @@ def fetch_profile(session_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-# ── 채팅 메시지 (chat_messages 테이블) ────────────────────────────────────────
+# ?�?� 채팅 메시지 (chat_messages ?�이�? ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def save_message(session_id: str, role: str, content: str, detected_function: str | None = None) -> int:
     profile = fetch_profile(session_id)
@@ -854,6 +429,120 @@ def save_message(session_id: str, role: str, content: str, detected_function: st
             row_id = cur.fetchone()[0]
         conn.commit()
     return row_id
+
+
+def save_chat_turn(
+    session_id: str,
+    user_content: str | None,
+    assistant_content: str,
+    detected_function: str | None = None,
+    request_id: str | None = None,
+) -> tuple[int, int]:
+    """Save a user/assistant turn through the chat-save pool only.
+
+    This intentionally does not change get_conn(), so the pool's blast radius is
+    limited to the latency-sensitive final /chat/stream turn save.
+    """
+    total_started = time.perf_counter()
+    pool_conn = _get_chat_save_pool()
+    conn = None
+    user_id = 0
+    assistant_id = 0
+    connect_ms = 0
+    profile_ms = 0
+    insert_user_ms = 0
+    insert_assistant_ms = 0
+    commit_ms = 0
+
+    try:
+        connect_started = time.perf_counter()
+        conn = pool_conn.getconn()
+        connect_ms = round((time.perf_counter() - connect_started) * 1000)
+        conn.autocommit = False
+
+        with conn.cursor() as cur:
+            profile_started = time.perf_counter()
+            cur.execute(
+                "SELECT student_id, db_session_id FROM session_profiles WHERE session_id = %s",
+                (session_id,),
+            )
+            profile = cur.fetchone()
+            profile_ms = round((time.perf_counter() - profile_started) * 1000)
+            if not profile:
+                conn.rollback()
+                _dbtrace(
+                    request_id,
+                    "save_chat_turn.missing_profile",
+                    connect_ms=connect_ms,
+                    profile_ms=profile_ms,
+                    save_message_total_ms=round((time.perf_counter() - total_started) * 1000),
+                )
+                return 0, 0
+
+            student_id, db_session_id = profile
+            if user_content:
+                insert_started = time.perf_counter()
+                cur.execute(
+                    """
+                    INSERT INTO chat_messages
+                        (session_id, student_id, speaker, message_text, detected_function)
+                    VALUES (%s, %s, %s, %s, %s) RETURNING message_id
+                    """,
+                    (db_session_id, student_id, "student", user_content, detected_function),
+                )
+                user_id = cur.fetchone()[0]
+                insert_user_ms = round((time.perf_counter() - insert_started) * 1000)
+
+            insert_started = time.perf_counter()
+            cur.execute(
+                """
+                INSERT INTO chat_messages
+                    (session_id, student_id, speaker, message_text, detected_function)
+                VALUES (%s, %s, %s, %s, %s) RETURNING message_id
+                """,
+                (db_session_id, student_id, "ai", assistant_content, None),
+            )
+            assistant_id = cur.fetchone()[0]
+            insert_assistant_ms = round((time.perf_counter() - insert_started) * 1000)
+
+        commit_started = time.perf_counter()
+        conn.commit()
+        commit_ms = round((time.perf_counter() - commit_started) * 1000)
+        _dbtrace(
+            request_id,
+            "save_chat_turn.done",
+            connect_ms=connect_ms,
+            profile_ms=profile_ms,
+            insert_user_ms=insert_user_ms,
+            insert_assistant_ms=insert_assistant_ms,
+            commit_ms=commit_ms,
+            save_message_total_ms=round((time.perf_counter() - total_started) * 1000),
+        )
+        return user_id, assistant_id
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        _dbtrace(
+            request_id,
+            "save_chat_turn.error",
+            error=f"{type(exc).__name__}: {exc}",
+            connect_ms=connect_ms,
+            profile_ms=profile_ms,
+            insert_user_ms=insert_user_ms,
+            insert_assistant_ms=insert_assistant_ms,
+            commit_ms=commit_ms,
+            save_message_total_ms=round((time.perf_counter() - total_started) * 1000),
+        )
+        return 0, 0
+    finally:
+        if conn is not None:
+            try:
+                pool_conn.putconn(conn)
+            except Exception as exc:
+                _dbtrace(request_id, "save_chat_turn.putconn_error", error=f"{type(exc).__name__}: {exc}")
 
 
 def fetch_messages(session_id: str, limit: int | None = None) -> list[dict]:
@@ -913,10 +602,10 @@ def delete_messages(session_id: str) -> int:
     return count
 
 
-# ── 오늘의 미션 자동 배정 ─────────────────────────────────────────────────────
+# ?�?� ?�늘??미션 ?�동 배정 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def _kst_today() -> str:
-    """한국 시간(KST) 기준 오늘 날짜 반환."""
+    """?�국 ?�간(KST) 기�? ?�늘 ?�짜 반환."""
     from datetime import timedelta
     return (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d")
 
@@ -939,9 +628,9 @@ def resolve_mission_query_date(target_date: str | None) -> str:
 
 def assign_daily_missions() -> int:
     """
-    오늘(KST) 미션이 배정 안 된 학생에게 자동 배정
-    - 최근 7일간 배정된 미션은 제외
-    - 7일 기록 없으면 랜덤 1개 배정
+    ?�늘(KST) 미션??배정 ?????�생?�게 ?�동 배정
+    - 최근 7?�간 배정??미션?� ?�외
+    - 7??기록 ?�으�??�덤 1�?배정
     """
     today = _kst_today()
     with get_conn() as conn:
@@ -1003,7 +692,7 @@ def assign_daily_missions() -> int:
     return assigned
 
 
-# ── 오늘의 미션 (student_daily_missions + missions 테이블) ─────────────────────
+# ?�?� ?�늘??미션 (student_daily_missions + missions ?�이�? ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def assign_demo_mission_on_signup(student_id: int) -> dict | None:
     """
@@ -1115,18 +804,18 @@ def get_student_mission_db(student_id: int, today: str | None = None) -> dict | 
 
 
 def normalize_mission_text(text: str) -> str:
-    """미션명 비교용 정규화: 공백 제거 + 소문자화."""
+    """미션�?비교???�규?? 공백 ?�거 + ?�문?�화."""
     return (text or "").replace(" ", "").strip().lower()
 
 
 def find_mission_by_user_text(user_text: str) -> dict | None:
     """
-    사용자 발화 안에 missions.mission_name이 정확히 포함되어 있으면 해당 미션 반환.
+    ?�용??발화 ?�에 missions.mission_name???�확???�함?�어 ?�으�??�당 미션 반환.
 
-    예:
-    user_text = "채소 반찬 먹기로 미션 바꿔줘"
+    ??
+    user_text = "채소 반찬 먹기�?미션 바꿔�?
     mission_name = "채소 반찬 먹기"
-    → 공백 제거 후 "채소반찬먹기"가 사용자 발화에 포함되면 정확 매칭으로 판단
+    ??공백 ?�거 ??"채소반찬먹기"가 ?�용??발화???�함?�면 ?�확 매칭?�로 ?�단
     """
     normalized_text = normalize_mission_text(user_text)
     if not normalized_text:
@@ -1152,16 +841,27 @@ def find_mission_by_user_text(user_text: str) -> dict | None:
 
 def find_similar_mission_by_user_text(user_text: str) -> dict | None:
     """
-    사용자 발화에서 2글자 이상 토큰을 뽑아 mission_name과 부분 매칭한다.
-    정확 매칭이 없을 때 유사 미션 제안용으로 사용한다.
+    ?�용??발화?�서 2글???�상 ?�큰??뽑아 mission_name�?부�?매칭?�다.
+    ?�확 매칭???�을 ???�사 미션 ?�안?�으�??�용?�다.
     """
     cleaned = (user_text or "").strip()
     if not cleaned:
         return None
 
     remove_words = [
-        "미션", "바꿔줘", "바꿔줄래", "변경해줘", "변경", "바꾸고싶어",
-        "그럼", "나", "으로", "로", "좀", "해줘", "하는", "거야",
+        "미션",
+        "바꿔",
+        "바꿔줄래",
+        "변경해",
+        "변경",
+        "바꾸고싶어",
+        "그럼",
+        "로",
+        "으로",
+        "좀",
+        "해줘",
+        "하는",
+        "거야",
     ]
 
     keyword_text = cleaned
@@ -1201,7 +901,7 @@ def save_pending_mission_suggestion(
     source_text: str | None = None,
 ) -> None:
     """
-    기존 pending 제안은 취소하고 새 제안을 저장한다.
+    기존 pending ?�안?� 취소?�고 ???�안???�?�한??
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -1267,8 +967,8 @@ def resolve_pending_mission_suggestion(suggestion_id: int, status: str = "accept
 
 def has_checkin_today(student_id: int) -> bool:
     """
-    오늘(KST) 미션 결과를 이미 제출했는지 확인.
-    checkin_log에 submit_mission_result 기록이 있으면 True.
+    ?�늘(KST) 미션 결과�??��? ?�출?�는지 ?�인.
+    checkin_log??submit_mission_result 기록???�으�?True.
     """
     today = _kst_today()
     with get_conn() as conn:
@@ -1279,13 +979,14 @@ def has_checkin_today(student_id: int) -> bool:
                 WHERE student_id = %s
                   AND checkin_date = %s::date
                   AND function_called = 'submit_mission_result'
+                  AND mission_result IS DISTINCT FROM 'cancelled'
                 LIMIT 1
             """, (student_id, today))
             row = cur.fetchone()
     return row is not None
 
 
-# ── 학생 정보 조회 (students 테이블) ──────────────────────────────────────────
+# ?�?� ?�생 ?�보 조회 (students ?�이�? ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def get_success_summary(student_id: int) -> dict:
     today = _kst_today()
@@ -1298,6 +999,7 @@ def get_success_summary(student_id: int) -> dict:
                 FROM checkin_log
                 WHERE student_id = %s
                   AND function_called = 'submit_mission_result'
+                  AND mission_result IS DISTINCT FROM 'cancelled'
                 ORDER BY checkin_date DESC, created_at DESC
             """, (student_id,))
             rows = [dict(r) for r in cur.fetchall()]
@@ -1453,9 +1155,9 @@ def get_app_state(student_id: int) -> dict:
     return dict(row)
 
 
-# ── 레벨/XP 계산 ──────────────────────────────────────────────────────────────
-# 누적 XP 임계값: key = 그 레벨에 도달하기 위해 필요한 누적 XP
-# 프론트 LEVEL_THRESHOLDS와 정확히 일치해야 함.
+# ?�?� ?�벨/XP 계산 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+# ?�적 XP ?�계�? key = �??�벨???�달?�기 ?�해 ?�요???�적 XP
+# ?�론??LEVEL_THRESHOLDS?� ?�확???�치?�야 ??
 _LEVEL_THRESHOLDS = {2: 5, 3: 17, 4: 37, 5: 70, 6: 150}
 _MAX_LEVEL = 5
 _MAX_HEARTS = 5
@@ -1514,10 +1216,10 @@ def _recompute_level(current_xp: int) -> int:
 
 def award_mission_xp(student_id: int, mission_id: int) -> dict:
     """
-    미션 성공 보상 지급. 단일 트랜잭션:
-      1) 미션의 reward_xp 조회 (없으면 difficulty 기반 fallback)
-      2) student_app_state UPSERT — current_xp += gain, level 재계산, ticket_count += 1
-      3) xp_history INSERT — source_type='mission_success', mission_id=mission_id
+    미션 ?�공 보상 지�? ?�일 ?�랜??��:
+      1) 미션??reward_xp 조회 (?�으�?difficulty 기반 fallback)
+      2) student_app_state UPSERT ??current_xp += gain, level ?�계?? ticket_count += 1
+      3) xp_history INSERT ??source_type='mission_success', mission_id=mission_id
 
     Returns dict:
       { xp_gain, ticket_gain, level_before, level_after, leveled_up, app_state }
@@ -1584,9 +1286,9 @@ def award_mission_xp(student_id: int, mission_id: int) -> dict:
 
 
 def _roll_draw_reward(is_first_of_day: bool) -> dict:
-    """가챠 보상 분포 (프론트 rollReward와 동일):
-       - 첫 뽑기: 하트 1-2 확정
-       - 이후: 40% 하트(1-2), 40% XP(3-5), 20% 하트+XP
+    """가�?보상 분포 (?�론??rollReward?� ?�일):
+       - �?뽑기: ?�트 1-2 ?�정
+       - ?�후: 40% ?�트(1-2), 40% XP(3-5), 20% ?�트+XP
     """
     if is_first_of_day:
         return {"type": "heart", "heart": random.randint(1, 2), "exp": 0}
@@ -1600,13 +1302,13 @@ def _roll_draw_reward(is_first_of_day: bool) -> dict:
 
 def claim_draw_reward(student_id: int) -> dict:
     """
-    가챠 한 판 처리. 단일 트랜잭션:
-      1) student_app_state FOR UPDATE — 티켓 ≥1 검증
-      2) 오늘(KST) draw_runs 조회 → first_of_day 판정
-      3) 보상 굴림 (서버 전속)
-      4) app_state 업데이트 — ticket -1, heart += gain (cap), xp += gain (level 재계산)
-      5) draw_runs INSERT → draw_id
-      6) xp_gain > 0 이면 xp_history INSERT (source_type='draw_reward', draw_id=draw_id)
+    가�?????처리. ?�일 ?�랜??��:
+      1) student_app_state FOR UPDATE ???�켓 ?? 검�?
+      2) ?�늘(KST) draw_runs 조회 ??first_of_day ?�정
+      3) 보상 굴림 (?�버 ?�속)
+      4) app_state ?�데?�트 ??ticket -1, heart += gain (cap), xp += gain (level ?�계??
+      5) draw_runs INSERT ??draw_id
+      6) xp_gain > 0 ?�면 xp_history INSERT (source_type='draw_reward', draw_id=draw_id)
 
     Raises ValueError("no_ticket") if ticket_count == 0.
 
@@ -1694,9 +1396,9 @@ _ATTENDANCE_TICKET_REWARD = 1
 
 def claim_attendance(student_id: int) -> dict:
     """
-    오늘(KST) 첫 출석이면 ticket +1. 두 번째 이후는 no-op.
+    ?�늘(KST) �?출석?�면 ticket +1. ??번째 ?�후??no-op.
 
-    attendance_log의 (student_id, attendance_date) PRIMARY KEY로 하루 1회 보장.
+    attendance_log??(student_id, attendance_date) PRIMARY KEY�??�루 1??보장.
 
     Returns dict:
       { first_check_in: bool, ticket_awarded: int, app_state: {...} }
@@ -1744,17 +1446,17 @@ def claim_attendance(student_id: int) -> dict:
     }
 
 
-# ── 경험치 랭킹 ──────────────────────────────────────────────────────────────
+# ?�?� 경험�???�� ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 _KST = timezone(timedelta(hours=9))
 
 
 def _period_start_utc(period: str) -> datetime | None:
     """
-    'week' = 이번 주 월요일 00:00 KST
-    'month' = 이번 달 1일 00:00 KST
-    'all' = None (필터 없음)
-    UTC로 변환해서 반환.
+    'week' = ?�번 �??�요??00:00 KST
+    'month' = ?�번 ??1??00:00 KST
+    'all' = None (?�터 ?�음)
+    UTC�?변?�해??반환.
     """
     if period == "all":
         return None
@@ -1771,9 +1473,9 @@ def _period_start_utc(period: str) -> datetime | None:
 
 def get_xp_ranking(period: str = "week", limit: int = 100) -> list[dict]:
     """
-    기간 내 xp_history 합계 기준 랭킹.
-    student_app_state의 모든 학생을 LEFT JOIN해서, 기간에 XP 못 받은 학생도 0으로 포함.
-    동률은 level DESC, current_xp DESC로 깸.
+    기간 ??xp_history ?�계 기�? ??��.
+    student_app_state??모든 ?�생??LEFT JOIN?�서, 기간??XP �?받�? ?�생??0?�로 ?�함.
+    ?�률?� level DESC, current_xp DESC�?�?
     Returns: [{rank, student_id, student_name, level, period_xp}, ...]
     """
     period_start = _period_start_utc(period)
@@ -1810,7 +1512,7 @@ def get_xp_ranking(period: str = "week", limit: int = 100) -> list[dict]:
     ]
 
 
-# ── 게임 기록 / 랭킹 ─────────────────────────────────────────────────────────
+# ?�?� 게임 기록 / ??�� ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def record_game_run(
     student_id: int,
@@ -1818,7 +1520,7 @@ def record_game_run(
     score: int,
     duration_sec: int = 0,
 ) -> dict:
-    """게임 한 판 기록. Returns inserted row."""
+    """게임 ????기록. Returns inserted row."""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -1837,9 +1539,9 @@ def get_game_ranking(
     game_type: str | None = None,
 ) -> list[dict]:
     """
-    기간 내 game_runs MAX(score) 기준 랭킹.
-    student_app_state의 모든 학생을 LEFT JOIN — 미플레이도 best_score=0, plays=0으로 포함.
-    동률은 plays DESC, level DESC, student_id ASC로 깸.
+    기간 ??game_runs MAX(score) 기�? ??��.
+    student_app_state??모든 ?�생??LEFT JOIN ??미플?�이??best_score=0, plays=0?�로 ?�함.
+    ?�률?� plays DESC, level DESC, student_id ASC�?�?
     Returns: [{rank, student_id, student_name, level, best_score, plays}, ...]
     """
     period_start = _period_start_utc(period)
@@ -1887,13 +1589,13 @@ def get_game_ranking(
     ]
 
 
-# ── 학습 진행도 ───────────────────────────────────────────────────────────────
+# ?�?� ?�습 진행???�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 _QUIZ_TICKET_REWARD = 1
 
 
 def get_lesson_progress(student_id: int) -> list[dict]:
-    """학생의 모든 lesson 진행도. 없으면 빈 리스트."""
+    """?�생??모든 lesson 진행?? ?�으�?�?리스??"""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -1915,8 +1617,8 @@ def upsert_lesson_progress(
     quiz_done: bool | None = None,
 ) -> dict:
     """
-    부분 업데이트. None은 기존 값 유지. (student_id, lesson_id)에 row 없으면 새로 만듦.
-    quiz_done이 처음 True가 될 때 completed_at 자동 세팅.
+    부�??�데?�트. None?� 기존 �??��?. (student_id, lesson_id)??row ?�으�??�로 만듦.
+    quiz_done??처음 True가 ????completed_at ?�동 ?�팅.
     """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -1960,7 +1662,7 @@ def complete_lesson_quiz(
     quiz_score: int | None = None,
 ) -> dict:
     """
-    퀴즈 완료 처리. 첫 완료면 ticket +1 지급 (idempotent — 두 번째부터는 상태만 갱신).
+    ?�즈 ?�료 처리. �??�료�?ticket +1 지�?(idempotent ????번째부?�는 ?�태�?갱신).
 
     Returns:
       { progress, app_state, first_completion: bool, ticket_awarded: int }
@@ -2026,7 +1728,7 @@ def complete_lesson_quiz(
 
 
 def get_health_note(student_id: int) -> dict | None:
-    """학생 건강노트 최신 값. 없으면 None."""
+    """?�생 건강?�트 최신 �? ?�으�?None."""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -2043,7 +1745,7 @@ def upsert_health_note(
     allergens: list[str] | None = None,
     caution_foods: list[str] | None = None,
 ) -> dict:
-    """학생 건강노트를 student_id 기준으로 1개만 저장."""
+    """?�생 건강?�트�?student_id 기�??�로 1개만 ?�??"""
     clean_allergens = [str(x).strip() for x in (allergens or []) if str(x).strip()]
     clean_caution_foods = [str(x).strip() for x in (caution_foods or []) if str(x).strip()]
     with get_conn() as conn:
@@ -2082,7 +1784,7 @@ def get_student_info_db(student_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-# ── 미션 결과 저장 (checkin_log 테이블) ───────────────────────────────────────
+# ?�?� 미션 결과 ?�??(checkin_log ?�이�? ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def save_mission_result(
     student_id: int,
@@ -2103,6 +1805,7 @@ def save_mission_result(
                 VALUES (%s, %s, %s, %s, %s, %s, 'pending', NOW(), NOW())
                 ON CONFLICT (student_id, checkin_date)
                     WHERE function_called = 'submit_mission_result'
+                      AND mission_result IS DISTINCT FROM 'cancelled'
                 DO NOTHING
                 RETURNING checkin_id
                 """,
@@ -2195,15 +1898,15 @@ def get_user_history_db(
     if query_type == "daily_summary":
         resolved_date = _resolve_target_date(target_date, today_date)
         if not resolved_date:
-            return empty("하루 기록", "어느 날 기록을 보고 싶은지 오늘, 어제, 그저께처럼 다시 물어봐줘.")
+            return empty("?�루 기록", "?�느 ??기록??보고 ?��?지 ?�늘, ?�제, 그�?께처???�시 물어봐줘.")
         period_start = resolved_date
         period_end = resolved_date + timedelta(days=1)
         if resolved_date == today_date:
-            period_label = f"오늘 ({resolved_date.strftime('%m/%d')})"
+            period_label = f"?�늘 ({resolved_date.strftime('%m/%d')})"
         elif resolved_date == today_date - timedelta(days=1):
-            period_label = f"어제 ({resolved_date.strftime('%m/%d')})"
+            period_label = f"?�제 ({resolved_date.strftime('%m/%d')})"
         elif resolved_date == today_date - timedelta(days=2):
-            period_label = f"그저께 ({resolved_date.strftime('%m/%d')})"
+            period_label = f"그�?�?({resolved_date.strftime('%m/%d')})"
         else:
             period_label = resolved_date.strftime("%Y-%m-%d")
         prev_start = prev_end = None
@@ -2214,7 +1917,7 @@ def get_user_history_db(
             period_start = this_week_start - timedelta(days=7)
             period_end = this_week_start
             period_label = (
-                f"지난주 ({period_start.strftime('%m/%d')}~"
+                f"지?�주 ({period_start.strftime('%m/%d')}~"
                 f"{(period_end - timedelta(days=1)).strftime('%m/%d')})"
             )
             prev_start = prev_end = None
@@ -2222,15 +1925,15 @@ def get_user_history_db(
         else:
             period_start = this_week_start
             period_end = today_date + timedelta(days=1)
-            period_label = f"이번 주 ({period_start.strftime('%m/%d')}~{today_date.strftime('%m/%d')})"
+            period_label = f"?�번 �?({period_start.strftime('%m/%d')}~{today_date.strftime('%m/%d')})"
             prev_start = period_start - timedelta(days=7)
             prev_end = period_start
-            fallback_label = "지난주"
+            fallback_label = "지?�주"
     elif query_type == "monthly_summary":
         if target_month:
             period_start = _resolve_target_month(target_month, today_date)
             if not period_start:
-                return empty("월간 기록", "몇 월 기록을 보고 싶은지 다시 물어봐줘.")
+                return empty("?�간 기록", "�???기록??보고 ?��?지 ?�시 물어봐줘.")
             period_end = date(period_start.year + (period_start.month // 12), (period_start.month % 12) + 1, 1)
             period_label = period_start.strftime("%Y년 %m월")
             prev_start = prev_end = None
@@ -2240,19 +1943,19 @@ def get_user_history_db(
             last_month_end = this_month_start - timedelta(days=1)
             period_start = last_month_end.replace(day=1)
             period_end = this_month_start
-            period_label = f"지난달 ({period_start.strftime('%m')}월)"
+            period_label = f"지?�달 ({period_start.strftime('%m')}??"
             prev_start = prev_end = None
             fallback_label = ""
         else:
             period_start = today_date.replace(day=1)
             period_end = today_date + timedelta(days=1)
-            period_label = f"이번 달 ({period_start.strftime('%m')}월)"
+            period_label = f"?�번 ??({period_start.strftime('%m')}??"
             last_month_end = period_start - timedelta(days=1)
             prev_start = last_month_end.replace(day=1)
             prev_end = period_start
-            fallback_label = "지난달"
+            fallback_label = "지?�달"
     else:
-        return empty("미션 기록", "어떤 기간의 기록을 보고 싶은지 다시 물어봐줘.")
+        return empty("미션 기록", "?�떤 기간??기록??보고 ?��?지 ?�시 물어봐줘.")
 
     def fetch(start, end):
         with get_conn() as conn:
@@ -2268,6 +1971,7 @@ def get_user_history_db(
                       AND cl.checkin_date >= %s::date
                       AND cl.checkin_date < %s::date
                       AND cl.function_called = 'submit_mission_result'
+                      AND cl.mission_result IS DISTINCT FROM 'cancelled'
                     ORDER BY cl.checkin_date, cl.created_at DESC
                 """, (student_id, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
                 return [dict(r) for r in cur.fetchall()]
@@ -2293,7 +1997,7 @@ def get_mission_records(
     from_date: str,
     to_date: str,
 ) -> list[dict]:
-    """배정된 미션을 날짜 범위로 조회한다. 제출이 없으면 unsubmitted로 내려준다. to_date는 exclusive."""
+    """배정??미션???�짜 범위�?조회?�다. ?�출???�으�?unsubmitted�??�려준?? to_date??exclusive."""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -2340,7 +2044,7 @@ def create_mission_correction_request(
     requested_result: str,
     message: str | None = None,
 ) -> dict | None:
-    """미션 결과는 변경하지 않고 관리자 확인용 요청만 저장한다."""
+    """미션 결과??변경하지 ?�고 관리자 ?�인???�청�??�?�한??"""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if current_result == "unsubmitted":
@@ -2408,7 +2112,7 @@ def create_user_feedback(
     feedback_type: str,
     message: str,
 ) -> dict | None:
-    """앱 소감/버그/문의는 관리자 확인용으로만 저장한다."""
+    """???�감/버그/문의??관리자 ?�인?�으로만 ?�?�한??"""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT 1 FROM students WHERE student_id = %s LIMIT 1", (student_id,))
@@ -2430,7 +2134,7 @@ _DIFFICULTY_ORDER = ["easy", "medium", "hard"]
 
 
 def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission_id: int) -> dict | None:
-    """adjustment_type에 따라 새 미션 선택. 없으면 None."""
+    """adjustment_type???�라 ??미션 ?�택. ?�으�?None."""
     today = _kst_today()
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -2451,7 +2155,7 @@ def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission
     elif adjustment_type == "harder":
         idx = _DIFFICULTY_ORDER.index(difficulty) if difficulty in _DIFFICULTY_ORDER else 1
         target_difficulty = _DIFFICULTY_ORDER[idx + 1] if idx < len(_DIFFICULTY_ORDER) - 1 else difficulty
-    else:  # change: 같은 난이도
+    else:  # change: 같�? ?�이??
         target_difficulty = difficulty
 
     with get_conn() as conn:
@@ -2500,7 +2204,7 @@ def find_adjusted_mission(student_id: int, adjustment_type: str, current_mission
 
 
 def save_mission_adjustment(student_id: int, old_mission_id: int, new_mission_id: int) -> None:
-    """미션 변경 이력 저장(mission_changes) + student_daily_missions 업데이트."""
+    """미션 변�??�력 ?�??mission_changes) + student_daily_missions ?�데?�트."""
     today = _kst_today()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -2519,26 +2223,34 @@ def save_mission_adjustment(student_id: int, old_mission_id: int, new_mission_id
                 (new_mission_id, student_id, today),
             )
         conn.commit()
+    try:
+        from sheets import sync_daily_status_for_student
+
+        sync_daily_status_for_student(student_id, today)
+    except Exception as e:
+        print(f"[sheets] mission adjustment sync failed: {e}")
 
 
 def cancel_last_action(student_id: int, cancel_type: str = "latest") -> str | None:
-    """오늘(KST) 해당 학생의 가장 최근 행동을 취소.
-    checkin_log(제출)와 mission_changes(미션 변경) 중 더 최근 것을 찾아 취소한다.
-    반환값: 취소한 행동 타입 ('submit' | 'adjustment') 또는 None(취소할 것 없음).
+    """?�늘(KST) ?�당 ?�생??가??최근 ?�동??취소.
+    checkin_log(?�출)?� mission_changes(미션 변�? �???최근 것을 찾아 취소?�다.
+    반환�? 취소???�동 ?�??('submit' | 'adjustment') ?�는 None(취소??�??�음).
     """
     today = _kst_today()
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # 가장 최근 제출 기록
+            # 가??최근 ?�출 기록
             cur.execute(
                 "SELECT checkin_id, created_at FROM checkin_log "
                 "WHERE student_id = %s AND checkin_date = %s "
+                "AND function_called = 'submit_mission_result' "
+                "AND mission_result IS DISTINCT FROM 'cancelled' "
                 "ORDER BY created_at DESC LIMIT 1",
                 (student_id, today),
             )
             last_submit = cur.fetchone()
 
-            # 가장 최근 미션 변경 기록
+            # 가??최근 미션 변�?기록
             cur.execute(
                 "SELECT change_id, old_mission_id, created_at FROM mission_changes "
                 "WHERE student_id = %s AND change_date = %s "
@@ -2547,11 +2259,11 @@ def cancel_last_action(student_id: int, cancel_type: str = "latest") -> str | No
             )
             last_change = cur.fetchone()
 
-        # 둘 다 없으면 취소할 것 없음
+        # ?????�으�?취소??�??�음
         if not last_submit and not last_change:
             return None
 
-        # 더 최근 행동 판별
+        # ??최근 ?�동 ?�별
         submit_time = last_submit["created_at"] if last_submit else None
         change_time = last_change["created_at"] if last_change else None
 
@@ -2573,8 +2285,18 @@ def cancel_last_action(student_id: int, cancel_type: str = "latest") -> str | No
             )
 
             if should_cancel_submit:
-                # 제출 취소: checkin_log 삭제 + status 복원
-                cur.execute("DELETE FROM checkin_log WHERE checkin_id = %s", (last_submit["checkin_id"],))
+                # ?�출 취소: checkin_log??보존?�고 취소 ?�태�??�시 + status 복원
+                cur.execute(
+                    """
+                    UPDATE checkin_log
+                    SET mission_result = 'cancelled',
+                        result_reason = COALESCE(result_reason, 'cancelled_by_user'),
+                        sheet_update_status = 'pending',
+                        last_updated_at = NOW()
+                    WHERE checkin_id = %s
+                    """,
+                    (last_submit["checkin_id"],),
+                )
                 cur.execute(
                     "UPDATE student_daily_missions SET status = 'assigned', updated_at = NOW() "
                     "WHERE student_id = %s AND assigned_date = %s",
@@ -2582,7 +2304,7 @@ def cancel_last_action(student_id: int, cancel_type: str = "latest") -> str | No
                 )
                 cancelled_type = "submit"
             else:
-                # 미션 변경 취소: mission_changes 삭제 + 이전 미션 복원
+                # 미션 변�?취소: mission_changes ??�� + ?�전 미션 복원
                 cur.execute("DELETE FROM mission_changes WHERE change_id = %s", (last_change["change_id"],))
                 cur.execute(
                     "UPDATE student_daily_missions SET mission_id = %s, updated_at = NOW() "
@@ -2591,17 +2313,26 @@ def cancel_last_action(student_id: int, cancel_type: str = "latest") -> str | No
                 )
                 cancelled_type = "adjustment"
         conn.commit()
+    if cancelled_type:
+        try:
+            from sheets import sync_daily_status_for_student
+
+            sync_daily_status_for_student(student_id, today)
+        except Exception as e:
+            print(f"[sheets] cancel sync failed: {e}")
     return cancelled_type
 
 
 def get_last_action_type(student_id: int) -> str | None:
-    """오늘(KST) 해당 학생의 가장 최근 행동 타입 반환. 'submit' | 'adjustment' | None."""
+    """?�늘(KST) ?�당 ?�생??가??최근 ?�동 ?�??반환. 'submit' | 'adjustment' | None."""
     today = _kst_today()
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT created_at FROM checkin_log "
                 "WHERE student_id = %s AND checkin_date = %s "
+                "AND function_called = 'submit_mission_result' "
+                "AND mission_result IS DISTINCT FROM 'cancelled' "
                 "ORDER BY created_at DESC LIMIT 1",
                 (student_id, today),
             )
@@ -2623,7 +2354,7 @@ def get_last_action_type(student_id: int) -> str | None:
     return "adjustment"
 
 
-# ── 장기기억 (user_memories) ─────────────────────────────────────────────────
+# ?�?� ?�기기억 (user_memories) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 def save_mission_review(
     student_id: int,
@@ -2701,8 +2432,8 @@ def upsert_user_memory(
     polarity: int | None = None,
 ) -> dict | None:
     """
-    사용자 장기기억을 저장/갱신한다.
-    DB 컬럼명은 type이지만, Python 내장 type과 구분하려고 memory_type을 사용한다.
+    ?�용???�기기억???�??갱신?�다.
+    DB 컬럼명�? type?��?�? Python ?�장 type�?구분?�려�?memory_type???�용?�다.
     """
     if memory_type not in {"preference", "difficulty", "restriction"}:
         return None
@@ -2774,8 +2505,8 @@ def upsert_user_memory(
 
 def get_relevant_user_memories(student_id: int) -> list[dict]:
     """
-    추후 미션 배정/필터링에서 쓸 핵심 기억만 조회한다.
-    preference는 |score| >= 2, difficulty는 count >= 2, restriction은 전체 반환.
+    추후 미션 배정/?�터링에?????�심 기억�?조회?�다.
+    preference??|score| >= 2, difficulty??count >= 2, restriction?� ?�체 반환.
     """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -2879,7 +2610,7 @@ def replace_activity_preferences(
     }
 
 
-# ── 멀티턴 pending actions ───────────────────────────────────────────────────
+# ?�?� 멀?�턴 pending actions ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 VALID_PENDING_ACTION_TYPES = {
     "submit_confirmation",
@@ -2912,7 +2643,7 @@ VALID_MISSION_CHANGE_REASON_TYPES = {
 
 
 def save_pending_action(student_id: int, action_type: str, payload: dict) -> dict:
-    """기존 pending을 취소하고 새 pending action을 저장한다."""
+    """기존 pending??취소?�고 ??pending action???�?�한??"""
     if action_type not in CREATABLE_PENDING_ACTION_TYPES:
         raise ValueError(f"Invalid action_type: {action_type}")
     if not student_id:
@@ -2947,7 +2678,7 @@ def save_pending_action(student_id: int, action_type: str, payload: dict) -> dic
 
 
 def get_pending_action(student_id: int) -> dict | None:
-    """학생의 현재 pending action 1개를 조회한다."""
+    """?�생???�재 pending action 1개�? 조회?�다."""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -2963,7 +2694,7 @@ def get_pending_action(student_id: int) -> dict | None:
 
 
 def resolve_pending(pending_id: int, status: str) -> dict | None:
-    """pending action을 accepted/rejected/cancelled 중 하나로 종료한다."""
+    """pending action??accepted/rejected/cancelled �??�나�?종료?�다."""
     if status not in VALID_RESOLVE_STATUSES:
         raise ValueError(f"Invalid status: {status}")
 
@@ -2982,7 +2713,7 @@ def resolve_pending(pending_id: int, status: str) -> dict | None:
 
 
 def increment_pending_retry(pending_id: int) -> dict | None:
-    """pending action의 retry_count를 1 증가시킨다."""
+    """pending action??retry_count�?1 증�??�킨??"""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -2998,7 +2729,7 @@ def increment_pending_retry(pending_id: int) -> dict | None:
 
 
 def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) -> dict | None:
-    """미션 변경 이유 로그를 저장한다. activity_key는 mission_id로 백엔드에서 조회한다."""
+    """미션 변�??�유 로그�??�?�한?? activity_key??mission_id�?백엔?�에??조회?�다."""
     if reason_type not in VALID_MISSION_CHANGE_REASON_TYPES:
         raise ValueError(f"Invalid reason_type: {reason_type}")
     if not student_id:
@@ -3036,7 +2767,7 @@ def save_mission_change_log(student_id: int, mission_id: int, reason_type: str) 
     return dict(row) if row else None
 
 
-# ── 버튼/명시적 UI 액션 ───────────────────────────────────────────────────────
+# ?�?� 버튼/명시??UI ?�션 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
 
 VALID_GENERATED_MISSION_STATUSES = {"draft", "approved", "rejected", "archived", "assigned", "generated_success"}
 
@@ -3299,7 +3030,7 @@ def save_mission_ui_action(
     status: str = "pending",
     ttl_minutes: int = 15,
 ) -> dict:
-    """버튼/명시적 UI 액션을 1회성 action_id로 저장한다."""
+    """버튼/명시??UI ?�션??1?�성 action_id�??�?�한??"""
     if not student_id:
         raise ValueError("student_id is required")
     if not session_id:
@@ -3342,7 +3073,7 @@ def save_mission_ui_action(
 
 
 def get_pending_mission_ui_action(student_id: int, session_id: str) -> dict | None:
-    """현재 세션에서 대기 중인 UI 액션 1개를 조회한다. 만료된 액션은 expired 처리한다."""
+    """?�재 ?�션?�서 ?��?중인 UI ?�션 1개�? 조회?�다. 만료???�션?� expired 처리?�다."""
     if not student_id or not session_id:
         return None
     with get_conn() as conn:
@@ -3378,7 +3109,7 @@ def update_mission_ui_action_payload(
     session_id: str,
     payload: dict,
 ) -> dict | None:
-    """대기 중인 UI action의 payload만 갱신한다."""
+    """?��?중인 UI action??payload�?갱신?�다."""
     if not action_id or not student_id or not session_id or not isinstance(payload, dict):
         return None
     payload_json = json.dumps(payload, ensure_ascii=False)
@@ -3405,7 +3136,7 @@ def resolve_mission_ui_action(
     session_id: str,
     status: str = "resolved",
 ) -> dict | None:
-    """대기 중인 UI 액션을 1회만 종료한다."""
+    """?��?중인 UI ?�션??1?�만 종료?�다."""
     if status not in {"resolved", "cancelled", "expired"}:
         raise ValueError(f"Invalid resolve status: {status}")
     if not action_id or not student_id or not session_id:

@@ -18,7 +18,7 @@ backend 폴더
 python scripts/eval_rag_generation.py
 
 결과 파일:
-backend/data/eval/rag_generation_eval_result_after_reembed.csv
+backend/data/eval/rag_generation_eval_result_for_report.csv
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ from ollama_client import generate_chat_message, OLLAMA_MODEL
 # ---------------------------------------------------------------------
 
 EVAL_CSV_PATH = os.path.join("data", "eval", "rag_eval_question_set.csv")
-OUTPUT_CSV_PATH = os.path.join("data", "eval", "rag_generation_eval_result_after_reembed.csv")
+OUTPUT_CSV_PATH = os.path.join("data", "eval", "rag_generation_eval_result_for_report.csv")
 
 # 생성 평가는 오래 걸리므로 전체 108개를 다 돌리지 않고 표본만 돌림.
 # None이면 제한 없음.
@@ -268,6 +268,62 @@ def build_sources_text(chunks: list[dict], faqs: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def normalize_doc_id(value) -> str:
+    """
+    doc_id 비교용 문자열을 만든다.
+    """
+
+    return str(value).strip() if value is not None else ""
+
+
+def extract_doc_ids(items: list[dict]) -> list[str]:
+    """
+    검색 결과에서 빈 값을 제외한 doc_id 목록을 순서대로 추출한다.
+    """
+
+    doc_ids: list[str] = []
+
+    for item in items:
+        doc_id = normalize_doc_id(item.get("doc_id", ""))
+        if doc_id:
+            doc_ids.append(doc_id)
+
+    return doc_ids
+
+
+def dedupe_keep_order(values: list[str]) -> list[str]:
+    """
+    순서를 유지하면서 중복을 제거한다.
+    """
+
+    seen: set[str] = set()
+    result: list[str] = []
+
+    for value in values:
+        if value in seen:
+            continue
+
+        seen.add(value)
+        result.append(value)
+
+    return result
+
+
+def build_manual_eval_columns() -> dict:
+    """
+    보고서 수동 평가용 빈 컬럼을 만든다.
+    """
+
+    return {
+        "manual_answer_relevance": "",
+        "manual_faithfulness": "",
+        "manual_safe_response": "",
+        "manual_child_friendly": "",
+        "manual_rag_pass": "",
+        "manual_note": "",
+    }
+
+
 # ---------------------------------------------------------------------
 # 단일 질문 실행
 # ---------------------------------------------------------------------
@@ -335,11 +391,31 @@ async def run_one(row: dict, index: int, total: int) -> dict:
     chunk_details = summarize_chunks(chunks)
     faq_details = summarize_faqs(faqs)
 
+    expected_doc_id = normalize_doc_id(row.get("expected_doc_id", ""))
+    chunk_doc_ids = extract_doc_ids(chunks)
+    faq_doc_ids = extract_doc_ids(faqs)
+    retrieved_doc_ids = dedupe_keep_order(chunk_doc_ids + faq_doc_ids)
+    top1_chunk_doc_id = normalize_doc_id(chunks[0].get("doc_id", "")) if chunks else ""
+    top1_faq_doc_id = normalize_doc_id(faqs[0].get("doc_id", "")) if faqs else ""
+
+    chunk_hit = bool(expected_doc_id) and expected_doc_id in chunk_doc_ids
+    faq_hit = bool(expected_doc_id) and expected_doc_id in faq_doc_ids
+    doc_hit = chunk_hit or faq_hit
+
+    if chunk_hit and faq_hit:
+        hit_source = "both"
+    elif chunk_hit:
+        hit_source = "chunk"
+    elif faq_hit:
+        hit_source = "faq"
+    else:
+        hit_source = "none"
+
     return {
         "index": index,
         "test_id": row.get("test_id", ""),
         "question": question,
-        "expected_doc_id": row.get("expected_doc_id", ""),
+        "expected_doc_id": expected_doc_id,
         "expected_title": row.get("expected_title", ""),
         "topic": row.get("topic", ""),
         "sub_topic": row.get("sub_topic", ""),
@@ -351,9 +427,18 @@ async def run_one(row: dict, index: int, total: int) -> dict:
 
         # 가져온 번호 요약
         "chunk_ids": ";".join(str(c.get("chunk_id", "")) for c in chunks),
-        "chunk_doc_ids": ";".join(str(c.get("doc_id", "")) for c in chunks),
+        "chunk_doc_ids": ";".join(chunk_doc_ids),
         "faq_ids": ";".join(str(f.get("faq_id", "")) for f in faqs),
-        "faq_doc_ids": ";".join(str(f.get("doc_id", "")) for f in faqs),
+        "faq_doc_ids": ";".join(faq_doc_ids),
+
+        # 자동 평가 컬럼
+        "retrieved_doc_ids": ";".join(retrieved_doc_ids),
+        "chunk_hit": chunk_hit,
+        "faq_hit": faq_hit,
+        "doc_hit": doc_hit,
+        "hit_source": hit_source,
+        "top1_chunk_doc_id": top1_chunk_doc_id,
+        "top1_faq_doc_id": top1_faq_doc_id,
 
         # 사람이 보기 좋은 검색 근거 요약
         "sources_text": build_sources_text(chunks, faqs),
@@ -384,6 +469,7 @@ async def run_one(row: dict, index: int, total: int) -> dict:
 
         # 에러 없음
         "error": "",
+        **build_manual_eval_columns(),
     }
 
 
@@ -423,12 +509,17 @@ async def main() -> None:
                     "index": i,
                     "test_id": row.get("test_id", ""),
                     "question": row.get("question", ""),
-                    "expected_doc_id": row.get("expected_doc_id", ""),
+                    "expected_doc_id": normalize_doc_id(row.get("expected_doc_id", "")),
                     "expected_title": row.get("expected_title", ""),
                     "topic": row.get("topic", ""),
                     "sub_topic": row.get("sub_topic", ""),
                     "question_type": row.get("question_type", ""),
+                    "chunk_hit": False,
+                    "faq_hit": False,
+                    "doc_hit": False,
+                    "hit_source": "none",
                     "error": str(e),
+                    **build_manual_eval_columns(),
                 }
             )
 
@@ -451,6 +542,13 @@ async def main() -> None:
         "chunk_doc_ids",
         "faq_ids",
         "faq_doc_ids",
+        "retrieved_doc_ids",
+        "chunk_hit",
+        "faq_hit",
+        "doc_hit",
+        "hit_source",
+        "top1_chunk_doc_id",
+        "top1_faq_doc_id",
 
         "sources_text",
         "chunk_details_json",
@@ -472,6 +570,13 @@ async def main() -> None:
         "answer",
 
         "error",
+
+        "manual_answer_relevance",
+        "manual_faithfulness",
+        "manual_safe_response",
+        "manual_child_friendly",
+        "manual_rag_pass",
+        "manual_note",
     ]
 
     with open(OUTPUT_CSV_PATH, "w", encoding="utf-8-sig", newline="") as f:
@@ -491,6 +596,9 @@ async def main() -> None:
 
     success_rows = [r for r in results if not r.get("error")]
 
+    def hit_rate(count: int, denominator: int) -> float:
+        return (count / denominator * 100) if denominator else 0.0
+
     if success_rows:
         avg_llm_ms = sum(r["llm_ms"] for r in success_rows) / len(success_rows)
         max_llm_ms = max(r["llm_ms"] for r in success_rows)
@@ -507,7 +615,27 @@ async def main() -> None:
         avg_prompt_tokens = sum(r["total_prompt_est_tokens"] for r in success_rows) / len(success_rows)
         max_prompt_tokens = max(r["total_prompt_est_tokens"] for r in success_rows)
 
-        print(f"성공 개수: {len(success_rows)}/{len(results)}")
+        doc_hit_count = sum(1 for r in success_rows if r.get("doc_hit") is True)
+        chunk_hit_count = sum(1 for r in success_rows if r.get("chunk_hit") is True)
+        faq_hit_count = sum(1 for r in success_rows if r.get("faq_hit") is True)
+
+        print(f"전체 평가 질문 수: {len(results)}")
+        print(f"에러 없는 성공 row 수: {len(success_rows)}")
+        print(
+            f"doc_hit=True: {doc_hit_count}/{len(success_rows)} "
+            f"({hit_rate(doc_hit_count, len(success_rows)):.1f}%)"
+        )
+        print(
+            f"chunk_hit=True: {chunk_hit_count}/{len(success_rows)} "
+            f"({hit_rate(chunk_hit_count, len(success_rows)):.1f}%)"
+        )
+        print(
+            f"faq_hit=True: {faq_hit_count}/{len(success_rows)} "
+            f"({hit_rate(faq_hit_count, len(success_rows)):.1f}%)"
+        )
+        print(f"평균 llm_ms: {avg_llm_ms:.1f}ms")
+        print(f"평균 answer_chars: {avg_answer_chars:.1f}자")
+        print(f"평균 rag_context_chars: {avg_rag_chars:.1f}자")
 
         print("\n[답변 생성 시간]")
         print(f"평균: {avg_llm_ms:.1f}ms")
@@ -529,6 +657,14 @@ async def main() -> None:
         print(f"최대: {max_prompt_tokens} tokens")
 
     else:
+        print(f"전체 평가 질문 수: {len(results)}")
+        print("에러 없는 성공 row 수: 0")
+        print("doc_hit=True: 0/0 (0.0%)")
+        print("chunk_hit=True: 0/0 (0.0%)")
+        print("faq_hit=True: 0/0 (0.0%)")
+        print("평균 llm_ms: 0.0ms")
+        print("평균 answer_chars: 0.0자")
+        print("평균 rag_context_chars: 0.0자")
         print("성공한 결과가 없습니다. error 컬럼을 확인하세요.")
 
 

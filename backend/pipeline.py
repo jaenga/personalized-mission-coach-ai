@@ -12,7 +12,7 @@ from intent_router import classify_intent, split_multi_intent
 from qwen_client import call_function
 from rag import search_rag
 from prompts import CLARIFY_HINT_DEFAULT, CLARIFY_HINT_MISSION_REPORT, build_system_prompt
-from database import _kst_today, get_last_action_type, fetch_profile
+from database import _kst_today, get_last_action_type, fetch_profile, get_student_mission_db
 from executor import (
     ExecResults,
     execute_submit, execute_adjustment, execute_cancel,
@@ -52,7 +52,7 @@ def detect_cancel_type(message: str) -> str:
     text = (message or "").replace(" ", "")
     if re.search(r"(?:성공|실패|제출|기록|결과)[\s\S]{0,12}(?:취소|되돌|철회)", text):
         return "submit"
-    if re.search(r"(?:미션변경|변경|바꾼거|원래미션)[\s\S]{0,12}(?:취소|되돌|철회)", text):
+    if re.search(r"(?:미션변경|변경|미션바꾸는거|바꾸는거|바꾸려던거|바꾼거|원래미션)[\s\S]{0,12}(?:취소|되돌|철회)", text):
         return "adjustment"
     return "latest"
 
@@ -194,7 +194,7 @@ def _exec_label(results: ExecResults) -> str:
 
 
 _B_COMMAND_RE = re.compile(
-    r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|마감|기록 봐|기록 보"
+    r"바꿔|취소|조회|보여줘|알려줘|뭐야|뭐예요|언제까지|어떻게|어때|어떤|규칙|룰|마감|기록 봐|기록 보"
 )
 _CANCEL_TARGET_RE = re.compile(
     r"(?:미션\s*)?(?:성공|실패)(?:\s*(?:제출|기록|한\s*거|한거))?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
@@ -203,7 +203,7 @@ _CANCEL_TARGET_RE = re.compile(
     r"|(?:방금|최근|아까)\s*(?:성공|실패)?(?:한\s*거|한거)?\s*(?:을|를)?\s*(?:취소|되돌|되돌려|철회)"
 )
 _ADJUSTMENT_CANCEL_RE = re.compile(
-    r"(?:미션\s*)?(?:변경|바꾼\s*거|바꾼거|바꾼\s*미션|원래\s*미션)"
+    r"(?:미션\s*)?(?:변경|바꾸는\s*거|바꾸려던\s*거|바꾼\s*거|바꾼거|바꾼\s*미션|원래\s*미션)"
     r"[\s\S]{0,12}(?:취소|되돌|되돌려|철회|원래대로)"
 )
 _CANCEL_NEGATION_RE = re.compile(r"(?:취소|되돌|되돌려|철회)\s*하지\s*(?:마|말|말아|마라)")
@@ -370,6 +370,11 @@ async def step_classify(message: str, mission_name: str = "") -> tuple[str, int]
 async def step_extract_functions(message: str) -> tuple[list[tuple[str, dict]], int]:
     """문장 분리 + Qwen 호출 + 중복 제거. (fn_calls, ms) 반환."""
     t0 = time.perf_counter()
+    if _CANCEL_NEGATION_RE.search(message or ""):
+        ms = round((time.perf_counter() - t0) * 1000)
+        print(f"[Function] cancel-negation dropped ({ms}ms)")
+        return [], ms
+
     if _ADJUSTMENT_CANCEL_RE.search(message):
         ms = round((time.perf_counter() - t0) * 1000)
         fn_calls = [("cancel_mission_action", {"cancel_type": "adjustment"})]
@@ -427,6 +432,7 @@ def step_execute(
     results = ExecResults()
     pending_submit_args: dict | None = None
     submit_validation: SubmitValidationResult | None = None
+    mission_metadata: dict | None = None
 
     if combo == "conflict":
         print("[DB] skipped: conflict")
@@ -465,11 +471,17 @@ def step_execute(
                 pending_submit_args = args  # LLM 판단 후 실행
                 print(f"[DB] submit deferred for equivalency")
             else:
+                if mission_metadata is None:
+                    try:
+                        mission_metadata = get_student_mission_db(student_id, _kst_today())
+                    except Exception as exc:
+                        print(f"[Validator.submit] mission metadata unavailable: {type(exc).__name__}: {exc}")
                 submit_validation = validate_submit_candidate(
                     user_message=user_message,
                     mission_name=mission_title,
                     mission_id=mission_id,
                     qwen_args=args,
+                    mission_metadata=mission_metadata,
                 )
                 print(
                     "[Validator.submit] "

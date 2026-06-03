@@ -17,6 +17,13 @@ UNIT_ALIASES = {
     "번": "회",
     "개": "회",
     "층": "층",
+    "바퀴": "바퀴",
+    "보": "보",
+    "걸음": "보",
+    "세트": "세트",
+    "봉지": "봉지",
+    "병": "병",
+    "입": "입",
     "잔": "잔",
     "컵": "잔",
     "l": "L",
@@ -25,7 +32,31 @@ UNIT_ALIASES = {
     "ml": "L",
     "mL": "L",
     "밀리": "L",
+    "미리": "L",
 }
+
+_ACCUMULATION_MARKERS = (
+    "나눠서",
+    "나누어서",
+    "나눠",
+    "나누어",
+    "씩",
+    "쉬었다가",
+    "쉬고",
+    "쉬었다",
+    "쉬어",
+    "오전",
+    "오후",
+    "아침",
+    "점심",
+    "저녁",
+    "밤",
+    "낮",
+    "새벽",
+    "또",
+    "다시",
+    "각각",
+)
 
 
 @dataclass(frozen=True)
@@ -84,7 +115,7 @@ def _convert_value(value: Decimal, unit: str) -> tuple[Decimal, str]:
     canonical = UNIT_ALIASES.get(unit, unit)
     if unit == "시간":
         return value * Decimal("60"), "분"
-    if unit in {"ml", "mL", "밀리"}:
+    if unit in {"ml", "mL", "밀리", "미리"}:
         return value / Decimal("1000"), "L"
     return value, canonical
 
@@ -95,10 +126,26 @@ def _format_decimal(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
+def canonical_numeric_unit(unit: str) -> str:
+    return UNIT_ALIASES.get(unit, unit)
+
+
+def convert_numeric_value(value: Any, unit: str) -> tuple[float | None, str]:
+    numeric_value = _to_decimal(value)
+    converted_unit = canonical_numeric_unit(unit)
+    if numeric_value is None:
+        return None, converted_unit
+    converted_value, converted_unit = _convert_value(numeric_value, unit)
+    return float(converted_value), converted_unit
+
+
 def _extract_quantities(text: str) -> list[Quantity]:
     quantities: list[Quantity] = []
     normalized = normalize_equivalency_text(text)
-    pattern = re.compile(r"(\d+(?:\.\d+)?)\s*(시간|분|초|회|번|개|층|잔|컵|L|l|리터|ml|mL|밀리)")
+    pattern = re.compile(
+        r"(\d+(?:\.\d+)?)\s*"
+        r"(시간|분|초|회|번|개|층|바퀴|보|걸음|세트|봉지|병|입|잔|컵|L|l|리터|ml|mL|밀리|미리)"
+    )
     for match in pattern.finditer(normalized):
         raw_value = _to_decimal(match.group(1))
         if raw_value is None:
@@ -117,21 +164,134 @@ def _extract_quantities(text: str) -> list[Quantity]:
     return quantities
 
 
+def extract_first_numeric_quantity(text: str) -> tuple[float, str] | None:
+    quantities = _extract_quantities(text)
+    if not quantities:
+        return None
+    quantity = quantities[0]
+    return float(quantity.value), quantity.unit
+
+
+def extract_numeric_for_goal(
+    text: str,
+    target_unit: str,
+    unit_aliases: dict[str, float] | None = None,
+) -> float | None:
+    """Return the first comparable quantity in the target unit's scale.
+
+    `compare_numeric_target` uses canonical units for DB metadata. This helper
+    keeps the older MISSION_META contract: a ml goal receives ml, a 분 goal
+    receives minutes, and alias multipliers such as 잔=200 are respected.
+    """
+    aliases = unit_aliases or {}
+    target_canonical = canonical_numeric_unit(target_unit)
+    for quantity in _extract_quantities(text):
+        if quantity.raw_unit in aliases:
+            return float(quantity.value * Decimal(str(aliases[quantity.raw_unit])))
+        if target_unit in {"ml", "mL"} and quantity.unit == "L":
+            return float(quantity.value * Decimal("1000"))
+        if target_canonical == quantity.unit:
+            return float(quantity.value)
+    return None
+
+
 def _target_unit_group(metric: str, target_unit: str) -> set[str]:
     if metric in {"duration", "duration_each", "max_duration"}:
         return {"분", "초"}
     if metric in {"reps", "count"}:
         canonical = UNIT_ALIASES.get(target_unit, target_unit)
-        if canonical == "회":
-            return {"회"}
-        if canonical == "층":
-            return {"층"}
-        if canonical == "잔":
-            return {"잔"}
+        if canonical in {"회", "층", "잔", "바퀴", "보", "세트", "봉지", "병", "입"}:
+            return {canonical}
         return {canonical}
     if metric == "volume":
         return {"L"}
     return set()
+
+
+def _looks_like_split_completion(text: str) -> bool:
+    compact = (text or "").replace(" ", "")
+    return any(marker in compact for marker in _ACCUMULATION_MARKERS) and any(
+        marker in compact for marker in ("했어요", "했어", "완료", "성공", "인정", "해도", "돼", "되나요", "괜찮")
+    )
+
+
+def _looks_like_accumulated_quantities(text: str) -> bool:
+    compact = (text or "").replace(" ", "")
+    return any(marker in compact for marker in _ACCUMULATION_MARKERS)
+
+
+def _split_clauses(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[.!?\n]+", text or "") if part.strip()]
+
+
+def _duration_split_total_candidate(candidates: list[Quantity], quantities: list[Quantity], user_message: str) -> Quantity | None:
+    if not _looks_like_accumulated_quantities(user_message):
+        return None
+    if len(candidates) >= 2:
+        total = sum((q.value for q in candidates), Decimal("0"))
+        return Quantity(
+            value=total,
+            unit=candidates[0].unit,
+            raw_value=_format_decimal(total),
+            raw_unit=candidates[0].raw_unit,
+            text=" + ".join(q.text for q in candidates),
+        )
+    counts = [q for q in quantities if q.unit == "회"]
+    if not candidates or not counts:
+        return None
+    duration = min(candidates, key=lambda q: q.value)
+    count = max(counts, key=lambda q: q.value)
+    total = duration.value * count.value
+    return Quantity(
+        value=total,
+        unit=duration.unit,
+        raw_value=_format_decimal(total),
+        raw_unit=duration.raw_unit,
+        text=f"{duration.text}씩 {count.text}",
+    )
+
+
+def _clause_quantities(text: str, unit: str) -> list[Quantity]:
+    return [q for q in _extract_quantities(text) if q.unit == unit]
+
+
+def _accumulated_total_candidate(candidates: list[Quantity], user_message: str) -> Quantity | None:
+    if len(candidates) < 2 or not _looks_like_accumulated_quantities(user_message):
+        return None
+    clauses = _split_clauses(user_message)
+    selected_candidates = candidates
+    for clause in clauses:
+        clause_candidates = _clause_quantities(clause, candidates[0].unit)
+        if len(clause_candidates) >= 2 and _looks_like_accumulated_quantities(clause):
+            selected_candidates = clause_candidates
+            break
+    total = sum((q.value for q in selected_candidates), Decimal("0"))
+    return Quantity(
+        value=total,
+        unit=selected_candidates[0].unit,
+        raw_value=_format_decimal(total),
+        raw_unit=selected_candidates[0].raw_unit,
+        text=" + ".join(q.text for q in selected_candidates),
+    )
+
+
+def _count_or_volume_total_candidate(candidates: list[Quantity], user_message: str) -> Quantity | None:
+    return _accumulated_total_candidate(candidates, user_message)
+
+
+def _select_count_candidate(
+    candidates: list[Quantity],
+    target_value: Decimal,
+    user_message: str,
+) -> Quantity:
+    total_candidate = _count_or_volume_total_candidate(candidates, user_message)
+    if total_candidate is not None:
+        return total_candidate
+    if _looks_like_split_completion(user_message):
+        meeting = [q for q in candidates if q.value >= target_value]
+        if meeting:
+            return min(meeting, key=lambda q: q.value)
+    return min(candidates, key=lambda q: q.value)
 
 
 def _status_for(metric: str, user_value: Decimal, target_value: Decimal) -> str:
@@ -198,7 +358,13 @@ def compare_numeric_target(user_message: str, mission: dict) -> dict[str, Any]:
         # max_duration(한도형)은 가장 큰 값, 그 외(최소 충족형)는 가장 작은 값.
         # 예: "30분 미션인데 31분 보면" → max=31 → above_limit
         if metric == "max_duration":
-            selected = max(candidates, key=lambda q: q.value)
+            selected = _accumulated_total_candidate(candidates, user_message) or max(candidates, key=lambda q: q.value)
+        elif metric == "duration":
+            selected = _duration_split_total_candidate(candidates, quantities, user_message) or min(candidates, key=lambda q: q.value)
+        elif metric in {"reps", "count"}:
+            selected = _select_count_candidate(candidates, converted_target, user_message)
+        elif metric == "volume":
+            selected = _count_or_volume_total_candidate(candidates, user_message) or min(candidates, key=lambda q: q.value)
         else:
             selected = min(candidates, key=lambda q: q.value)
         user_value = selected.value

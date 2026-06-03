@@ -76,10 +76,57 @@ class MissionRouter:
                 "[Route] weak equivalency forced to check_mission_equivalency (fallback)",
             ),
         ]
+        self.pre_intent_rules = [
+            RouteRule(
+                "history",
+                detect_history_call,
+                "[Route] pre-intent history forced to get_user_history",
+            ),
+            RouteRule(
+                "mission_info",
+                detect_mission_info_call,
+                "[Route] pre-intent mission info forced to get_mission_info",
+            ),
+            RouteRule(
+                "mission_adjustment",
+                detect_mission_adjustment_call,
+                "[Route] pre-intent mission adjustment forced to request_mission_adjustment",
+            ),
+        ]
+
+    def decide_before_intent(self, user_message: str) -> RouteDecision | None:
+        if _PAST_RESULT_TIME_RE.search(user_message or "") and _RESULT_HINT_RE.search(user_message or ""):
+            return None
+
+        for rule in self.pre_intent_rules:
+            call = rule.detector(user_message)
+            if not call:
+                continue
+
+            fn, args = call
+            return RouteDecision(
+                intent="B",
+                fn_calls=[call],
+                detected_function=fn,
+                fn_args=args,
+                log_message=rule.log_message,
+            )
+
+        return None
 
     def decide(self, user_message: str, existing_calls: list[FunctionCall] | None = None) -> RouteDecision | None:
         if existing_calls:
             return None
+        history_call = detect_history_call(user_message)
+        if history_call:
+            fn, args = history_call
+            return RouteDecision(
+                intent="B",
+                fn_calls=[history_call],
+                detected_function=fn,
+                fn_args=args,
+                log_message="[Route] history query forced to get_user_history",
+            )
         if _PAST_RESULT_TIME_RE.search(user_message or "") and _RESULT_HINT_RE.search(user_message or ""):
             return None
 

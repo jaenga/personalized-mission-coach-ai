@@ -38,6 +38,7 @@ from database import (
     save_mission_review as save_mission_review_db,
     save_profile,
     replace_activity_preferences,
+    update_student_optional_info,
     upsert_user_memory,
     upsert_health_note,
     upsert_lesson_progress,
@@ -50,7 +51,7 @@ from starlette.concurrency import run_in_threadpool
 from ollama_client import ensure_ollama_server
 from rag import preload_model
 from qwen_client import preload_qwen
-from sheets import generate_daily_status
+from sheets import delete_student_info, generate_daily_status, sync_all_student_info, sync_daily_status_for_student, sync_student_info
 from schemas import (
     GameRunRequest,
     HeartAdjustRequest,
@@ -63,6 +64,7 @@ from schemas import (
     MissionUiActionResolveRequest,
     OnboardingPreferencesRequest,
     ProfileRequest,
+    StudentInfoRequest,
     UserFeedbackRequest,
     VerifyRequest,
     WeeklySharePromptActionRequest,
@@ -90,6 +92,12 @@ def startup_tasks() -> None:
             print(f"[startup] daily_status {today}: {added}명 행 추가됨")
     except Exception as e:
         print(f"[startup] daily_status 생성 실패 (무시): {e}")
+    try:
+        synced = sync_all_student_info()
+        if synced:
+            print(f"[startup] student info sheet synced: {synced}")
+    except Exception as e:
+        print(f"[startup] student info sheet sync failed (ignored): {e}")
 
 
 def verify_student(body: VerifyRequest):
@@ -109,6 +117,14 @@ def save_user_profile(body: ProfileRequest):
     mission = None
     if DEMO_MODE:
         mission = attach_mission_message(assign_demo_mission_on_signup(body.student_id))
+        try:
+            sync_student_info(body.student_id)
+        except Exception as e:
+            print(f"[sheets] demo profile student sync failed: {e}")
+        try:
+            sync_daily_status_for_student(body.student_id)
+        except Exception as e:
+            print(f"[sheets] demo profile daily sync failed: {e}")
     return {"ok": True, "mission": mission}
 
 
@@ -116,14 +132,41 @@ def register_demo_student(body: VerifyRequest):
     if not DEMO_MODE:
         raise HTTPException(status_code=403, detail="현재는 회원가입을 사용할 수 없어요.")
 
-    student = create_demo_student(body.student_name, body.phone_last4)
+    student = create_demo_student(body.student_name, body.phone_last4, body.birth_date, body.gender)
     mission = attach_mission_message(assign_demo_mission_on_signup(student["student_id"]))
+    try:
+        sync_student_info(student["student_id"])
+    except Exception as e:
+        print(f"[sheets] signup student sync failed: {e}")
+        try:
+            sync_all_student_info()
+        except Exception as fallback_error:
+            print(f"[sheets] signup full student sync failed: {fallback_error}")
+    try:
+        sync_daily_status_for_student(student["student_id"])
+    except Exception as e:
+        print(f"[sheets] signup daily sync failed: {e}")
 
     return {
         "ok": True,
         "student": student,
         "mission": mission,
     }
+
+
+def save_student_optional_info(body: StudentInfoRequest):
+    try:
+        student = update_student_optional_info(body.student_id, body.birth_date, body.gender)
+    except Exception as e:
+        print(f"[student-info] save failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+    if not student:
+        raise HTTPException(status_code=404, detail="student not found")
+    try:
+        sync_student_info(body.student_id)
+    except Exception as e:
+        print(f"[sheets] optional student info sync failed: {e}")
+    return {"ok": True, "student": student}
 
 
 def get_user_profile(session_id: str):
@@ -143,6 +186,11 @@ def get_today_mission(student_id: int | None = None):
             else:
                 assign_daily_missions()
                 mission = get_student_mission_db(student_id, today)
+            if mission:
+                try:
+                    sync_daily_status_for_student(student_id, today)
+                except Exception as e:
+                    print(f"[sheets] today mission sync failed: {e}")
         if mission:
             return attach_mission_message(mission)
     return {
@@ -464,6 +512,10 @@ def delete_student_account(student_id: int):
     deleted = delete_student_completely(student_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="student not found")
+    try:
+        delete_student_info(student_id)
+    except Exception as e:
+        print(f"[sheets] student info delete failed: {e}")
     return {"ok": True, "deleted": True}
 
 
@@ -486,6 +538,7 @@ def generate_daily():
     try:
         today = _kst_today()
         added = generate_daily_status(today)
-        return {"ok": True, "date": today, "added": added}
+        student_synced = sync_all_student_info()
+        return {"ok": True, "date": today, "added": added, "student_synced": student_synced}
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))

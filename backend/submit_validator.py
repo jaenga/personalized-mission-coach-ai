@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from mission_meta import MISSION_META, extract_numeric
+from mission_meta import MISSION_META, NumericGoal, extract_numeric
 
 SubmitValidationAction = Literal["execute", "clarify", "block"]
 SubmitResultType = Literal["success", "fail"]
@@ -50,24 +50,48 @@ _QUESTION_INTENT_RE = re.compile(
     r"알려줘|어떻게|뭐야|뭐였|됐어|되었어|해줄\s*수\s*있|마셔도\s*돼|먹어도\s*돼|해도\s*돼"
     r"|성공\s*기준|실패\s*기준|기록\s*(?:됐|되었|저장)"
 )
+_QUANTITY_QUESTION_RE = re.compile(
+    r"몇\s*(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|봉지|병|입|쪽|장|줄|ml|mL|밀리|미리|L|l|리터)"
+    r"|얼마(?:나)?"
+)
+_CONFIRMATION_QUESTION_RE = re.compile(
+    r"(?:인|건|거|걸|맞|되|돼)(?:가|지|나|냐|아|어|지요|나요|죠|야|임)"
+    r"|하면\s*(?:돼|되|성공)"
+    r"|마시면\s*(?:돼|되|성공)"
+    r"|먹으면\s*(?:돼|되|성공)"
+)
+_SUCCESS_STATUS_QUESTION_RE = re.compile(r"성공|클리어|완료|됐|되었|되는")
 _COMPLETION_VERB_RE = re.compile(
-    r"했어|했다|했음|했는데|마셨어|마셨|마심|먹었어|먹음|걸었어|걸었|닦았어|씻었어|완료했어|다\s*했어|끝났어|끝냈|마쳤어|해냈|클리어"
+    r"했어|했다|했음|했는데|하고\s*왔|마셨어|마셨|마심|먹었어|먹음|걸었어|걸었|닦았어|씻었어|완료했어|다\s*했어|끝났어|끝냈|마쳤어|해냈|클리어"
 )
 _SCREEN_RESTRICTION_VERB_RE = re.compile(
     r"봤어|봤다|안\s*봤어|안\s*봤다|시청했어|시청했다|안\s*시청했어|시청\s*안"
 )
 _NUMERIC_RE = re.compile(
-    r"(?:\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
-    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|쪽|장|줄)"
+    r"(?<![\d.])(?:\d+(?:\.\d+)?|반|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*"
+    r"(?:분|보|바퀴|회|세트|번|초|시간|개|잔|컵|걸음|봉지|병|입|쪽|장|줄|ml|mL|밀리|미리|L|l|리터)"
 )
 _NEGATION_RE = re.compile(
-    r"안\s*(?:먹었|먹고|하고|마셨|봤|봄|보|했|탔|시청)"
-    r"|못\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
+    r"(?<![가-힣])안\s*(?:먹었|먹엇|먹음|먹었다|먹어|먹고|하고|마셨|봤|봄|보|했|탔|시청)"
+    r"|(?<![가-힣])못\s*(?:먹었|마셨|봤|봄|보|했|탔|시청)"
     r"|먹지\s*않|마시지\s*않|보지\s*않|하지\s*않|시청\s*안"
     r"|안먹|못먹|안마|못마|안봤|못봤|안했|못했"
 )
 _CONSUME_OR_SCREEN_RE = re.compile(
-    r"먹었|먹음|먹어버|먹었다|마셨|봤어|봤다|봄|시청했|사용했|틀었|켰어|켰다"
+    r"먹었|먹엇|먹음|먹어버|먹었다|마셨|봤어|봤다|봄|시청했|사용했|틀었|켰어|켰다"
+)
+_PROHIBIT_HEALTHY_SUBSTITUTE_RE = re.compile(r"견과|과일|요거트|요구르트|사과|바나나|귤|딸기|포도")
+_PROHIBIT_SUBSTITUTE_CONSUME_RE = re.compile(r"먹었|먹엇|먹음|먹었다|먹었어|먹었어요|먹엇어|먹엇어요")
+_HOMEWORK_DISTRACTION_RE = r"게임|겜|핸드폰|휴대폰|폰|유튜브|유튭|영상|쇼츠|릴스"
+_HOMEWORK_TASK_RE = r"숙제|공부|과제"
+_HOMEWORK_BEFORE_GAME_FAIL_RE = re.compile(
+    rf"(?:{_HOMEWORK_DISTRACTION_RE}).{{0,16}}먼저.{{0,24}}(?:{_HOMEWORK_TASK_RE}).{{0,10}}(?:전|전에|하기\s*전)"
+    rf"|(?:{_HOMEWORK_TASK_RE}).{{0,10}}(?:전|전에|하기\s*전).{{0,24}}(?:{_HOMEWORK_DISTRACTION_RE})"
+)
+_HOMEWORK_BEFORE_GAME_SUCCESS_RE = re.compile(
+    rf"(?:{_HOMEWORK_TASK_RE}).{{0,16}}먼저"
+    rf"|(?:{_HOMEWORK_DISTRACTION_RE}).{{0,8}}안\s*(?:했|함|하고|봤|봄).{{0,24}}(?:{_HOMEWORK_TASK_RE})"
+    rf"|(?:{_HOMEWORK_TASK_RE}).{{0,24}}(?:{_HOMEWORK_DISTRACTION_RE}).{{0,8}}안\s*(?:했|함|하고|봤|봄)"
 )
 _EXPLICIT_FAIL_RE = re.compile(
     r"실패"
@@ -86,6 +110,15 @@ _EXPLICIT_SUCCESS_RE = re.compile(r"미션\s*성공|오늘\s*미션\s*성공|성
 _FUTURE_REFUSAL_RE = re.compile(r"안\s*(?:할래|하겠|하려고)|하지\s*않을래|못\s*하겠|하기\s*싫")
 _SUBSTITUTE_AVOID_RE = re.compile(r"안\s*(?:타|탔|이용|씀)|대신")
 _SUBSTITUTE_ACTION_RE = re.compile(r"올라갔|내려갔|걸었|이용했|갔")
+_STAIR_RE = re.compile(r"계단")
+_ELEVATOR_OR_ESCALATOR_RE = re.compile(r"엘리베이터|엘레베이터|엘베|승강기|에스컬레이터|에스컬")
+_ELEVATOR_OR_ESCALATOR_USED_RE = re.compile(
+    r"(엘리베이터|엘레베이터|엘베|승강기|에스컬레이터|에스컬).{0,8}"
+    r"(탔|탔다|탔어|탐|타버|타고\s*말|타고말|이용|사용|써버)"
+)
+_ELEVATOR_OR_ESCALATOR_AVOID_RE = re.compile(
+    r"(엘리베이터|엘레베이터|엘베|승강기|에스컬레이터|에스컬).{0,8}(안\s*탔|안탔|안\s*타고|안타고|안\s*이용|안이용|대신|말고)"
+)
 _QUALIFIER_RE = re.compile(r"조금|약간|반만|거의|잠깐|대충|가끔|살짝|조금밖에|한\s*입")
 _DB_COMPLETION_PHRASE_RE = re.compile(
     r"기록(?:했|해뒀|됐|되었|완료)"
@@ -117,6 +150,11 @@ def has_submit_blocker(message: str) -> tuple[str, str] | None:
         return "block", "block_smalltalk"
     if _FUTURE_REFUSAL_RE.search(text):
         return "clarify", "clarify_negation"
+    if _QUANTITY_QUESTION_RE.search(text):
+        return "block", "block_question"
+    compact = text.replace(" ", "")
+    if _CONFIRMATION_QUESTION_RE.search(text) or _CONFIRMATION_QUESTION_RE.search(compact):
+        return "block", "block_question"
     if _QUESTION_INTENT_RE.search(text.replace(" ", "")) or _QUESTION_INTENT_RE.search(text):
         return "block", "block_question"
     if "?" in text and not _has_report_signal_with_question(text):
@@ -130,8 +168,6 @@ def contains_numeric_expression(message: str) -> bool:
 
 def _has_report_signal_with_question(message: str) -> bool:
     text = message or ""
-    if not contains_numeric_expression(text):
-        return False
     return bool(
         _COMPLETION_VERB_RE.search(text)
         or _CONSUME_OR_SCREEN_RE.search(text)
@@ -147,11 +183,29 @@ def contains_db_completion_phrase(gemma_text: str) -> bool:
 def build_submit_validation_response(
     result: SubmitValidationResult,
     mission_name: str = "",
+    user_message: str = "",
+    mission_id: int | None = None,
 ) -> str:
+    if result.reason == "block_question" and _SUCCESS_STATUS_QUESTION_RE.search(user_message or ""):
+        meta = MISSION_META.get(mission_id) if mission_id else None
+        if meta and meta.type == "prohibit":
+            target = next((keyword for keyword in meta.target_kw if keyword), "금지한 것")
+            return f"{target}{_object_particle(target)} 먹지 않았으면 성공이야. 기록하려면 '오늘 {target} 안 먹었어요'처럼 말해줘!"
+        return f"{mission_name or '오늘 미션'}을 실제로 했다면 성공이야. 기록하려면 '오늘 미션 성공했어요'처럼 말해줘!"
+
     template = FALLBACK_RESPONSES.get(result.reason) or result.message
     if not template:
         template = FALLBACK_RESPONSES["block_submit"]
     return template.format(mission_name=mission_name or "오늘 미션")
+
+
+def _object_particle(word: str) -> str:
+    if not word:
+        return "을"
+    last = ord(word[-1])
+    if 0xAC00 <= last <= 0xD7A3:
+        return "을" if (last - 0xAC00) % 28 else "를"
+    return "을"
 
 
 def should_promote_to_submit_path(
@@ -166,7 +220,12 @@ def should_promote_to_submit_path(
 
     meta = MISSION_META.get(mission_id) if mission_id else None
     if meta and meta.type == "prohibit":
-        return bool(_SCREEN_RESTRICTION_VERB_RE.search(user_message or "") or _NEGATION_RE.search(user_message or ""))
+        return bool(
+            _SCREEN_RESTRICTION_VERB_RE.search(user_message or "")
+            or _CONSUME_OR_SCREEN_RE.search(user_message or "")
+            or _NEGATION_RE.search(user_message or "")
+            or _is_healthy_prohibit_substitute(user_message, meta)
+        )
     if meta and meta.type == "limit":
         return bool(
             contains_numeric_expression(user_message)
@@ -175,6 +234,11 @@ def should_promote_to_submit_path(
         )
     if meta and meta.type == "substitute":
         return _is_clear_substitute_success(user_message, meta)
+    if mission_id == 159 and (
+        _HOMEWORK_BEFORE_GAME_FAIL_RE.search(user_message or "")
+        or _HOMEWORK_BEFORE_GAME_SUCCESS_RE.search(user_message or "")
+    ):
+        return True
 
     return bool(
         _COMPLETION_VERB_RE.search(user_message or "")
@@ -183,11 +247,41 @@ def should_promote_to_submit_path(
     )
 
 
+def _numeric_goal_from_mission_metadata(mission_metadata: dict | None, meta) -> NumericGoal | None:
+    if not mission_metadata:
+        return None
+    metric = str(mission_metadata.get("target_metric") or "").strip()
+    if metric not in {"duration", "max_duration", "reps", "count", "volume"}:
+        return None
+    value = mission_metadata.get("target_value")
+    unit = str(mission_metadata.get("target_unit") or "").strip()
+    if value in (None, "") or not unit:
+        return None
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return None
+    aliases = {}
+    if meta and meta.numeric:
+        aliases = dict(meta.numeric.unit_aliases)
+    return NumericGoal(threshold, unit, aliases)
+
+
+def _mission_type_from_metadata(mission_metadata: dict | None) -> str | None:
+    metric = str((mission_metadata or {}).get("target_metric") or "").strip()
+    if metric == "max_duration":
+        return "limit"
+    if metric in {"duration", "reps", "count", "volume"}:
+        return "perform"
+    return None
+
+
 def validate_submit_candidate(
     user_message: str,
     mission_name: str,
     mission_id: int | None,
     qwen_args: dict | None,
+    mission_metadata: dict | None = None,
 ) -> SubmitValidationResult:
     text = user_message or ""
     args = qwen_args or {}
@@ -197,26 +291,43 @@ def validate_submit_candidate(
         return _result(action, reason)
 
     meta = MISSION_META.get(mission_id) if mission_id else None
-    mission_type = meta.type if meta else "perform"
+    mission_type = _mission_type_from_metadata(mission_metadata) or (meta.type if meta else "perform")
+    numeric_goal = _numeric_goal_from_mission_metadata(mission_metadata, meta) or (meta.numeric if meta else None)
     has_keyword = _has_mission_keyword(text, mission_name, mission_id)
     has_numeric = contains_numeric_expression(text)
     has_negation = bool(_NEGATION_RE.search(text))
 
-    if _QUALIFIER_RE.search(text):
-        return _result("clarify", "clarify_partial")
+    if mission_id == 12:
+        if _ELEVATOR_OR_ESCALATOR_USED_RE.search(text) and not _ELEVATOR_OR_ESCALATOR_AVOID_RE.search(text):
+            return _execute("fail", "validated_stairs_elevator_used")
+        if _STAIR_RE.search(text):
+            return _execute("success", "validated_stairs_used")
+
+    if mission_id == 159 and _HOMEWORK_BEFORE_GAME_FAIL_RE.search(text):
+        return _execute("fail", "validated_homework_after_distraction")
+    if mission_id == 159 and _HOMEWORK_BEFORE_GAME_SUCCESS_RE.search(text):
+        return _execute("success", "validated_homework_before_distraction")
 
     if mission_type == "prohibit" and has_keyword:
+        if meta and _is_healthy_prohibit_substitute(text, meta):
+            return _execute("success", "validated_prohibit_substitute")
         if has_negation:
             return _execute("success", "validated_prohibit_negation")
         if _CONSUME_OR_SCREEN_RE.search(text):
             return _execute("fail", "validated_prohibit_consumed")
         return _result("clarify", "clarify_negation")
 
+    if _QUALIFIER_RE.search(text):
+        return _result("clarify", "clarify_partial")
+
     if mission_type == "substitute" and meta and _is_clear_substitute_success(text, meta):
         return _execute("success", "validated_success")
 
     if mission_type == "limit" and has_keyword and has_negation and not has_numeric:
         return _execute("success", "validated_limit_negation")
+
+    if mission_type == "perform" and has_keyword and has_negation:
+        return _execute("fail", "validated_perform_negation")
 
     if has_negation:
         if _EXPLICIT_FAIL_RE.search(text):
@@ -230,12 +341,22 @@ def validate_submit_candidate(
     if requested_type not in {"success", "fail"}:
         requested_type = None
 
-    if mission_type == "limit" and meta and meta.numeric and has_numeric:
-        reported = extract_numeric(text, meta.numeric)
+    if numeric_goal and has_numeric:
+        reported = extract_numeric(text, numeric_goal)
         if reported is None:
             return _result("clarify", "clarify_number_only")
-        result_type = "success" if reported <= meta.numeric.threshold else "fail"
-        return _execute(result_type, "validated_limit_numeric")
+        if mission_type == "limit":
+            result_type = "success" if reported <= numeric_goal.threshold else "fail"
+            return _execute(result_type, "validated_limit_numeric")
+        if reported >= numeric_goal.threshold:
+            return _execute("success", "validated_numeric")
+        return _result("clarify", "numeric_ambiguous")
+
+    if mission_type == "perform" and has_keyword and numeric_goal and meta and any(kw in text for kw in meta.success_kw):
+        return _result("clarify", "numeric_no_count")
+
+    if mission_type == "perform" and has_keyword and meta and any(kw in text for kw in meta.success_kw):
+        return _execute("success", "validated_success")
 
     if _EXPLICIT_FAIL_RE.search(text):
         return _execute("fail", "validated_fail")
@@ -279,6 +400,16 @@ def _is_clear_substitute_success(message: str, meta) -> bool:
     )
 
 
+def _is_healthy_prohibit_substitute(message: str, meta) -> bool:
+    text = message or ""
+    return bool(
+        "대신" in text
+        and any(keyword and keyword in text for keyword in meta.target_kw)
+        and _PROHIBIT_HEALTHY_SUBSTITUTE_RE.search(text)
+        and _PROHIBIT_SUBSTITUTE_CONSUME_RE.search(text)
+    )
+
+
 def _explicitly_mentions_mission(message: str) -> bool:
     compact = (message or "").replace(" ", "")
     return "미션" in compact or "오늘미션" in compact
@@ -319,4 +450,4 @@ def _tokenize_koreanish(text: str) -> set[str]:
 
 
 def _is_numeric_unit_token(token: str) -> bool:
-    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|세트)?", token or ""))
+    return bool(re.fullmatch(r"\d+(?:분|초|회|번|개|잔|컵|시간|걸음|보|바퀴|세트|봉지|병|입|ml|mL|밀리|미리|L|l|리터)?", token or ""))
