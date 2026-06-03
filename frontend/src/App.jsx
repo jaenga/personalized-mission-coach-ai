@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { verifyStudent, registerDemoStudent, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchWeeklySharePrompt, markWeeklySharePrompt, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, fetchMissionPreferences, saveMissionPreferencesDb, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
+import { verifyStudent, registerDemoStudent, saveStudentInfo, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchWeeklySharePrompt, markWeeklySharePrompt, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, fetchMissionPreferences, saveMissionPreferencesDb, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
 import HealthNote from "./components/HealthNote.jsx";
@@ -503,8 +503,24 @@ export default function App() {
     resetTo(SCREENS.SIGNUP);
   }
 
-  function handleInfoSubmit(info) {
+  async function handleInfoSubmit(info) {
     setExtraInfo(info);
+    let storedProfile = null;
+    try {
+      storedProfile = JSON.parse(localStorage.getItem("user_profile") || "null");
+    } catch {}
+    const studentId = profile?.student_id ?? storedProfile?.student_id;
+    if (studentId && !info?.isPrivate) {
+      try {
+        await saveStudentInfo({
+          studentId,
+          birthDate: info?.birth ?? "",
+          gender: info?.gender ?? "",
+        });
+      } catch (error) {
+        console.warn("[student-info] save failed", error);
+      }
+    }
   }
 
   async function persistHealthNote(note) {
@@ -836,7 +852,11 @@ export default function App() {
                   setReviewError("");
                 }
               }
-              const finalDebug = { ...debugMap[debugId], ...debug };
+              const timing = {
+                ...(debug.timing ?? {}),
+                client_stream_total_ms: doneInfo?.client_stream_total_ms,
+              };
+              const finalDebug = { ...debugMap[debugId], ...debug, timing };
               setDebugMap((prev) => ({
                 ...prev,
                 [debugId]: finalDebug,

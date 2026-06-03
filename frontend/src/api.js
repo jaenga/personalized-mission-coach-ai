@@ -35,6 +35,7 @@ export async function sendMessage(message, sessionId, mission = null) {
  * onPipeline(stage): 파이프라인 단계 이벤트 수신 시 호출
  */
 export async function sendMessageStream(message, sessionId, mission = null, { onToken, onPipeline, onDone } = {}) {
+  const startedAt = performance.now();
   const res = await fetch("/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -69,6 +70,7 @@ export async function sendMessageStream(message, sessionId, mission = null, { on
             mission_result_submitted: data.mission_result_submitted === true,
             mission_result_type: data.mission_result_type ?? null,
             mission_id: data.mission_id ?? null,
+            client_stream_total_ms: Math.round(performance.now() - startedAt),
           });
         }
       } catch {}
@@ -331,15 +333,37 @@ export async function deleteHealthNote(studentId) {
   return res.json();
 }
 
-export async function registerDemoStudent(studentName, phoneLast4) {
+export async function registerDemoStudent(studentName, phoneLast4, { birthDate = "", gender = "" } = {}) {
   const res = await fetch("/demo-register-student", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ student_name: studentName, phone_last4: phoneLast4 }),
+    body: JSON.stringify({
+      student_name: studentName,
+      phone_last4: phoneLast4,
+      birth_date: birthDate,
+      gender,
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail ?? "회원가입에 실패했어요.");
+  }
+  return res.json();
+}
+
+export async function saveStudentInfo({ studentId, birthDate = "", gender = "" }) {
+  const res = await fetch("/student-info", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      student_id: studentId,
+      birth_date: birthDate,
+      gender,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "?숈깮 異붽??뺣보 ????ㅽ뙣");
   }
   return res.json();
 }
