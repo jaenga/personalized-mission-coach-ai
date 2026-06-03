@@ -42,6 +42,7 @@ CONFIRMATION_ACTION_FNS = {
     "cancel_mission_action",
     "request_mission_adjustment",
 }
+NUMERIC_TARGET_METRICS = {"duration", "duration_each", "reps", "count", "volume", "max_duration"}
 
 POSITIVE_EXACT = {
     "응",
@@ -1383,6 +1384,42 @@ async def _handle_equivalency_clarify_confirmation(
             exec_results=exec_results,
             sync_user_message=_sync_user_message_from_payload(payload, user_message),
         )
+
+    if threshold is None and str(payload.get("target_metric") or "").strip() not in NUMERIC_TARGET_METRICS:
+        mission_row = await run_in_threadpool(get_student_mission_db, student_id)
+        mission_name, mission_id = _mission_context_from_payload(payload, mission_row)
+        validation = validate_submit_candidate(
+            user_message=user_message,
+            mission_name=mission_name,
+            mission_id=mission_id,
+            qwen_args={},
+            mission_metadata=mission_row,
+        )
+        print(
+            "[Pending.equivalency.submit_validator] "
+            f"action={validation.action} "
+            f"result={validation.result_type or '-'} "
+            f"reason={validation.reason or '-'}"
+        )
+        if validation.should_execute:
+            exec_results.submit = await run_in_threadpool(
+                execute_submit,
+                student_id,
+                {"result_type": validation.result_type},
+            )
+            await run_in_threadpool(resolve_pending, pending_id, "accepted")
+            return PendingOutcome(
+                action_type="natural_language_confirmation",
+                decision=f"equivalency_{validation.result_type}",
+                status="accepted",
+                message_hint=_equivalency_submit_hint(
+                    exec_results.submit.status.value,
+                    validation.result_type,
+                ),
+                pending_id=pending_id,
+                exec_results=exec_results,
+                sync_user_message=user_message,
+            )
 
     return await _retry_equivalency_clarify(
         pending_id,
