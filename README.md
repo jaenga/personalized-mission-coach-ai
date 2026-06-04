@@ -38,7 +38,8 @@
 
 ## 시연 영상
 
-🎥 (https://youtu.be/In-0NSLqvOY)
+🎥 [![토마토미 시연 영상](https://img.youtube.com/vi/In-0NSLqvOY/maxresdefault.jpg)](https://youtu.be/In-0NSLqvOY)
+
 
 
 ## 2. 프로젝트 배경
