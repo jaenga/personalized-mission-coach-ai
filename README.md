@@ -134,9 +134,9 @@ LLM이 DB를 직접 수정하지 않고, 백엔드가 함수 호출 결과와 �
 
 관련 레포지토리
 
-- [Function Calling 데이터 증강 및 Fine-tuning 파이프라인](https://github.com/jaenga/function-calling-data-augmentation)
-
-해당 파이프라인은 Function Calling 학습 데이터를 증강·검증하고 Qwen3 0.6B Fine-tuning용 JSONL 데이터셋을 생성하기 위해 개발되었습니다.
+| 프로젝트 | 설명 |
+| --- | --- |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg" width="18" alt="GitHub" /> [Function Calling Data Augmentation Pipeline](https://github.com/jaenga/function-calling-data-augmentation) | Qwen3 0.6B Function Calling Fine-tuning을 위한 데이터 증강·검증 파이프라인 |
 
 ## 7. 성능 평가
 
@@ -349,11 +349,11 @@ capstone26/
 
 - [질병관리청 국가건강정보포털 - 청소년 건강정보](https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/gnrlzHealthInfoYouth.do)
 
-### 관련 프로젝트
+### 관련 레포지토리
 
-- [Function Calling 데이터 증강 및 Fine-tuning 파이프라인](https://github.com/jaenga/function-calling-data-augmentation)
-
-해당 파이프라인은 Function Calling 학습 데이터를 증강·검증하고 Qwen3 0.6B Fine-tuning용 JSONL 데이터셋을 생성하기 위해 개발되었습니다.
+| 프로젝트 | 설명 |
+| --- | --- |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg" width="18" alt="GitHub" /> [Function Calling Data Augmentation Pipeline](https://github.com/jaenga/function-calling-data-augmentation) | Qwen3 0.6B Function Calling Fine-tuning을 위한 데이터 증강·검증 파이프라인 |
 
 ### 사용 모델
 
