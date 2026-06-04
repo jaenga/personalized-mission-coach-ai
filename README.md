@@ -63,6 +63,21 @@
 
 미션 관련 요청은 Fine-tuning된 Qwen3 0.6B Function Calling 모델을 통해 실행할 기능을 결정하고, 백엔드 검증 로직을 거쳐 DB 조회·저장·수정 작업으로 연결됩니다. 건강 정보 질문은 RAG 검색을 통해 관련 건강 문서와 FAQ를 찾고, 검색된 근거를 바탕으로 로컬 LLM이 답변을 생성합니다.
 
+<img src="docs/pipeline.png" alt="토마토미 시스템 아키텍처" width="800" />
+
+## 5. 기술 스택
+
+| 구분 | 기술 |
+| --- | --- |
+| Frontend | React 18, Vite, Tailwind CSS, PostCSS |
+| Backend | Python, FastAPI, Uvicorn, Pydantic |
+| Database | PostgreSQL, Neon, psycopg2, SQLAlchemy, pgvector |
+| AI / LLM | Ollama, Gemma 4 E2B, Fine-tuned Qwen3 0.6B |
+| RAG | sentence-transformers, BAAI/bge-m3, pgvector |
+| Evaluation | 회귀 테스트셋, RAG 평가셋, 스트리밍 응답 성능 측정 |
+
+## 6. AI 파이프라인
+
 ```mermaid
 flowchart LR
     U[사용자] --> F[React Frontend]
@@ -80,19 +95,6 @@ flowchart LR
     LLM --> API
     API --> F
 ```
-
-## 5. 기술 스택
-
-| 구분 | 기술 |
-| --- | --- |
-| Frontend | React 18, Vite, Tailwind CSS, PostCSS |
-| Backend | Python, FastAPI, Uvicorn, Pydantic |
-| Database | PostgreSQL, Neon, psycopg2, SQLAlchemy, pgvector |
-| AI / LLM | Ollama, Gemma 4 E2B, Fine-tuned Qwen3 0.6B |
-| RAG | sentence-transformers, BAAI/bge-m3, pgvector |
-| Evaluation | 회귀 테스트셋, RAG 평가셋, 스트리밍 응답 성능 측정 |
-
-## 6. AI 파이프라인
 
 ### Intent Routing
 
