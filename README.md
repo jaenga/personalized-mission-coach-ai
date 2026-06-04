@@ -38,7 +38,8 @@
 
 ## 시연 영상
 
-🎥 (사진 클릭 시 영상으로 이동합니다.)
+🎥 (사진 클릭 시 영상으로 이동합니다)
+
 <a href="https://youtu.be/In-0NSLqvOY"><img src="docs/video.jpg" alt="토마토미 시연 영상" width="360" /></a>
 
 
