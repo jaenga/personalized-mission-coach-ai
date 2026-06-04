@@ -3,7 +3,8 @@
 ![React](https://img.shields.io/badge/React-18-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-blue)
-![Ollama](https://img.shields.io/badge/Ollama-Gemma4%3Ae2b-orange)
+![Gemma 4 E2B](https://img.shields.io/badge/Gemma4-E2B-orange)
+![Qwen3 0.6B](https://img.shields.io/badge/Qwen3-0.6B-purple)
 
 **어린이 건강 습관 형성을 위한 로컬 LLM 기반 AI 코치 웹앱**  
 **A Local LLM-Based AI Coaching Web App for Children's Healthy Habit Development**
@@ -327,5 +328,5 @@ capstone26/
 - [React Documentation](https://react.dev/)
 - [Vite Documentation](https://vite.dev/)
 - [Ollama Documentation](https://ollama.com/)
-- [Qwen](https://qwenlm.github.io/)
+- [Qwen](https://qwen.ai/research)
 - [Google Gemma](https://ai.google.dev/gemma)
