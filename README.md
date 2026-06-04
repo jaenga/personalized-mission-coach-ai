@@ -27,9 +27,18 @@
 | 이채원 | LLM 기반 AI 파이프라인 구축, Function Calling 및 대화 로직 설계, 데이터셋 구축 및 Fine-tuning, 프론트엔드 구현 |
 | 한채원 | 백엔드 API 개발, 프론트엔드 구현, 채팅·미션 DB 연동, AI 로그 수집 구조 설계 |
 
+## 주요 성과
+
+| 지표 | 결과 |
+| --- | --- |
+| 실질 성공률 | 77.0% |
+| DB 오기록 방지율 | 97.83% |
+| RAG Faithfulness | 97.4% |
+| Safe Response Rate | 100.0% |
+
 ## 시연 영상
 
-🎥 추후 추가 예정
+🎥 링크 추후 추가 예정
 
 ## 2. 프로젝트 배경
 
@@ -52,7 +61,7 @@
 
 사용자 입력은 React 프론트엔드에서 FastAPI 백엔드의 `/chat` 또는 `/chat/stream` 엔드포인트로 전달됩니다. 백엔드는 입력의 서비스 범위와 안전성을 점검한 뒤 Intent Router를 통해 일반 대화, 미션 기능 요청, 건강 정보 질문, 추가 확인이 필요한 요청으로 분류합니다.
 
-미션 관련 요청은 Function Calling 모델을 통해 실행할 기능을 결정하고, 백엔드 검증 로직을 거쳐 DB 조회·저장·수정 작업으로 연결됩니다. 건강 정보 질문은 RAG 검색을 통해 관련 건강 문서와 FAQ를 찾고, 검색된 근거를 바탕으로 로컬 LLM이 답변을 생성합니다.
+미션 관련 요청은 Fine-tuning된 Qwen3 0.6B Function Calling 모델을 통해 실행할 기능을 결정하고, 백엔드 검증 로직을 거쳐 DB 조회·저장·수정 작업으로 연결됩니다. 건강 정보 질문은 RAG 검색을 통해 관련 건강 문서와 FAQ를 찾고, 검색된 근거를 바탕으로 로컬 LLM이 답변을 생성합니다.
 
 ```mermaid
 flowchart LR
@@ -60,7 +69,7 @@ flowchart LR
     F --> API[FastAPI Backend]
     API --> R[Intent Router]
     R --> C[일반 대화]
-    R --> FC[Function Calling]
+    R --> FC["Function Calling<br/>Qwen3 0.6B Fine-tuned"]
     R --> RAG[RAG 검색]
     R --> CL[확인 질문/보류]
     C --> LLM[Ollama Gemma4:e2b]
@@ -79,7 +88,7 @@ flowchart LR
 | Frontend | React 18, Vite, Tailwind CSS, PostCSS |
 | Backend | Python, FastAPI, Uvicorn, Pydantic |
 | Database | PostgreSQL, Neon, psycopg2, SQLAlchemy, pgvector |
-| AI / LLM | Ollama, Gemma4:e2b, Qwen3 Function Calling 모델 |
+| AI / LLM | Ollama, Gemma 4 E2B, Fine-tuned Qwen3 0.6B |
 | RAG | sentence-transformers, BAAI/bge-m3, pgvector |
 | Evaluation | 회귀 테스트셋, RAG 평가셋, 스트리밍 응답 성능 측정 |
 
@@ -91,7 +100,7 @@ flowchart LR
 
 ### Function Calling
 
-미션 관련 발화는 Function Calling 모델을 통해 앱 기능 실행으로 연결됩니다.
+미션 관련 발화는 Fine-tuning된 Qwen3 0.6B Function Calling 모델을 통해 앱 기능 실행으로 연결됩니다.
 
 | 함수 | 역할 |
 | --- | --- |
@@ -114,7 +123,18 @@ LLM이 DB를 직접 수정하지 않고, 백엔드가 함수 호출 결과와 �
 
 ### 데이터 증강 및 Fine-tuning
 
-미션 제출, 조회, 변경, 취소, 대체 수행 인정 판단 등 앱 기능별 시드 발화를 제작하고, GPT 기반 데이터 증강으로 초등학생 말투의 다양한 발화를 생성했습니다. 이후 exact match 및 semantic validation을 거쳐 학습용 JSONL 데이터로 변환하고, 실제 서비스 로그를 재학습 데이터로 확장할 수 있도록 설계했습니다.
+본 프로젝트에서는 Function Calling 성능 향상을 위해 별도의 데이터 증강 파이프라인을 구축했습니다. 미션 제출, 조회, 변경, 취소, 대체 수행 인정 판단 등 앱 기능별 시드 발화를 제작하고, GPT 기반 데이터 증강을 통해 초등학생 말투의 다양한 발화를 생성했습니다. 이후 exact match 및 semantic validation을 거쳐 학습용 JSONL 데이터로 변환했으며, 이를 활용해 Qwen3 0.6B 모델을 Fine-tuning하여 실제 서비스의 Function Calling 흐름에 적용했습니다.
+
+- Function Calling 데이터셋 구축
+- GPT 기반 데이터 증강 파이프라인 개발
+- Qwen3 0.6B Fine-tuning 수행
+- 실제 서비스 Function Calling 흐름 적용
+
+관련 레포지토리
+
+- [Function Calling 데이터 증강 및 Fine-tuning 파이프라인](https://github.com/jaenga/function-calling-data-augmentation)
+
+해당 파이프라인은 Function Calling 학습 데이터를 증강·검증하고 Qwen3 0.6B Fine-tuning용 JSONL 데이터셋을 생성하기 위해 개발되었습니다.
 
 ## 7. 성능 평가
 
@@ -323,10 +343,26 @@ capstone26/
 
 ## 13. 참고 자료
 
+### 건강 정보 출처
+
 - [질병관리청 국가건강정보포털 - 청소년 건강정보](https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/gnrlzHealthInfoYouth.do)
+
+### 관련 프로젝트
+
+- [Function Calling 데이터 증강 및 Fine-tuning 파이프라인](https://github.com/jaenga/function-calling-data-augmentation)
+
+해당 파이프라인은 Function Calling 학습 데이터를 증강·검증하고 Qwen3 0.6B Fine-tuning용 JSONL 데이터셋을 생성하기 위해 개발되었습니다.
+
+### 사용 모델
+
+- [Google Gemma](https://ai.google.dev/gemma)
+- [Qwen](https://qwen.ai/research)
+
+### 사용 기술
+
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [React Documentation](https://react.dev/)
 - [Vite Documentation](https://vite.dev/)
 - [Ollama Documentation](https://ollama.com/)
-- [Qwen](https://qwen.ai/research)
-- [Google Gemma](https://ai.google.dev/gemma)
+- PostgreSQL
+- pgvector
