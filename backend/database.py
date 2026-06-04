@@ -437,6 +437,7 @@ def save_chat_turn(
     assistant_content: str,
     detected_function: str | None = None,
     request_id: str | None = None,
+    assistant_debug: dict | None = None,
 ) -> tuple[int, int]:
     """Save a user/assistant turn through the chat-save pool only.
 
@@ -505,6 +506,16 @@ def save_chat_turn(
             assistant_id = cur.fetchone()[0]
             insert_assistant_ms = round((time.perf_counter() - insert_started) * 1000)
 
+            if assistant_debug:
+                cur.execute(
+                    """
+                    INSERT INTO chat_debug (message_id, payload)
+                    VALUES (%s, %s)
+                    ON CONFLICT (message_id) DO UPDATE SET payload = EXCLUDED.payload
+                    """,
+                    (assistant_id, Json(assistant_debug)),
+                )
+
         commit_started = time.perf_counter()
         conn.commit()
         commit_ms = round((time.perf_counter() - commit_started) * 1000)
@@ -554,12 +565,17 @@ def fetch_messages(session_id: str, limit: int | None = None) -> list[dict]:
             if limit and limit > 0:
                 cur.execute(
                     """
-                    SELECT speaker, message_text, created_at
+                    SELECT speaker, message_text, created_at, debug
                     FROM (
-                        SELECT message_id, speaker, message_text, created_at
-                        FROM chat_messages
-                        WHERE session_id = %s
-                        ORDER BY message_id DESC
+                        SELECT cm.message_id,
+                               cm.speaker,
+                               cm.message_text,
+                               cm.created_at,
+                               cd.payload AS debug
+                        FROM chat_messages cm
+                        LEFT JOIN chat_debug cd ON cd.message_id = cm.message_id
+                        WHERE cm.session_id = %s
+                        ORDER BY cm.message_id DESC
                         LIMIT %s
                     ) recent
                     ORDER BY message_id
@@ -569,10 +585,14 @@ def fetch_messages(session_id: str, limit: int | None = None) -> list[dict]:
             else:
                 cur.execute(
                     """
-                    SELECT speaker, message_text, created_at
-                    FROM chat_messages
-                    WHERE session_id = %s
-                    ORDER BY message_id
+                    SELECT cm.speaker,
+                           cm.message_text,
+                           cm.created_at,
+                           cd.payload AS debug
+                    FROM chat_messages cm
+                    LEFT JOIN chat_debug cd ON cd.message_id = cm.message_id
+                    WHERE cm.session_id = %s
+                    ORDER BY cm.message_id
                     """,
                     (profile["db_session_id"],),
                 )
@@ -581,6 +601,7 @@ def fetch_messages(session_id: str, limit: int | None = None) -> list[dict]:
         {
             "role": "user" if r["speaker"] == "student" else "assistant",
             "content": r["message_text"],
+            "debug": r.get("debug"),
         }
         for r in rows
     ]
