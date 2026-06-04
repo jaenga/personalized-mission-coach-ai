@@ -356,6 +356,7 @@ def _save_chat_turn_safe(
     assistant_content: str,
     detected_function: str | None = None,
     request_id: str | None = None,
+    assistant_debug: dict | None = None,
 ) -> tuple[int, int]:
     try:
         return save_chat_turn(
@@ -364,6 +365,7 @@ def _save_chat_turn_safe(
             assistant_content,
             detected_function,
             request_id=request_id,
+            assistant_debug=assistant_debug,
         )
     except Exception as e:
         print(f"[Chat] chat turn save failed request_id={request_id or '-'} error={type(e).__name__}: {e}")
@@ -3388,7 +3390,8 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     if not is_greet and fn_calls and not _needs_history_for_action(fn_calls):
         messages = [{"role": "user", "content": gemma_user_message}]
     else:
-        history = await run_in_threadpool(fetch_messages, body.session_id, _CHAT_CONTEXT_MESSAGE_LIMIT)
+        fetched_history = await run_in_threadpool(fetch_messages, body.session_id, _CHAT_CONTEXT_MESSAGE_LIMIT)
+        history = [{"role": m["role"], "content": m["content"]} for m in fetched_history]
         if not is_greet:
             history.append({"role": "user", "content": gemma_user_message})
         messages = history if history else [
@@ -4482,6 +4485,7 @@ async def process_chat_stream(body: ChatRequest, background_tasks: BackgroundTas
             save_content,
             detected_function,
             request_id,
+            debug_payload,
         )
         if not is_greet:
             await _trace_thread(
