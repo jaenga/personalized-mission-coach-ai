@@ -38,7 +38,7 @@
 
 ## 시연 영상
 
-🎥 링크 추후 추가 예정
+🎥 https://github.com/jaenga/personalized-mission-coach-ai/releases/download/tomatomi/tomatomi.mp4
 
 ## 2. 프로젝트 배경
 
