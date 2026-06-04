@@ -38,7 +38,7 @@
 
 ## 시연 영상
 
-🎥 [![토마토미 시연 영상](https://img.youtube.com/vi/In-0NSLqvOY/maxresdefault.jpg)](https://youtu.be/In-0NSLqvOY)
+🎥 <a href="https://youtu.be/In-0NSLqvOY"><img src="docs/video.jpg" alt="토마토미 시연 영상" width="360" /></a>
 
 
 
