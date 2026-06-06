@@ -3,6 +3,12 @@
  * Vite proxy 덕분에 상대경로 그대로 사용 가능
  */
 
+function compactPayload(payload) {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== "" && value != null)
+  );
+}
+
 export async function fetchMission() {
   const res = await fetch("/mission");
   if (!res.ok) throw new Error("미션 불러오기 실패");
@@ -115,7 +121,13 @@ export async function verifyStudent(studentName, phoneLast4) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail ?? "확인 중 오류가 발생했어요.");
   }
-  return res.json();
+  const data = await res.json();
+  if (data?.found === false) {
+    const err = new Error("일치하는 학생을 찾을 수 없어요.");
+    err.status = 404;
+    throw err;
+  }
+  return data?.student ?? data;
 }
 
 export async function fetchStudentStats(studentId) {
@@ -337,12 +349,12 @@ export async function registerDemoStudent(studentName, phoneLast4, { birthDate =
   const res = await fetch("/demo-register-student", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(compactPayload({
       student_name: studentName,
       phone_last4: phoneLast4,
       birth_date: birthDate,
       gender,
-    }),
+    })),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -355,11 +367,11 @@ export async function saveStudentInfo({ studentId, birthDate = "", gender = "" }
   const res = await fetch("/student-info", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(compactPayload({
       student_id: studentId,
       birth_date: birthDate,
       gender,
-    }),
+    })),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

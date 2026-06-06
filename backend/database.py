@@ -115,6 +115,8 @@ def init_db():
                     f"before starting the server. Missing: {missing}"
                 )
 
+            _ensure_student_optional_columns(cur)
+
             # mission_id/is_active�??�기?? 구조 변경�? migrations/*.sql?�서 관리한??
             for idx, mission_id in enumerate(DEMO_MISSION_IDS, start=1):
                 cur.execute(
@@ -258,11 +260,10 @@ def _ensure_student_optional_columns(cur) -> None:
 def create_demo_student(student_name: str, phone_last4: str, birth_date: str | None = None, gender: str | None = None) -> dict:
     """
     Create a demo signup student in the existing students table.
-    New demo signups are marked with student_note = '?�규 가??.
+    New demo signups are marked with student_note = 'demo_signup'.
     """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            _ensure_student_optional_columns(cur)
             cur.execute(
                 """
                 SELECT *
@@ -310,9 +311,9 @@ def create_demo_student(student_name: str, phone_last4: str, birth_date: str | N
                     is_active,
                     student_note
                 )
-                VALUES (%s, %s, %s, %s, %s::date, '', TRUE, '?�규 가??)
+                VALUES (%s, %s, %s, %s, %s::date, '', TRUE, %s)
                 RETURNING *
-            """, (student_name, phone_last4, age, clean_gender, birth_date or None))
+            """, (student_name, phone_last4, age, clean_gender, birth_date or None, "demo_signup"))
             student = cur.fetchone()
             _ensure_student_app_state(cur, student["student_id"])
 
@@ -326,7 +327,6 @@ def update_student_optional_info(student_id: int, birth_date: str | None = None,
     age = _age_from_birth_date(birth_date)
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            _ensure_student_optional_columns(cur)
             updates = ["updated_at = NOW()"]
             params: list = []
             if birth_date:

@@ -2838,6 +2838,17 @@ async def process_chat(body: ChatRequest, background_tasks: BackgroundTasks):
     is_greet = body.message == "__GREET__"
     print(f"\n[Chat] <- {_short(body.message)!r} session={body.session_id[:8]}")
 
+    if is_greet and body.mission and "오늘 미션은" in body.mission:
+        await run_in_threadpool(_save_message_safe, body.session_id, "assistant", body.mission)
+        return {
+            "response": body.mission,
+            "mission_completed": False,
+            "detected_function": None,
+            "sources": [],
+            "ui_action": None,
+            "debug": {"intent": "GREETING_TEMPLATE", "timing": {}},
+        }
+
     if not is_greet:
         volume_response = _fixed_volume_conversion_response(body.message)
         if volume_response:
