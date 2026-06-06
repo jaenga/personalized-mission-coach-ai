@@ -92,13 +92,13 @@ def post_verify_student(body: VerifyRequest):
 
 
 @app.post("/demo-register-student")
-def post_demo_register_student(body: VerifyRequest):
-    return register_demo_student(body)
+def post_demo_register_student(body: VerifyRequest, background_tasks: BackgroundTasks):
+    return register_demo_student(body, background_tasks)
 
 
 @app.post("/profile")
-def post_profile(body: ProfileRequest):
-    return save_user_profile(body)
+def post_profile(body: ProfileRequest, background_tasks: BackgroundTasks):
+    return save_user_profile(body, background_tasks)
 
 
 @app.post("/student-info")

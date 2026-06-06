@@ -71,6 +71,28 @@ from schemas import (
 )
 
 
+def _sync_demo_student_after_auth(student_id: int) -> None:
+    try:
+        sync_student_info(student_id)
+    except Exception as e:
+        print(f"[sheets] auth student sync failed: {e}")
+        try:
+            sync_all_student_info()
+        except Exception as fallback_error:
+            print(f"[sheets] auth full student sync failed: {fallback_error}")
+    try:
+        sync_daily_status_for_student(student_id)
+    except Exception as e:
+        print(f"[sheets] auth daily sync failed: {e}")
+
+
+def _sync_demo_daily_status(student_id: int) -> None:
+    try:
+        sync_daily_status_for_student(student_id)
+    except Exception as e:
+        print(f"[sheets] auth daily sync failed: {e}")
+
+
 def startup_tasks() -> None:
     init_db()
     ensure_ollama_server()
@@ -103,11 +125,11 @@ def startup_tasks() -> None:
 def verify_student(body: VerifyRequest):
     student = get_student_by_credentials(body.student_name, body.phone_last4)
     if not student:
-        raise HTTPException(status_code=404, detail="일치하는 학생을 찾을 수 없어요.")
-    return student
+        return {"found": False}
+    return {"found": True, "student": student}
 
 
-def save_user_profile(body: ProfileRequest):
+def save_user_profile(body: ProfileRequest, background_tasks: BackgroundTasks | None = None):
     existing_profile = fetch_profile(body.session_id)
     if existing_profile and existing_profile["student_id"] == body.student_id:
         db_session_id = existing_profile["db_session_id"]
@@ -116,36 +138,27 @@ def save_user_profile(body: ProfileRequest):
     save_profile(body.session_id, body.student_id, body.student_name, db_session_id)
     mission = None
     if DEMO_MODE:
-        mission = attach_mission_message(assign_demo_mission_on_signup(body.student_id))
-        try:
-            sync_student_info(body.student_id)
-        except Exception as e:
-            print(f"[sheets] demo profile student sync failed: {e}")
-        try:
-            sync_daily_status_for_student(body.student_id)
-        except Exception as e:
-            print(f"[sheets] demo profile daily sync failed: {e}")
+        mission = get_student_mission_db(body.student_id, _kst_today())
+        if mission is None:
+            mission = assign_demo_mission_on_signup(body.student_id)
+            if background_tasks is not None:
+                background_tasks.add_task(_sync_demo_daily_status, body.student_id)
+            else:
+                _sync_demo_daily_status(body.student_id)
+        mission = attach_mission_message(mission)
     return {"ok": True, "mission": mission}
 
 
-def register_demo_student(body: VerifyRequest):
+def register_demo_student(body: VerifyRequest, background_tasks: BackgroundTasks | None = None):
     if not DEMO_MODE:
         raise HTTPException(status_code=403, detail="현재는 회원가입을 사용할 수 없어요.")
 
     student = create_demo_student(body.student_name, body.phone_last4, body.birth_date, body.gender)
     mission = attach_mission_message(assign_demo_mission_on_signup(student["student_id"]))
-    try:
-        sync_student_info(student["student_id"])
-    except Exception as e:
-        print(f"[sheets] signup student sync failed: {e}")
-        try:
-            sync_all_student_info()
-        except Exception as fallback_error:
-            print(f"[sheets] signup full student sync failed: {fallback_error}")
-    try:
-        sync_daily_status_for_student(student["student_id"])
-    except Exception as e:
-        print(f"[sheets] signup daily sync failed: {e}")
+    if background_tasks is not None:
+        background_tasks.add_task(_sync_demo_student_after_auth, student["student_id"])
+    else:
+        _sync_demo_student_after_auth(student["student_id"])
 
     return {
         "ok": True,

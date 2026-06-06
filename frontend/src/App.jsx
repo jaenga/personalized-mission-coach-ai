@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { verifyStudent, registerDemoStudent, saveStudentInfo, saveProfile, fetchMissionByStudent, fetchStudentStats, fetchWeeklySharePrompt, markWeeklySharePrompt, fetchAppState, adjustHeart, claimAttendance, claimDrawReward, recordGameRun, sendMessage, sendMessageStream, fetchChatHistory, clearChatHistory, deleteStudentAccount, fetchHealthNote, saveHealthNoteDb, deleteHealthNote, saveMissionReview, saveOnboardingPreferences, fetchMissionPreferences, saveMissionPreferencesDb, resolveMissionUiAction, fetchActiveUiAction } from "./api.js";
 import Login from "./components/Login.jsx";
 import Signup from "./components/Signup.jsx";
@@ -210,6 +210,7 @@ export default function App() {
   const [mission, setMission] = useState(null);
   const [stats, setStats] = useState({ streak_days: 0, success_dates: [] });
   const [messages, setMessages] = useState([]);
+  const greetingRequestKeyRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [pipeline, setPipeline] = useState([]); // 실시간 파이프라인 단계
   const [debugMap, setDebugMap] = useState({});  // 스트리밍 중 라이브 전용
@@ -381,13 +382,16 @@ export default function App() {
   // 채팅 히스토리 로드
   useEffect(() => {
     if (!mission || !profile) return;
+    const greetingKey = `${sessionId}:${profile.student_id}:${mission.mission_id ?? mission.mission_name}`;
+    if (greetingRequestKeyRef.current === greetingKey) return;
+    greetingRequestKeyRef.current = greetingKey;
     Promise.all([
       fetchChatHistory(sessionId),
       fetchActiveUiAction(sessionId),
     ])
       .then(([history, activeUiAction]) => {
         if (history.length === 0) {
-          requestGreeting(mission.mission_name);
+          requestGreeting(mission);
         } else {
           const mapped = history.map((msg, i) =>
             msg.role === "assistant" ? { ...msg, debugId: `hist-${i}` } : msg
@@ -404,9 +408,10 @@ export default function App() {
         }
       })
       .catch(() => {
+        greetingRequestKeyRef.current = null;
         setMessages([{ role: "assistant", content: "코치에 연결할 수 없어요. 잠시 후 다시 시도해 봐!" }]);
       });
-  }, [sessionId, mission?.mission_id]);
+  }, [sessionId, profile?.student_id, mission?.mission_id, mission?.mission_name, mission?.mission_message]);
 
   function resetUserStats() {
     setLevel(FRESH_STATS.level);
@@ -488,6 +493,7 @@ export default function App() {
 
   function handleInfoBack() {
     localStorage.removeItem("user_profile");
+    greetingRequestKeyRef.current = null;
     setProfile(null);
     setMission(null);
     setStats({ streak_days: 0, success_dates: [] });
@@ -578,6 +584,7 @@ export default function App() {
   function resetLocalSession() {
     // 채팅 스트리밍 중이어도 로그아웃은 항상 통과시킴 — 진행 중인 요청은 그냥 버려짐.
     setLoading(false);
+    greetingRequestKeyRef.current = null;
     localStorage.removeItem("user_profile");
     // 클라 잔여 캐시(예: 옛 빌드 흔적) 정리만.
     localStorage.removeItem("tommy_lesson_progress");
@@ -750,10 +757,15 @@ export default function App() {
   }
 
   // ── 채팅 핸들러 ──────────────────────────────────────────────────────────
-  async function requestGreeting(missionTitle) {
+  async function requestGreeting(missionForGreeting) {
     setLoading(true);
     try {
-      const res = await sendMessage("__GREET__", sessionId, missionTitle);
+      const missionPrompt =
+        missionForGreeting?.mission_message ||
+        missionForGreeting?.mission_name ||
+        missionForGreeting ||
+        "오늘의 미션";
+      const res = await sendMessage("__GREET__", sessionId, missionPrompt);
       const debugId = createClientId("debug");
       setMessages([{ role: "assistant", content: res.response, debugId, debug: res.debug ?? null }]);
       setDebugMap({ [debugId]: { ...res.debug } });
